@@ -316,7 +316,7 @@ jobs:
             fi
           else
             # shellcheck disable=SC2016 # the backticks are Markdown
-            printf 'Built from `main` (build %s, commit %s). For trying out what is next: use a [release](https://github.com/%s/releases/latest) for everyday work.\n\n' \
+            printf 'A preview of what is coming next, built from `main` (build %s, commit %s). For everyday work, use the [latest release](https://github.com/%s/releases/latest).\n\n' \
               "$GITHUB_RUN_NUMBER" "${GITHUB_SHA::7}" "$GH_REPO" >> notes.md
           fi
           cat >> notes.md <<'NOTES'
@@ -336,8 +336,13 @@ jobs:
           NOTES
           if [ "$CHANNEL" = stable ]; then
             # What changed: merged pull requests since the previous release (.github/release.yml).
-            printf '\n' >> notes.md
-            gh api "repos/$GH_REPO/releases/generate-notes" -f tag_name="$GITHUB_REF_NAME" --jq .body >> notes.md
+            # Compared with the previous version explicitly: the nearest tag may be "nightly".
+            prev=$(gh api "repos/$GH_REPO/releases?per_page=100" | jq -r --arg current "$GITHUB_REF_NAME" \
+              '[.[] | select((.draft | not) and (.prerelease | not) and (.tag_name | startswith("v")) and .tag_name != $current) | .tag_name] | first // empty')
+            if [ -n "$prev" ]; then
+              printf '\n' >> notes.md
+              gh api "repos/$GH_REPO/releases/generate-notes" -f tag_name="$GITHUB_REF_NAME" -f previous_tag_name="$prev" --jq .body >> notes.md
+            fi
           fi
       - name: Publish
         run: |

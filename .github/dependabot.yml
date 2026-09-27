@@ -25,6 +25,9 @@ updates:
       # Types follow the Node.js version CI and contributors use (22 LTS).
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+      # The GraphQL editor (cm6-graphql) bundles graphql 16; two majors can't share schemas.
+      - dependency-name: "graphql"
+        update-types: ["version-update:semver-major"]
     groups:
       npm:
         update-types: ["minor", "patch"]
