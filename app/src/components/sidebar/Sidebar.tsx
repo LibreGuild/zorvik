@@ -1,37 +1,5 @@
 import { useMemo, useState } from "react";
-import {
-  Activity,
-  Boxes,
-  Braces,
-  Cable,
-  ChevronRight,
-  Copy,
-  FolderInput,
-  FilePlus2,
-  Folder,
-  FolderOpen,
-  FolderPlus,
-  BookOpen,
-  Bot,
-  History,
-  Import,
-  Layers,
-  ListChecks,
-  MessagesSquare,
-  MoreHorizontal,
-  Network,
-  Pencil,
-  Plus,
-  Radio,
-  Search,
-  Server as ServerIcon,
-  Settings2,
-  Terminal,
-  Trash2,
-  TriangleAlert,
-  Wrench,
-  Zap,
-} from "lucide-react";
+import { Activity, BookOpen, Bot, Boxes, Braces, Cable, ChevronRight, Copy, FilePlus2, Folder, FolderInput, FolderOpen, FolderPlus, History, Import, Layers, ListChecks, MessagesSquare, MoreHorizontal, Network, Pencil, Plus, Radio, RefreshCw, Search, Server as ServerIcon, Settings2, Terminal, Trash2, TriangleAlert, Wrench, Zap } from "lucide-react";
 import type { TreeNode } from "../../bindings/TreeNode";
 import { GRAPHQL_BADGE, methodColor, methodLabel } from "../../lib/http";
 import { api, errorMessage } from "../../lib/rpc";
@@ -308,6 +276,9 @@ function TreeRow({ node, depth, forceOpen, index, parent }: { node: TreeNode; de
         { label: "Import into folder…", icon: <Import size={14} />, onSelect: () => openModal({ type: "import", parent: node.path }) },
         { label: "Run…", icon: <ListChecks size={14} />, onSelect: () => openRunner(node.path, node.name) },
         { label: "Mock this folder…", icon: <ServerIcon size={14} />, onSelect: () => void mockFolder(node.path, node.name) },
+        ...(node.fromSpec
+          ? [{ label: "Update from API spec…", icon: <RefreshCw size={14} />, onSelect: () => openModal({ type: "specUpdate", folder: node.path, name: node.name }) }]
+          : []),
         {
           label: "Load test this folder…",
           icon: <Activity size={14} />,
@@ -322,7 +293,7 @@ function TreeRow({ node, depth, forceOpen, index, parent }: { node: TreeNode; de
     : [
         { label: "Open", onSelect: () => openRequest(node.path) },
         {
-          label: "Copy as cURL…",
+          label: "Copy as cURL or code…",
           icon: <Terminal size={14} />,
           onSelect: async () => {
             await openRequest(node.path);
@@ -412,7 +383,10 @@ function TreeRow({ node, depth, forceOpen, index, parent }: { node: TreeNode; de
               </span>
             </>
           )}
-          <span className="min-w-0 flex-1 truncate" title={node.name}>
+          <span
+            className={cx("min-w-0 flex-1 truncate", node.removedFromSpec && "text-faint line-through")}
+            title={node.removedFromSpec ? `${node.name} (no longer in the API spec)` : node.name}
+          >
             {node.name}
           </span>
           {node.error && (

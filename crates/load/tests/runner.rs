@@ -1,19 +1,21 @@
 //! The load generator against local servers: both models, stages, dropped
-//! iterations, latency from the scheduled start, stop, thresholds, events.
+//! iterations, latency from the scheduled start, stop, thresholds, events,
+//! data rows per user, captures and the timing phases.
 
+use std::collections::BTreeSet;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use zorvik_engine::{HttpRequest, HttpVersionPref, RequestOptions};
-use zorvik_formats::{LoadModel, LoadStage, Threshold, ThresholdMetric, ThresholdOp};
+use zorvik_formats::{CaptureFrom, LoadCapture, LoadModel, LoadStage, Threshold, ThresholdMetric, ThresholdOp};
 use zorvik_load::{
-    EventFn, LoadEvent, LoadRun, MetricsSummary, Plan, PlanTarget, RequestSource, RunPhase, Summary, TargetSummary,
-    TimePoint, html_report, start, validate,
+    DataRow, EventFn, LoadEvent, LoadRun, MetricsSummary, PhaseSummary, Plan, PlanTarget, RequestSource, RunPhase,
+    Summary, TargetSummary, TimePoint, TimingSummary, UserVars, html_report, start, validate,
 };
 use zorvik_testkit::TestServer;
 
@@ -22,7 +24,32 @@ fn get(url: String) -> HttpRequest {
 }
 
 fn target(name: &str, url: String, weight: u32) -> PlanTarget {
-    PlanTarget { name: name.into(), request: format!("{name}.yaml"), source: RequestSource::Fixed(get(url)), weight }
+    PlanTarget {
+        name: name.into(),
+        request: format!("{name}.yaml"),
+        source: RequestSource::Fixed(get(url)),
+        weight,
+        captures: Vec::new(),
+    }
+}
+
+/// A target rendered per iteration from the user's variables.
+fn rendered(name: &str, render: impl Fn(&UserVars) -> String + Send + Sync + 'static) -> PlanTarget {
+    PlanTarget {
+        name: name.into(),
+        request: format!("{name}.yaml"),
+        source: RequestSource::Dynamic(Arc::new(move |vars| Ok(get(render(vars))))),
+        weight: 1,
+        captures: Vec::new(),
+    }
+}
+
+fn capture(variable: &str, from: CaptureFrom, path: &str) -> LoadCapture {
+    LoadCapture { variable: variable.into(), from, path: path.into() }
+}
+
+fn row(pairs: &[(&str, &str)]) -> DataRow {
+    pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<Vec<_>>().into()
 }
 
 fn plan(model: LoadModel, stages: &[(u32, u32)], targets: Vec<PlanTarget>) -> Plan {
@@ -35,6 +62,7 @@ fn plan(model: LoadModel, stages: &[(u32, u32)], targets: Vec<PlanTarget>) -> Pl
         keep_alive: true,
         options: RequestOptions::default(),
         thresholds: Vec::new(),
+        rows: Vec::new(),
     }
 }
 
@@ -283,11 +311,12 @@ async fn dynamic_requests_are_rendered_per_iteration_and_keep_alive_can_be_off()
     let dynamic = PlanTarget {
         name: "Dynamic".into(),
         request: "dynamic.yaml".into(),
-        source: RequestSource::Dynamic(Arc::new(move || {
+        source: RequestSource::Dynamic(Arc::new(move |_| {
             count.fetch_add(1, Ordering::SeqCst);
             Ok(get(url.clone()))
         })),
         weight: 1,
+        captures: Vec::new(),
     };
     let mut p = plan(LoadModel::VirtualUsers, &[(0, 2), (1, 2)], vec![dynamic]);
     p.keep_alive = false;
@@ -295,9 +324,193 @@ async fn dynamic_requests_are_rendered_per_iteration_and_keep_alive_can_be_off()
     let summary = run(p, None).await;
     let n = summary.totals.requests;
     assert!(n > 10);
-    // One render up front to check the request, then one per iteration.
-    assert_eq!(renders.load(Ordering::SeqCst) as u64, n + 1);
+    // Two renders up front (check the request, list its host), then one per iteration.
+    assert_eq!(renders.load(Ordering::SeqCst) as u64, n + 2);
     assert_eq!(summary.totals.connections, n);
+    // Every request opened its connection: each has a connect time.
+    assert_eq!(summary.totals.timing.connect.count, n);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn each_user_takes_its_own_data_row() {
+    let server = TestServer::start().await;
+    let base = server.url("/echo");
+    // What each user's second and later requests carry: the row value the
+    // server echoed back to its first one (captured from the JSON answer).
+    let seen = Arc::new(Mutex::new(BTreeSet::new()));
+    let log = seen.clone();
+    let mut echo = rendered("Echo", move |vars| {
+        // The checks before the run render with a probe value in every variable.
+        if let (Some(user), Some(value)) = (vars.get("user"), vars.get("echoed"))
+            && !user.starts_with("zvprobe")
+        {
+            log.lock().unwrap().insert((user.to_string(), value.to_string()));
+        }
+        format!("{base}?u={}", vars.get("user").unwrap_or("none"))
+    });
+    echo.captures = vec![capture("echoed", CaptureFrom::Json, "$.args.u")];
+    let mut p = plan(LoadModel::VirtualUsers, &[(0, 3), (1, 3)], vec![echo]);
+    p.think_time = Duration::from_millis(50);
+    p.rows = vec![row(&[("user", "ada")]), row(&[("user", "grace")]), row(&[("user", "linus")])];
+    let summary = run(p, None).await;
+    assert_eq!(summary.totals.errors, 0);
+    assert_eq!(summary.totals.capture_misses, 0);
+    let seen = seen.lock().unwrap().clone();
+    let pairs: Vec<(&str, &str)> = seen.iter().map(|(u, e)| (u.as_str(), e.as_str())).collect();
+    assert_eq!(pairs, [("ada", "ada"), ("grace", "grace"), ("linus", "linus")]);
+    let t = &summary.totals.timing;
+    assert_eq!(t.ttfb.count, summary.totals.requests);
+    assert!(t.ttfb.p50 > 0.0 && t.ttfb.p95 <= summary.totals.latency.max, "{t:?}");
+    assert_eq!(t.transfer.count, summary.totals.requests);
+    // Keep-alive: one connection per user, each with a connect time.
+    assert_eq!((summary.totals.connections, t.connect.count), (3, 3));
+    assert_eq!(t.server, PhaseSummary::default());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn captures_feed_the_users_later_requests() {
+    let server = TestServer::start().await;
+    let base = server.url("");
+    // Create: the server echoes the id; Get: uses the captured id.
+    let create_base = base.clone();
+    let mut create =
+        rendered("Create", move |vars| format!("{create_base}/echo?id=order-{}", vars.get("user").unwrap_or_default()));
+    create.captures = vec![
+        capture("orderId", CaptureFrom::Json, "$.args.id"),
+        capture("kind", CaptureFrom::Header, "Content-Type"),
+        capture("never", CaptureFrom::Json, "$.args.missing"),
+    ];
+    let got = Arc::new(Mutex::new(BTreeSet::new()));
+    let log = got.clone();
+    let mut read = rendered("Get", move |vars| {
+        let id = vars.get("orderId");
+        if let (Some(user), Some(id), Some(kind)) = (vars.get("user"), id, vars.get("kind"))
+            && !user.starts_with("zvprobe")
+        {
+            log.lock().unwrap().insert((user.to_string(), id.to_string(), kind.to_string()));
+        }
+        format!("{base}/echo?got={}", id.unwrap_or("none"))
+    });
+    // Misses when a get went out without an order id.
+    read.captures = vec![capture("gotBack", CaptureFrom::Regex, r#""got":\s*"(order-\d+)""#)];
+    let mut p = plan(LoadModel::VirtualUsers, &[(0, 2), (1, 2)], vec![create, read]);
+    p.think_time = Duration::from_millis(20);
+    p.rows = vec![row(&[("user", "1")]), row(&[("user", "2")])];
+    let summary = run(p, None).await;
+    assert_eq!(summary.totals.errors, 0);
+    // Each user sends create, then get: the get always has its own user's id.
+    let got = got.lock().unwrap().clone();
+    let got: Vec<(&str, &str, &str)> =
+        got.iter().map(|(u, id, kind)| (u.as_str(), id.as_str(), kind.as_str())).collect();
+    assert_eq!(got, [("1", "order-1", "application/json"), ("2", "order-2", "application/json")]);
+    // "never" misses on every create; the get's regex always finds its value.
+    let create = &summary.targets[0].metrics;
+    assert_eq!(create.capture_misses, create.requests);
+    assert_eq!(summary.targets[1].metrics.capture_misses, 0);
+    assert_eq!(summary.totals.capture_misses, create.requests);
+}
+
+/// HTTP/1.1 server whose answers carry `Server-Timing: <value>`.
+async fn server_timing_server(value: &'static str) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match socket.read(&mut chunk).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                        }
+                    }
+                    let end = buf.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+                    buf.drain(..end);
+                    let answer = format!("HTTP/1.1 200 OK\r\nServer-Timing: {value}\r\nContent-Length: 2\r\n\r\nok");
+                    if socket.write_all(answer.as_bytes()).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    addr
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn server_reported_time_comes_from_server_timing() {
+    let addr = server_timing_server("db;dur=2.5, app;dur=5, cache;desc=\"a, b\"").await;
+    let mut p = plan(LoadModel::VirtualUsers, &[(0, 2), (1, 2)], vec![target("Timed", format!("http://{addr}/"), 1)]);
+    p.think_time = Duration::from_millis(20);
+    let summary = run(p, None).await;
+    let server = &summary.totals.timing.server;
+    assert_eq!(server.count, summary.totals.requests);
+    assert_eq!((server.p50, server.max), (7.5, 7.5));
+    assert_eq!(summary.targets[0].metrics.timing.server.count, server.count);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn arrival_rate_takes_the_next_row_per_request() {
+    let server = TestServer::start().await;
+    let base = server.url("/status");
+    let target = rendered("Status", move |vars| format!("{base}/{}", vars.get("code").unwrap_or("400")));
+    let mut p = plan(LoadModel::ArrivalRate, &[(0, 60), (1, 60)], vec![target]);
+    p.rows = vec![row(&[("code", "200")]), row(&[("code", "201")]), row(&[("code", "202")])];
+    let summary = run(p, None).await;
+    // 60 requests over 3 rows: 20 each.
+    let codes = summary.totals.status_codes.clone();
+    assert_eq!(codes.iter().map(|(_, n)| n).sum::<u64>(), 60);
+    assert!(codes.iter().all(|(code, n)| [200, 201, 202].contains(code) && *n == 20), "{codes:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rendered_request_may_not_leave_the_hosts_it_started_with() {
+    let server = TestServer::start().await;
+    // The host comes from a captured value: unknown before the run, so refused.
+    let (base, other) = (server.url(""), server.url("").replace("127.0.0.1", "localhost"));
+    let mut hop = rendered("Hop", move |vars| match vars.get("next") {
+        Some(next) => format!("{next}/status/200"),
+        None => format!("{base}/echo?next={other}"),
+    });
+    hop.captures = vec![capture("next", CaptureFrom::Json, "$.args.next")];
+    let mut p = plan(LoadModel::VirtualUsers, &[(0, 1), (1, 1)], vec![hop]);
+    p.think_time = Duration::from_millis(20);
+    let summary = run(p, None).await;
+    assert_eq!(summary.totals.status_codes, vec![(200, 1)]);
+    assert_eq!(summary.totals.error_kinds[0].0, "notAllowed");
+    assert_eq!(zorvik_load::hosts(&plan(LoadModel::VirtualUsers, &[(1, 1)], vec![])), Vec::<String>::new());
+}
+
+#[test]
+fn hosts_follow_data_rows() {
+    let mut p = plan(
+        LoadModel::VirtualUsers,
+        &[(1, 1)],
+        vec![
+            rendered("Row host", |vars| format!("https://{}/x", vars.get("host").unwrap_or("{{host}}"))),
+            rendered("Row path", |vars| format!("http://127.0.0.1:1/{}", vars.get("host").unwrap_or_default())),
+            target("Fixed", "http://LOCALHOST:3000/".into(), 1),
+        ],
+    );
+    p.rows = vec![row(&[("host", "a.example")]), row(&[("host", "B.example")]), row(&[("host", "a.example")])];
+    assert_eq!(zorvik_load::hosts(&p), ["a.example", "b.example", "127.0.0.1", "localhost"]);
+    assert_eq!(p.user_variables(), ["host"]);
+}
+
+#[test]
+fn only_requests_that_use_user_variables_are_rendered_per_iteration() {
+    let render = |url: &'static str| -> zorvik_load::Render {
+        Arc::new(move |vars| Ok(get(url.replace("{{id}}", vars.get("id").unwrap_or("{{id}}")))))
+    };
+    let names = vec!["id".to_string()];
+    let fixed = RequestSource::from_render(render("http://h/users"), &names, false).unwrap();
+    assert!(matches!(fixed, RequestSource::Fixed(r) if r.url == "http://h/users"));
+    let per_user = RequestSource::from_render(render("http://h/users/{{id}}"), &names, false).unwrap();
+    assert!(matches!(per_user, RequestSource::Dynamic(_)));
+    let dynamic = RequestSource::from_render(render("http://h/users"), &[], true).unwrap();
+    assert!(matches!(dynamic, RequestSource::Dynamic(_)));
 }
 
 #[test]
@@ -314,10 +527,14 @@ fn plans_are_checked_before_starting() {
     p.stages[0].target = 10;
     p.max_in_flight = 1_000_000;
     assert!(validate(&p).unwrap_err().contains("in flight"));
+    p.max_in_flight = 10;
+    p.targets[0].captures = vec![capture("id", CaptureFrom::Regex, "(")];
+    assert!(validate(&p).unwrap_err().starts_with("Bad: capture 'id': invalid regular expression"));
 }
 
 #[test]
 fn html_report_is_self_contained_and_escapes_text() {
+    let phase = |ms: f64| PhaseSummary { count: 1200, avg: ms, p50: ms, p95: ms * 2.0, p99: ms * 3.0, max: ms * 4.0 };
     let metrics = MetricsSummary {
         requests: 1200,
         errors: 12,
@@ -325,6 +542,14 @@ fn html_report_is_self_contained_and_escapes_text() {
         rps: 200.0,
         status_codes: vec![(200, 1188), (500, 12)],
         error_kinds: vec![("timeout".into(), 2)],
+        connections: 12,
+        timing: TimingSummary {
+            connect: PhaseSummary { count: 12, ..phase(3.0) },
+            ttfb: phase(8.0),
+            transfer: phase(1.0),
+            server: PhaseSummary::default(),
+        },
+        capture_misses: 7,
         ..Default::default()
     };
     let summary = Summary {
@@ -360,5 +585,9 @@ fn html_report_is_self_contained_and_escapes_text() {
     assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
     assert!(html.contains("a&amp;b.yaml"));
     assert!(html.contains("<svg") && html.contains("prefers-color-scheme"));
+    assert!(html.contains("Time to first byte") && html.contains("p95 first byte") && html.contains("16 ms"), "{html}");
+    assert!(html.contains("Capture misses") && html.contains("opened by 1 % of requests"), "{html}");
+    // Without Server-Timing, no server-reported row, and a note that says why.
+    assert!(!html.contains("<td>Server-reported") && html.contains("No response had a Server-Timing header"));
     assert!(!html.contains("http://") && !html.contains("https://"), "no external resources");
 }

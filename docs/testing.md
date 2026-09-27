@@ -16,13 +16,14 @@ E2E needs the CLI built once, because the AI agent tests start the real `zorvik 
 |---|---|
 | Networking | `crates/engine/tests/`: HTTP/1.1, HTTP/2, TLS, proxies, redirects and decoding (`http_client.rs`), WebSocket and SSE (`streaming.rs`), TCP (`socket.rs`), UDP, DNS, MQTT, HTTP/3, gRPC, the load-test connection pool (`pool.rs`), network tools |
 | Workspace and auth | `crates/workspace/tests/`: files on disk (`store.rs`), OAuth 2.0 flows (`oauth.rs`) |
-| Import and export | inline tests in `crates/formats/src/{curl,postman,openapi,mock}.rs` |
+| Import and export | inline tests in `crates/formats/src/{curl,postman,openapi,mock,snippet}.rs` (`snippet` has an ignored test that syntax-checks the generated code with node, python3 and swiftc: `cargo test -p zorvik-formats snippet -- --ignored`) |
+| API specs | `crates/formats/src/spec_check.rs` (the schema checks), `crates/api/src/spec_update.rs` (merging edits), `crates/api/tests/api.rs` (import keeps the spec, responses checked, preview and update, base URL prompt) |
 | Scripts | `crates/script/src/tests.rs` (the `pm` API, sandbox limits), `crates/api/tests/scripts.rs` (scripts around real sends) |
-| App API | `crates/api/tests/`: RPC methods, GraphQL, gRPC, DNS, MQTT, mocks, the collection runner, load tests |
+| App API | `crates/api/tests/`: RPC methods, GraphQL, gRPC, DNS, MQTT, mocks, the collection runner (repeat until, event streams, skip reasons), load tests |
 | Servers | `crates/servers/tests/`: every server kind on port 0, driven by real clients |
-| Load generator | `crates/load/tests/runner.rs`: both models against real servers (counts, ramps, overload latency, stop, errors) |
+| Load generator | `crates/load/tests/runner.rs`: both models against real servers (counts, ramps, overload latency, stop, errors, data rows per user, capture chains, timing phases, Server-Timing); JSON paths, captures and Server-Timing parsing in `crates/load/src/capture.rs` |
 | Command line | `crates/cli/tests/`: `zorvik run`, `load`, `serve` and `mcp` as real processes |
-| AI agents | `crates/mcp/tests/agents.rs` (bridge, listener, token proof, confirmations) and `app/e2e/agents.spec.ts` |
+| AI agents | `crates/mcp/tests/agents.rs` (bridge, listener, token proof, confirmations; mock servers built, started and inspected; variables, history, streams, files and exports) and `app/e2e/agents.spec.ts` |
 | UI logic | `app/src/**/*.test.ts(x)` (Vitest, jsdom) |
 | User flows | `app/e2e/*.spec.ts`: requests, GraphQL, gRPC, scripts, runner, load tests, servers, docs, appearance, AI agents |
 

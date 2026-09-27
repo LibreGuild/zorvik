@@ -17,13 +17,14 @@ vi.mock("../../lib/rpc", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/rpc")>();
   const loadRuns = vi.fn(() => Promise.resolve([]));
   const loadRun = vi.fn(() => Promise.resolve(null));
-  return { ...actual, api: { loadRuns, loadRun, startLoadTest: vi.fn(() => Promise.resolve(null)) } };
+  const previewRunData = vi.fn(() => Promise.resolve(null));
+  return { ...actual, api: { loadRuns, loadRun, previewRunData, startLoadTest: vi.fn(() => Promise.resolve(null)) } };
 });
 
 const { api } = await import("../../lib/rpc");
 const { TooltipProvider } = await import("../ui");
 const { LoadTestView, startProblem } = await import("./LoadTestView");
-const { useTabs } = await import("../../store/tabs");
+const { useTabs, updateLoadTestDraft } = await import("../../store/tabs");
 const { useLoadTests } = await import("../../store/loadtests");
 const { useWorkspace } = await import("../../store/workspace");
 const mocked = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
@@ -54,7 +55,8 @@ const test: LoadTest = {
   thresholds: [{ metric: "p95", op: "<", value: 500 }],
 };
 const latency = { min: 1, avg: 12, p50: 10, p90: 20, p95: 25, p99: 40, p999: 60, max: 80 };
-const totals = (requests: number, errors = 0): MetricsSummary => ({
+const phase = (p95: number, count = 100) => ({ count, avg: p95 / 2, p50: p95 / 2, p95, p99: p95 * 2, max: p95 * 3 });
+const totals = (requests: number, errors = 0, ttfb = 20): MetricsSummary => ({
   requests,
   errors,
   errorRate: requests ? (errors * 100) / requests : 0,
@@ -69,6 +71,8 @@ const totals = (requests: number, errors = 0): MetricsSummary => ({
   errorKinds: errors ? [["timeout", 1]] : [],
   dropped: 0,
   connections: 10,
+  timing: { connect: phase(3, 10), ttfb: phase(ttfb), transfer: phase(1), server: phase(0, 0) },
+  captureMisses: 0,
 });
 const points = (n: number): TimePoint[] => Array.from({ length: n }, (_, i) => ({ second: i, rps: 100 + (i % 7), errors: i % 5 === 0 ? 1 : 0, p50: 10, p95: 25, p99: 40, active: 10, target: 10 }));
 const snapshot: Snapshot = {
@@ -115,7 +119,7 @@ const draft = () => (useTabs.getState().tabs[0] as LoadTestTab).draft;
 
 beforeEach(() => {
   useWorkspace.setState({ info: { path: WS, tree } as unknown as WorkspaceInfo });
-  useLoadTests.setState({ saved: [], active: null, starting: null, last: {}, historyVersion: {} });
+  useLoadTests.setState({ saved: [], active: null, starting: null, last: {}, historyVersion: {}, compare: {} });
   mocked.loadRuns.mockResolvedValue([]);
 });
 afterEach(cleanup);
@@ -262,5 +266,66 @@ describe("load test tab", () => {
     expect(startProblem({ ...listOnly, thresholds: [onCreate] }, tree)).toBe("A threshold checks a request this test doesn't send");
     expect(startProblem({ ...listOnly, thresholds: [{ ...onCreate, enabled: false }] }, tree)).toBeNull();
     expect(startProblem({ ...listOnly, thresholds: [{ ...onCreate, target: "Users/List.yaml" }] }, tree)).toBeNull();
+    const capture = { variable: "id", from: "json" as const, path: "" };
+    expect(startProblem({ ...test, targets: [{ request: "Users/List.yaml", captures: [capture] }] }, tree)).toBe("A capture needs a variable name and a path");
+    expect(startProblem({ ...test, targets: [{ request: "Users/List.yaml", captures: [{ ...capture, path: "$.id" }] }] }, tree)).toBeNull();
+  });
+
+  it("edits a request's captures and the data file", async () => {
+    mocked.previewRunData.mockResolvedValue({ format: "csv", columns: ["user"], rows: [["ada"], ["grace"]], count: 2 });
+    renderView();
+    const toggle = screen.getByRole("button", { name: "Captures of List users" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole("button", { name: "Add capture" }));
+    expect(draft().targets[0].captures).toEqual([{ variable: "", from: "json", path: "" }]);
+    expect(screen.getByText("Name the variable")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Variable 1 of List users"), { target: { value: "orderId" } });
+    fireEvent.change(screen.getByLabelText("JSON path of capture 1 of List users"), { target: { value: "$.id" } });
+    fireEvent.change(screen.getByLabelText("Where capture 1 of List users comes from"), { target: { value: "header" } });
+    expect(draft().targets[0].captures).toEqual([{ variable: "orderId", from: "header", path: "$.id" }]);
+    expect(toggle.textContent).toBe("1");
+    fireEvent.click(screen.getByRole("button", { name: "Remove capture 1 of List users" }));
+    expect(draft().targets[0].captures).toBeUndefined();
+
+    // The data file shows its rows once read.
+    act(() => updateLoadTestDraft("tab-1", (t) => ({ ...t, dataFile: "users.csv" })));
+    const preview = await screen.findByTestId("load-data-preview");
+    expect(mocked.previewRunData).toHaveBeenCalledWith("users.csv");
+    expect(within(preview).getByText("grace")).toBeTruthy();
+    expect(screen.getByText("CSV · 2 rows")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Remove the data file" }));
+    expect(draft().dataFile).toBeUndefined();
+  });
+
+  it("shows the timing and compares with an earlier run", async () => {
+    const earlier: Summary = { ...summary, startedAt: summary.startedAt - 86_400_000, totals: { ...totals(4800, 48, 40), rps: 480 } };
+    mocked.loadRuns.mockResolvedValue([
+      { runId: "r2", startedAt: summary.startedAt, durationMs: 60_000, passed: true, stoppedEarly: false, requests: 6000, rps: 100, p95: 25, errorRate: 0, error: null },
+      { runId: "r1", startedAt: earlier.startedAt, durationMs: 60_000, passed: true, stoppedEarly: false, requests: 5000, rps: 80, p95: 25, errorRate: 1, error: null },
+    ]);
+    mocked.loadRun.mockImplementation((_id: string, runId: string) => Promise.resolve(runId === "r1" ? earlier : summary));
+    renderView();
+    const timing = await screen.findByTestId("load-timing");
+    expect(within(timing).getByText("Time to first byte")).toBeTruthy();
+    // No Server-Timing header in this run: no server-reported row, and a note that says so.
+    expect(within(timing).queryByText("Server-reported")).toBeNull();
+    expect(timing.textContent).toContain("have it send a Server-Timing header");
+    expect(timing.textContent).toContain("New connection for 0.17% of requests");
+
+    act(() => useLoadTests.setState({ compare: { users: "r1" } }));
+    const panel = await screen.findByTestId("load-compare-panel");
+    await within(panel).findByText("Requests / s");
+    // Throughput up 25%: better. First byte 40 → 20 ms: better. Errors 1% → 0%: better.
+    expect(screen.getByTestId("compare-change-rps").textContent).toBe("+25%");
+    expect(screen.getByTestId("compare-change-rps").className).toContain("text-success");
+    expect(screen.getByTestId("compare-change-ttfb").textContent).toBe("−50%");
+    expect(screen.getByTestId("compare-change-errorRate").className).toContain("text-success");
+    // The same latency: no change, no colour.
+    expect(screen.getByTestId("compare-change-p95").textContent).toBe("0%");
+    expect(screen.getByTestId("compare-change-p95").className).toContain("text-muted");
+    expect(within(panel).getByText("List users p95")).toBeTruthy();
+    fireEvent.click(within(panel).getByRole("button", { name: "Stop comparing" }));
+    expect(useLoadTests.getState().compare).toEqual({});
   });
 });

@@ -5,6 +5,7 @@ import type { DnsOptions } from "./DnsOptions";
 import type { GrpcOptions } from "./GrpcOptions";
 import type { KeyValue } from "./KeyValue";
 import type { MqttOptions } from "./MqttOptions";
+import type { OpenApiOperation } from "./OpenApiOperation";
 import type { RequestKind } from "./RequestKind";
 import type { RequestSettings } from "./RequestSettings";
 import type { Scripts } from "./Scripts";
@@ -29,8 +30,17 @@ disabledParams?: Array<KeyValue>,
 /**
  * Values for `:name` path segments.
  */
-pathParams?: Array<KeyValue>, headers?: Array<KeyValue>, body?: Body, auth?: Auth, settings?: RequestSettings, 
+pathParams?: Array<KeyValue>, 
+/**
+ * Descriptions of enabled query params, by `key` (their values live in `url`,
+ * which has no room for them; disabled ones carry their own).
+ */
+paramDescriptions?: Array<KeyValue>, headers?: Array<KeyValue>, body?: Body, auth?: Auth, settings?: RequestSettings, 
 /**
  * TCP/UDP options.
  */
-socket?: SocketOptions, dns?: DnsOptions, mqtt?: MqttOptions, grpc?: GrpcOptions, scripts?: Scripts, docs?: string, };
+socket?: SocketOptions, dns?: DnsOptions, mqtt?: MqttOptions, grpc?: GrpcOptions, scripts?: Scripts, docs?: string, 
+/**
+ * The OpenAPI operation this request was imported from (see [`OpenApiSource`]).
+ */
+openapi?: OpenApiOperation, };

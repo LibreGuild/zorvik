@@ -477,6 +477,79 @@ pub struct RequestSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub decompress: Option<bool>,
+    /// Collection runs: send again until a condition holds (polling).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub repeat: Option<RepeatUntil>,
+    /// Server-Sent Events in collection runs: when to stop reading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub stream: Option<StreamUntil>,
+}
+
+/// "Send again until …": for polling an endpoint until work is done.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RepeatUntil {
+    /// JavaScript checked after each send, after the post-response scripts, e.g.
+    /// `pm.response.json().status === "done"`. Empty: until the request's tests pass
+    /// (or, without tests, until the status is below 400).
+    #[serde(default)]
+    pub condition: String,
+    /// Pause between sends.
+    #[serde(default = "second")]
+    #[ts(type = "number")]
+    pub interval_ms: u64,
+    /// Give up after this long; the request then fails.
+    #[serde(default = "half_minute")]
+    #[ts(type = "number")]
+    pub timeout_ms: u64,
+}
+
+impl Default for RepeatUntil {
+    fn default() -> Self {
+        Self { condition: String::new(), interval_ms: second(), timeout_ms: half_minute() }
+    }
+}
+
+fn second() -> u64 {
+    1_000
+}
+fn half_minute() -> u64 {
+    30_000
+}
+
+/// When reading a Server-Sent Events stream stops: a named event, a number of events,
+/// the server closing it, or a time limit, whichever comes first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct StreamUntil {
+    /// Stop after the first event with this name (`message` for events without a name).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub event: String,
+    /// Stop after this many events (0: no limit but the time).
+    #[serde(default = "hundred_events")]
+    pub max_events: u32,
+    /// Stop after this long.
+    #[serde(default = "ten_seconds")]
+    #[ts(type = "number")]
+    pub timeout_ms: u64,
+}
+
+impl Default for StreamUntil {
+    fn default() -> Self {
+        Self { event: String::new(), max_events: hundred_events(), timeout_ms: ten_seconds() }
+    }
+}
+
+fn hundred_events() -> u32 {
+    100
+}
+fn ten_seconds() -> u64 {
+    10_000
 }
 
 impl RequestSettings {
@@ -514,6 +587,11 @@ pub struct Request {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(optional, as = "Option<Vec<KeyValue>>")]
     pub path_params: Vec<KeyValue>,
+    /// Descriptions of enabled query params, by `key` (their values live in `url`,
+    /// which has no room for them; disabled ones carry their own).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<KeyValue>>")]
+    pub param_descriptions: Vec<KeyValue>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(optional, as = "Option<Vec<KeyValue>>")]
     pub headers: Vec<KeyValue>,
@@ -545,6 +623,41 @@ pub struct Request {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     #[ts(optional, as = "Option<String>")]
     pub docs: String,
+    /// The OpenAPI operation this request was imported from (see [`OpenApiSource`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub openapi: Option<OpenApiOperation>,
+}
+
+/// Where an imported request came from in its OpenAPI document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct OpenApiOperation {
+    /// `METHOD /path/{template}` as the document has it, e.g. `GET /pets/{petId}`.
+    pub operation: String,
+    /// The operation is no longer in the document (found when updating from it).
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional, as = "Option<bool>")]
+    pub removed: bool,
+}
+
+/// The OpenAPI document a folder was imported from, kept in the workspace so its requests'
+/// responses can be checked against the documented schemas, and the folder updated later.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct OpenApiSource {
+    /// The document, relative to the workspace folder (under `specs/`).
+    pub spec: String,
+    /// Where it was imported from: a URL or a file path (for "Update from OpenAPI").
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub source: String,
+    /// Check responses against the documented schemas (on unless switched off).
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    #[ts(optional, as = "Option<bool>")]
+    pub validate: bool,
 }
 
 fn is_http(k: &RequestKind) -> bool {
@@ -564,6 +677,7 @@ impl Request {
             url: String::new(),
             disabled_params: Vec::new(),
             path_params: Vec::new(),
+            param_descriptions: Vec::new(),
             headers: Vec::new(),
             body: Body::default(),
             auth: Auth::Inherit,
@@ -574,6 +688,7 @@ impl Request {
             grpc: GrpcOptions::default(),
             scripts: Scripts::default(),
             docs: String::new(),
+            openapi: None,
         }
     }
 }
@@ -599,6 +714,10 @@ pub struct FolderMeta {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     #[ts(optional, as = "Option<String>")]
     pub docs: String,
+    /// The OpenAPI document this folder was imported from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub openapi: Option<OpenApiSource>,
 }
 
 /// A variable in the workspace or an environment.
@@ -696,5 +815,13 @@ pub struct TreeNode {
     #[ts(optional)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// An imported request whose operation is no longer in its OpenAPI document.
+    #[ts(optional, as = "Option<bool>")]
+    #[serde(skip_serializing_if = "is_false")]
+    pub removed_from_spec: bool,
+    /// A folder imported from an OpenAPI document the workspace keeps (it can be updated from it).
+    #[ts(optional, as = "Option<bool>")]
+    #[serde(skip_serializing_if = "is_false")]
+    pub from_spec: bool,
     pub children: Vec<TreeNode>,
 }

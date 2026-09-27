@@ -46,12 +46,14 @@ const {
   deleteLoadTest,
   finishedMessage,
   flushLoadEvents,
+  forgetResult,
   loadTestFolder,
   loadTestRequest,
   MAX_POINTS,
   renameLoadTest,
   restoreActiveRun,
   runFor,
+  setCompareRun,
   startLoadRun,
   stopLoadRun,
   useLoadTests,
@@ -61,6 +63,7 @@ const mocked = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
 const WS = "/ws";
 const test: LoadTest = { name: "Smoke", seq: 0, targets: [{ request: "a.yaml" }], model: "virtualUsers", stages: [{ durationSecs: 3, target: 5 }] };
 const latency = { min: 1, avg: 2, p50: 2, p90: 3, p95: 4, p99: 5, p999: 6, max: 7 };
+const phase = { count: 0, avg: 0, p50: 0, p95: 0, p99: 0, max: 0 };
 const totals = (requests: number): MetricsSummary => ({
   requests,
   errors: 0,
@@ -73,6 +76,8 @@ const totals = (requests: number): MetricsSummary => ({
   errorKinds: [],
   dropped: 0,
   connections: 5,
+  timing: { connect: phase, ttfb: phase, transfer: phase, server: phase },
+  captureMisses: 0,
 });
 const point = (second: number, rps = 10): TimePoint => ({ second, rps, errors: 0, p50: 2, p95: 4, p99: 5, active: 5, target: 5 });
 const snapshot = (elapsedMs: number, points: TimePoint[], requests = 10): Snapshot => ({
@@ -111,7 +116,7 @@ const answerDialog = (value: boolean | string) => {
 beforeEach(() => {
   resetTabs();
   useWorkspace.setState({ info: { path: WS, tree: [] } as unknown as WorkspaceInfo });
-  useLoadTests.setState({ saved: [], active: null, starting: null, last: {}, historyVersion: {} });
+  useLoadTests.setState({ saved: [], active: null, starting: null, last: {}, historyVersion: {}, compare: {} });
   useDialogs.setState({ current: null });
   useToasts.setState({ toasts: [] });
   vi.clearAllMocks();
@@ -291,6 +296,18 @@ describe("saved load tests and tabs", () => {
     expect(useLoadTests.getState().active).toBeNull();
   });
 
+  it("remembers the run to compare with until it is deleted", () => {
+    setCompareRun("smoke", "r1");
+    setCompareRun("other", "r2");
+    expect(useLoadTests.getState().compare).toEqual({ smoke: "r1", other: "r2" });
+    forgetResult("smoke", "r9");
+    expect(useLoadTests.getState().compare.smoke).toBe("r1");
+    forgetResult("smoke", "r1");
+    expect(useLoadTests.getState().compare).toEqual({ other: "r2" });
+    setCompareRun("other", null);
+    expect(useLoadTests.getState().compare).toEqual({});
+  });
+
   it("treats file-format defaults as unchanged", () => {
     const withDefaults: LoadTest = {
       ...test,
@@ -303,6 +320,9 @@ describe("saved load tests and tabs", () => {
     expect(sameLoadTest(test, withDefaults)).toBe(true);
     expect(sameLoadTest(test, { ...test, targets: [{ request: "a.yaml", weight: 2 }] })).toBe(false);
     expect(sameLoadTest(test, { ...test, keepAlive: false })).toBe(false);
+    // No data file and no captures are what a file without them means.
+    expect(sameLoadTest(test, { ...test, dataFile: "", targets: [{ request: "a.yaml", captures: [] }] })).toBe(true);
+    expect(sameLoadTest(test, { ...test, dataFile: "users.csv" })).toBe(false);
   });
 
   it("creates a load test for a request and opens it", async () => {

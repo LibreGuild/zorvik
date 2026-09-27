@@ -57,12 +57,14 @@ rumqttc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
-# ICMP echo (ping) through IcmpSendEcho2 / Icmp6SendEcho2.
+# ICMP echo (ping) through IcmpSendEcho2 / Icmp6SendEcho2; port owners
+# through GetExtendedTcpTable / GetExtendedUdpTable and OpenProcess.
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_IpHelper",
     "Win32_Networking_WinSock",
     "Win32_System_IO",
+    "Win32_System_Threading",
 ] }
 
 [dev-dependencies]

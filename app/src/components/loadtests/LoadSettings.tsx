@@ -1,4 +1,5 @@
-// The settings side of a load test tab: requests, model, stages, options, thresholds.
+// The settings side of a load test tab: requests (and their captures), data
+// file, model, stages, options, thresholds.
 import { memo, useCallback } from "react";
 import type { HttpVersionPref } from "../../bindings/HttpVersionPref";
 import type { LoadModel } from "../../bindings/LoadModel";
@@ -10,6 +11,7 @@ import type { TreeNode } from "../../bindings/TreeNode";
 import { useWorkspace } from "../../store/workspace";
 import { EditorSection } from "../servers/ServerView";
 import { Segmented, Switch } from "../ui";
+import { DataFileField } from "./DataFileField";
 import { MODELS, sendingTargets } from "./model";
 import { NumberInput } from "./parts";
 import { StagesEditor } from "./StagesEditor";
@@ -59,7 +61,11 @@ export const LoadSettings = memo(function LoadSettings({
         title="Requests"
         right={sending < test.targets.length ? <span className="text-[11px] text-faint">{`${sending} of ${test.targets.length} included`}</span> : undefined}
       >
-        <TargetsEditor targets={test.targets} tree={tree} onChange={setTargets} />
+        <TargetsEditor targets={test.targets} tree={tree} model={model} onChange={setTargets} />
+      </EditorSection>
+
+      <EditorSection title="Data file">
+        <DataFileField file={test.dataFile} model={model} onChange={(dataFile) => onChange((t) => ({ ...t, dataFile }))} />
       </EditorSection>
 
       <EditorSection title="Load model">

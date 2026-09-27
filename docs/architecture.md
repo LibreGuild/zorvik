@@ -37,7 +37,7 @@ crates/testkit/      Local test servers used by the tests (HTTP, TLS, proxy, OAu
 3. The request is resolved: variables, inherited headers and auth from folders and the workspace, body encoding.
 4. OAuth 2.0: a cached token is used, refreshed or fetched.
 5. `engine::Client::send`: DNS, TCP (Happy Eyeballs), proxy tunnel, TLS, HTTP/1.1 or HTTP/2 (or QUIC for HTTP/3), redirects, decoding.
-6. Post-response scripts run the tests and fill the console.
+6. Post-response scripts run the tests and fill the console. A request imported from an OpenAPI document the workspace keeps also gets a "Matches the API spec" test (see below).
 7. A history row is written. The response goes back with timing, TLS details, cookies, the headers really sent and the script results.
 
 ## Workspace format
@@ -57,6 +57,8 @@ my-api/
     Payments mock.yaml     # a server: kind, address, port, TLS and its settings
   loadtests/
     Checkout smoke.yaml    # a load test: requests, model, stages, thresholds
+  specs/
+    Payments API.yaml      # OpenAPI documents kept by imports (see "OpenAPI")
 ```
 
 A request file:
@@ -95,6 +97,14 @@ Rules:
 - `zorvik.yaml` carries `version: 1`; a newer format is refused with a clear message.
 - Secret values, cookies and tokens are keyed by the workspace `id` **and** its folder, so a copied `id` doesn't unlock another workspace's secrets.
 
+Per-request settings (`settings:`) include `repeat: {condition, intervalMs, timeoutMs}` (collection runs send again until the JavaScript condition holds) and, for SSE requests, `stream: {event, maxEvents, timeoutMs}` (when a run or an agent stops reading). Enabled query parameters live in `url`; switched-off ones in `disabledParams`, and descriptions of enabled ones in `paramDescriptions`.
+
+## OpenAPI
+- **Import** (`crates/formats/src/openapi.rs`) turns each operation into a request: realistic example bodies from the schema (examples, enums, formats, then property names), path parameters as variables (`{session_id}` → `{{sessionId}}`, generic names get the resource: `/pets/{id}` → `{{petId}}`) with their example values in the new environment. A document without a full server URL is refused with `needsBaseUrl` until the caller gives one.
+- **The document is kept** in `specs/`; the imported folder links it (`openapi: {spec, source, validate}` in `_folder.yaml`) and each request names its operation (`openapi: {operation: "GET /pets/{petId}"}`).
+- **Response checks** (`crates/formats/src/spec_check.rs`, `crates/api/src/specs.rs`): after each send, the status must be documented (exact, `2XX` or `default`) and a JSON body must match the documented schema (types, required fields, enums, `$ref`, `nullable`, `allOf`/`anyOf`/`oneOf`, lengths, ranges; formats and patterns are not checked). The result is a test, so it counts in runs, the CLI and JUnit reports. Parsed documents are cached until the file changes.
+- **Update from a new version** (`crates/api/src/spec_update.rs`, `import.updatePreview` / `import.update`): new operations are added; for changed ones each field (method, URL, headers, body, parameters, auth, docs) takes the new version only where the saved request still has the old document's value, so the user's edits win; scripts, settings and names are never touched. Operations no longer in the document are kept and marked `removed` (crossed out in the sidebar). New path variables are added to the folder's environment.
+
 ## Variables
 Precedence, highest first: CLI `--var`, `pm.variables` (this send or run), the runner's data row, the active environment, workspace variables, globals, then dynamic values (`{{$uuid}}`, `{{$timestamp}}`, `{{$randomInt}}`, `{{$randomEmail}}` and others). Values that scripts set on an environment, the workspace or globals are kept on this computer (`local-values.json`), never in the files, and win over the file value in their scope. Variables can reference variables (depth 10; cycles are reported).
 
@@ -115,15 +125,20 @@ Precedence, highest first: CLI `--var`, `pm.variables` (this send or run), the r
 The API is a Postman-compatible subset (`crates/script/src/prelude.js`), so imported collections run unchanged: `pm.variables`, `pm.environment`, `pm.collectionVariables`, `pm.globals`, `pm.iterationData`, `pm.request`, `pm.response`, `pm.test`, `pm.expect` (a chai subset), `pm.execution.setNextRequest`, `console`, plus the legacy `tests[...]` and `postman.*` forms. `pm.sendRequest`, `require` and timers are not supported and say so.
 
 ## Collection runner
-`crates/api/src/runner.rs` is shared by the app's Runner tab and `zorvik run`. It reads the requests of a folder once, then sends them in order for each iteration through the same scripted send as a single request. CSV or JSON data files give one iteration per row. Non-HTTP requests are reported as skipped. A request fails when it can't be sent, a script throws or a test fails; without tests, an HTTP status of 400 or more fails it. Reports are JSON or JUnit XML, and memory stays bounded on long runs.
+`crates/api/src/runner.rs` is shared by the app's Runner tab and `zorvik run`. It reads the requests of a folder once, then sends them in order for each iteration through the same scripted send as a single request. CSV or JSON data files give one iteration per row. A request fails when it can't be sent, a script throws or a test fails; without tests, an HTTP status of 400 or more fails it. Reports are JSON or JUnit XML, and memory stays bounded on long runs.
+- **Repeat until**: a request with `settings.repeat` is sent again, after `intervalMs`, until its condition holds (run as a hidden test after the post-response scripts; empty = until the request's tests pass), and fails after `timeoutMs`. The result shows the number of sends.
+- **Event streams**: SSE requests are read until `settings.stream` says to stop (`crates/api/src/sse_read.rs`, shared with agents); scripts get `pm.response.events` and the events as text.
+- WebSocket, TCP, UDP, MQTT, gRPC and DNS requests are skipped, with the reason in the result.
 
 ## Load testing
 `crates/load` runs a plan on its own Tokio runtime so the app stays responsive.
 - **Models**: virtual users (closed: send, wait, think, repeat) or arrival rate (open: requests start on schedule however slow the server is). In the open model latency is measured from the scheduled start, so a slow server can't hide its queueing.
 - **Stages** ramp users or requests per second linearly; thresholds (`p50` … `p99.9`, `avg`, `max`, `errorRate`, `rps`) gate the run live and at the end.
-- **Client**: pooled HTTP/1.1 keep-alive and HTTP/2 multiplexing on the engine's connect path (DNS, proxy tunnel, OS-trusted TLS). Requests are resolved once; ones with dynamic variables are rendered per iteration.
-- **Metrics**: an HdrHistogram per target and in total, 1-second buckets for the charts, snapshots to the UI four times a second.
-- **Safety**: a run against a host outside this computer and private networks asks first. Caps: 5,000 users, 50,000 requests/s, 100,000 in flight.
+- **Client**: pooled HTTP/1.1 keep-alive and HTTP/2 multiplexing on the engine's connect path (DNS, proxy tunnel, OS-trusted TLS). Requests are resolved once; ones that use dynamic variables, data file columns or captured values are rendered per request (a render with every user variable set to a probe value tells which).
+- **Per-user data**: `dataFile` (CSV or JSON, the runner's parser and file rules): virtual user N takes row N % rows for its life; in the arrival-rate model each request takes the next row. Precedence: `--var`, captured values, the row, then the environment.
+- **Captures** (`json` path like `$.items[0].id`, `header`, or `regex` first group) save a value from a target's response for the same user's later requests; with captures each user sends the targets in their weighted order. A capture that finds nothing keeps the old value and counts as a miss. Arrival rate: every request is its own iteration, so captured values are only checked, not reused.
+- **Metrics**: an HdrHistogram per target and in total, 1-second buckets for the charts, snapshots to the UI four times a second. Timing phases too: connect (new connections only), time to first byte (server plus one round trip), transfer, and server-reported time from `Server-Timing` (its `total`, else the sum of `dur`).
+- **Safety**: a run against a host outside this computer and private networks asks first (hosts that come from the data file included). A rendered request must stay on the hosts known at the start, so a captured value can't move the load elsewhere. Caps: 5,000 users, 50,000 requests/s, 100,000 in flight.
 - Run history (the last 30 runs per test) is kept in the app data folder, not the workspace. `zorvik load` exits with 1 when a threshold fails.
 
 ## Servers and mocks
@@ -140,12 +155,14 @@ Agent ──MCP over stdio──► zorvik mcp ──127.0.0.1 TCP + token──
 - **`zorvik mcp`** is the MCP server the agent starts. It answers `initialize` and `tools/list` itself; on the first tool call it connects to the running app, or starts it and waits.
 - **The app** listens on `127.0.0.1` (random port) and writes `agent.json` (port and token) to its data folder, readable by the current user only. Both sides prove they know the token with a SHA-256 over a fresh nonce; the token itself is never sent.
 - **Headless** (off by default): when the app is closed, the tools run inside `zorvik mcp`. Nothing can be approved there, so actions that would ask are refused.
-- **Permissions**, checked in Rust on every call: reading is allowed; edits are allowed or asked (setting); requests to outside hosts are asked once per host and agent session; deletes, load tests, starting servers and opening workspaces always ask. Settings, cookies, history and secret values are not available to agents, and credentials are redacted from what agents get back.
+- **Permissions**, checked in Rust on every call: reading is allowed; edits (requests, folders, environments, servers, load tests, files added with `write_file`) are allowed or asked (setting); requests to outside hosts are asked once per host and agent session; deletes, load tests, starting servers, reading files outside the workspace and opening workspaces always ask. Settings, cookies and secret values are not available to agents; history, variables, server traffic and everything returned have credentials redacted.
+- **Input**: tools that save files (`save_requests`, `save_server`, `save_load_test`) refuse fields the model doesn't have, with the nearest known name ("did you mean `status`?"), so a typo is never saved silently. Their JSON schemas document every field, unit and placeholder.
+- **Tools** (`crates/api/src/agents/tools/`): workspace, requests (read several at once, save with query and path parameters), environments and variables (with values scripts saved), import and `update_from_openapi`, `send_request` (HTTP, GraphQL, gRPC, DNS, SSE read to an end), collection runs, GraphQL schemas, gRPC services, load tests, servers (`read_server`, `save_server`, `create_mock`, `start_server` with any port, `get_server_traffic`), `read_history`, `export_request` (cURL, Kotlin, Swift, JavaScript, Python), `write_file` (up to 10 MB, not into Zorvik's own folders).
 - **Where requests go**: each tool call runs in an agent scope. A host guard in the engine keeps every request (redirects, OAuth token requests, gRPC channels, DNS resolvers, collection runs) on the approved hosts. During an agent's call no files outside the workspace are read.
 - **Visible**: the title bar shows the connected agent; the Agents panel lists every tool call; the app opens what the agent works on (setting).
 
 Code: `crates/api/src/agents/` (sessions, confirmations, tool definitions and implementations), `crates/mcp` (JSON-RPC protocol, bridge, listener, `agent.json`).
 
 ## Data locations
-- **Workspace folder** (shared through Git): requests, folders, environments, servers, load tests.
+- **Workspace folder** (shared through Git): requests, folders, environments, servers, load tests, kept OpenAPI documents.
 - **App data folder** (per computer, `org.libreguild.zorvik` in the OS data directory): `settings.json`, `history.sqlite3`, `secrets.json`, `cookies/`, `oauth-tokens.json`, `local-values.json`, `state.json`, `trusted-servers.json`, `load-runs/`, `agent.json`. Logs go to the OS log folder for the app.

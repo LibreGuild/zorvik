@@ -1,9 +1,14 @@
 // Pure helpers for load tests: labels, stage shapes, target weights, request
-// lookup, number formatting and chart decimation. No React, no store.
+// lookup, captures, run comparison, number formatting and chart decimation.
+// No React, no store.
+import type { CaptureFrom } from "../../bindings/CaptureFrom";
+import type { LoadCapture } from "../../bindings/LoadCapture";
 import type { LoadModel } from "../../bindings/LoadModel";
 import type { LoadStage } from "../../bindings/LoadStage";
 import type { LoadTarget } from "../../bindings/LoadTarget";
+import type { MetricsSummary } from "../../bindings/MetricsSummary";
 import type { RequestKind } from "../../bindings/RequestKind";
+import type { TargetSummary } from "../../bindings/TargetSummary";
 import type { Threshold } from "../../bindings/Threshold";
 import type { ThresholdMetric } from "../../bindings/ThresholdMetric";
 import type { ThresholdOp } from "../../bindings/ThresholdOp";
@@ -262,6 +267,107 @@ export function httpRequestsUnder(nodes: TreeNode[], folder: string): string[] {
 
 /** A request's display name from its path when it is not in the tree ("Users/List users.yaml" → "List users"). */
 export const nameFromPath = (path: string) => (path.split("/").pop() ?? path).replace(/\.ya?ml$/i, "");
+
+// ---- captures ---------------------------------------------------------------
+
+export const CAPTURE_FROM: { id: CaptureFrom; label: string; placeholder: string }[] = [
+  { id: "json", label: "JSON path", placeholder: "$.id" },
+  { id: "header", label: "Header", placeholder: "ETag" },
+  { id: "regex", label: "Regex", placeholder: "token=(\\w+)" },
+];
+
+/** The JSON paths the generator understands: `$.a.b[0].c`, `$.items[-1]`, `$['odd key']` (the `$` is optional). */
+const JSON_PATH = /^(?:\$|[^.[\]$\s][^.[\]]*)?(?:\.[^.[\]*]+|\[\s*(?:-?\d+|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")\s*\])*$/;
+
+/** Why a capture can't be used, if it can't (the generator checks again, regular expressions too). */
+export function captureProblem(c: LoadCapture): string | null {
+  const name = c.variable.trim();
+  if (!name) return "Name the variable";
+  if (/[\s{}]/.test(name)) return "No spaces or braces in a variable name";
+  const path = c.path.trim();
+  if (!path) return c.from === "header" ? "Give the header name" : c.from === "regex" ? "Give a regular expression" : "Give a JSON path, e.g. $.id";
+  if (c.from === "json" && !JSON_PATH.test(path)) return "Use a JSON path like $.items[0].id";
+  return null;
+}
+
+// ---- comparing runs ---------------------------------------------------------
+
+export interface CompareRow {
+  key: string;
+  label: string;
+  unit: "req/s" | "%" | "ms";
+  /** `null`: no data for it in that run. */
+  current: number | null;
+  baseline: number | null;
+  /** Change against the baseline in percent; `null` when there is nothing to compare (or the baseline is 0). */
+  change: number | null;
+  /** The change is an improvement (`true`), a regression (`false`) or too small to matter (`null`). */
+  better: boolean | null;
+  /** Per-request rows. */
+  target?: boolean;
+}
+
+/** Changes smaller than this (percent) are noise between runs: shown without colour. */
+export const COMPARE_NOISE = 1;
+
+/** The numbers of a run the comparison reads. */
+export interface RunNumbers {
+  totals: MetricsSummary;
+  targets: TargetSummary[];
+}
+
+function row(key: string, label: string, unit: CompareRow["unit"], current: number | null, baseline: number | null, higherIsBetter: boolean, target?: boolean): CompareRow {
+  let change: number | null = null;
+  let better: boolean | null = null;
+  if (current != null && baseline != null) {
+    if (baseline !== 0) change = ((current - baseline) * 100) / baseline;
+    const moved = baseline === 0 ? current !== 0 : Math.abs(change ?? 0) >= COMPARE_NOISE;
+    if (moved) better = higherIsBetter ? current > baseline : current < baseline;
+  }
+  return { key, label, unit, current, baseline, change, better, ...(target ? { target } : {}) };
+}
+
+const hasLatency = (m: MetricsSummary | undefined) => !!m && m.requests > 0 && (m.latency.max > 0 || m.latency.p50 > 0);
+const ttfbP95 = (m: MetricsSummary | undefined) => (m?.timing && m.timing.ttfb.count > 0 ? m.timing.ttfb.p95 : null);
+
+/**
+ * `current` against `baseline`: throughput, error rate, latency percentiles, p95 time to
+ * first byte and each request's p95 (matched by request path). Lower latency and fewer
+ * errors are better; more requests per second is better.
+ */
+export function compareRuns(current: RunNumbers, baseline: RunNumbers): CompareRow[] {
+  const a = current.totals;
+  const b = baseline.totals;
+  const lat = (m: MetricsSummary, k: "p50" | "p90" | "p95" | "p99" | "max") => (hasLatency(m) ? m.latency[k] : null);
+  const rows: CompareRow[] = [
+    row("rps", "Requests / s", "req/s", a.requests ? a.rps : null, b.requests ? b.rps : null, true),
+    row("errorRate", "Error rate", "%", a.requests ? a.errorRate : null, b.requests ? b.errorRate : null, false),
+    ...(["p50", "p90", "p95", "p99", "max"] as const).map((k) => row(k, k === "max" ? "Max latency" : `${k} latency`, "ms", lat(a, k), lat(b, k), false)),
+    row("ttfb", "p95 first byte", "ms", ttfbP95(a), ttfbP95(b), false),
+  ];
+  const paths: string[] = [];
+  for (const t of [...current.targets, ...baseline.targets]) if (!paths.includes(t.request)) paths.push(t.request);
+  for (const path of paths) {
+    const x = current.targets.find((t) => t.request === path);
+    const y = baseline.targets.find((t) => t.request === path);
+    const name = x?.name || y?.name || nameFromPath(path);
+    rows.push(row(`target:${path}`, `${name} p95`, "ms", hasLatency(x?.metrics) ? x!.metrics.latency.p95 : null, hasLatency(y?.metrics) ? y!.metrics.latency.p95 : null, false, true));
+  }
+  return rows;
+}
+
+/** "+12%", "−3.4%", "0%"; "new" when the baseline was 0; "–" without data. */
+export function formatChange(r: Pick<CompareRow, "change" | "current" | "baseline">): string {
+  if (r.current == null || r.baseline == null) return "–";
+  if (r.change == null) return r.current === 0 ? "0%" : "new";
+  const v = r.change;
+  if (Math.abs(v) < 0.05) return "0%";
+  const text = Math.abs(v) < 10 ? Math.abs(v).toFixed(1) : Math.round(Math.abs(v)).toLocaleString("en-US");
+  return `${v > 0 ? "+" : "−"}${text}%`;
+}
+
+/** Share (percent) of requests that opened a new connection. */
+export const newConnectionShare = (m: MetricsSummary) => (m.requests > 0 ? Math.min(100, (m.connections * 100) / m.requests) : 0);
 
 // ---- formatting -------------------------------------------------------------
 

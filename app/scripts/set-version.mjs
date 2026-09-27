@@ -41,6 +41,6 @@ setJsonVersion(path.join(app, "package.json"));
 setJsonVersion(path.join(app, "package-lock.json"), 2);
 setJsonVersion(path.join(app, "src-tauri", "tauri.conf.json"));
 
-// Cargo.lock records every crate's version.
-execFileSync("cargo", ["metadata", "--format-version", "1", "--no-deps"], { cwd: root, stdio: "ignore" });
+// Cargo.lock records every crate's version: update only this workspace's own entries.
+execFileSync("cargo", ["update", "--workspace"], { cwd: root, stdio: "ignore" });
 console.log(`Version set to ${version}. Commit the changes, then tag v${version}.`);

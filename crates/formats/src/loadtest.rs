@@ -63,6 +63,38 @@ pub struct LoadTarget {
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     #[ts(optional, as = "Option<bool>")]
     pub enabled: bool,
+    /// Values saved from this request's responses as variables for the same
+    /// user's later requests (create an order, then get `/orders/{{orderId}}`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<LoadCapture>>")]
+    pub captures: Vec<LoadCapture>,
+}
+
+/// Where a capture finds its value in a response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum CaptureFrom {
+    /// A JSON path into the body: `$.id`, `$.items[0].id`, `$['odd key']`.
+    #[default]
+    Json,
+    /// A response header, by name (any case).
+    Header,
+    /// A regular expression over the body; its first group is the value.
+    Regex,
+}
+
+/// Save one value from a response as a variable (`{{variable}}`). A capture
+/// that finds nothing leaves the variable as it was and counts as a miss.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LoadCapture {
+    pub variable: String,
+    #[serde(default)]
+    pub from: CaptureFrom,
+    /// The JSON path, the header name or the regular expression.
+    pub path: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -171,6 +203,12 @@ pub struct LoadTest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(optional, as = "Option<Vec<Threshold>>")]
     pub thresholds: Vec<Threshold>,
+    /// CSV or JSON data file (relative to the workspace folder, or absolute): each
+    /// virtual user takes the next row (user N gets row N % rows); in the
+    /// arrival-rate model each request takes the next row. Columns are variables.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub data_file: Option<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     #[ts(optional, as = "Option<String>")]
     pub docs: String,
@@ -181,7 +219,10 @@ impl LoadTest {
         Self {
             name: name.into(),
             seq: 0,
-            targets: targets.into_iter().map(|request| LoadTarget { request, weight: 1, enabled: true }).collect(),
+            targets: targets
+                .into_iter()
+                .map(|request| LoadTarget { request, weight: 1, enabled: true, captures: Vec::new() })
+                .collect(),
             model: LoadModel::VirtualUsers,
             stages: vec![
                 LoadStage { duration_secs: 10, target: 10 },
@@ -193,6 +234,7 @@ impl LoadTest {
             keep_alive: true,
             timeout_ms: None,
             http_version: None,
+            data_file: None,
             thresholds: vec![
                 Threshold {
                     metric: ThresholdMetric::P95,
@@ -253,6 +295,17 @@ mod tests {
 
         let minimal: LoadTest = serde_yaml_ng::from_str("name: X\ntargets: [{request: a.yaml}]\n").unwrap();
         assert!(minimal.keep_alive && minimal.max_in_flight == 1000 && minimal.targets[0].weight == 1);
+        assert!(minimal.data_file.is_none() && minimal.targets[0].captures.is_empty());
+        assert!(!yaml.contains("dataFile") && !yaml.contains("captures"), "{yaml}");
+
+        let yaml = "name: X\ndataFile: users.csv\ntargets:\n  - request: a.yaml\n    captures:\n      - { variable: id, path: $.id }\n      - { variable: etag, from: header, path: ETag }\n";
+        let test: LoadTest = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(test.data_file.as_deref(), Some("users.csv"));
+        let captures = &test.targets[0].captures;
+        assert_eq!((captures[0].from, captures[1].from), (CaptureFrom::Json, CaptureFrom::Header));
+        let again = serde_yaml_ng::to_string(&test).unwrap();
+        assert!(again.contains("dataFile: users.csv") && again.contains("from: header"), "{again}");
+        assert_eq!(serde_yaml_ng::from_str::<LoadTest>(&again).unwrap(), test);
         assert!(ThresholdOp::Lte.holds(1.0, 1.0) && !ThresholdOp::Lt.holds(1.0, 1.0));
     }
 }

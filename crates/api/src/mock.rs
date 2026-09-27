@@ -111,7 +111,7 @@ impl Api {
         }
     }
 
-    async fn download_document(&self, url: &str) -> ApiResult<String> {
+    pub(crate) async fn download_document(&self, url: &str) -> ApiResult<String> {
         let mut opts = crate::request_options(&self.settings(), &Default::default())?;
         opts.max_body_bytes = MAX_IMPORT_FILE as usize;
         // Nothing can cancel the download: never wait forever, even with timeouts turned off.
@@ -184,7 +184,7 @@ fn saved_requests(ws: &Workspace, folder: &str) -> ApiResult<Vec<(String, Reques
 
 /// A document of at most 50 MB from a regular file (not a device or a pipe,
 /// which could be endless).
-fn read_document(path: &str) -> ApiResult<String> {
+pub(crate) fn read_document(path: &str) -> ApiResult<String> {
     let io_err = |e: std::io::Error| ApiError::new("io", format!("Could not read {path}: {e}"));
     let meta = std::fs::metadata(path).map_err(io_err)?;
     if !meta.is_file() {

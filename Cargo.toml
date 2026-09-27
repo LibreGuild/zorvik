@@ -29,7 +29,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -52,6 +52,9 @@ zorvik-mcp = { path = "crates/mcp" }
 tokio = { version = "1.53", features = ["full"] }
 tokio-util = "0.7"
 futures-util = "0.3"
+# Agent tool input: report fields serde would ignore, and suggest the intended one.
+serde_ignored = "0.1"
+strsim = "0.11"
 # JavaScript scripts: QuickJS, compiled from C by `cc`.
 rquickjs = { version = "0.14", features = ["macro"] }
 # gRPC: dynamic messages, JSON mapping, `.proto` compiling without protoc.

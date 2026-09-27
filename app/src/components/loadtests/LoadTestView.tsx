@@ -13,7 +13,7 @@ import { Splitter } from "../Splitter";
 import { Banner, Button, cx, IconButton, Segmented, Tooltip } from "../ui";
 import { LoadResults } from "./LoadResults";
 import { LoadSettings } from "./LoadSettings";
-import { flattenRequests, formatDuration, MODELS, peakTarget, sendingTargets, totalDuration } from "./model";
+import { captureProblem, flattenRequests, formatDuration, MODELS, peakTarget, sendingTargets, totalDuration } from "./model";
 import { useElementWidth, useTicker } from "./parts";
 
 const NO_NODES: TreeNode[] = [];
@@ -29,6 +29,7 @@ export function startProblem(test: LoadTest, tree: TreeNode[]): string | null {
   if (missing) return "A request is missing from the collection";
   if (sending.some((t) => known.get(t.request)?.error)) return "A request's file can't be read";
   if (sending.some((t) => known.get(t.request)?.kind !== "http")) return "Only HTTP requests can be load tested";
+  if (sending.some((t) => (t.captures ?? []).some((c) => captureProblem(c)))) return "A capture needs a variable name and a path";
   if (totalDuration(test.stages) <= 0) return "Give a stage a duration";
   if (peakTarget(test.stages) <= 0) return "Set a stage target above 0";
   if (test.stages.some((s) => s.target > MODELS[test.model].limit)) return `Up to ${MODELS[test.model].noun(MODELS[test.model].limit)}`;

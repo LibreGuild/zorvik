@@ -29,4 +29,10 @@ keepAlive?: boolean,
 /**
  * Per-request timeout; the app setting when missing.
  */
-timeoutMs?: number, httpVersion?: HttpVersionPref, thresholds?: Array<Threshold>, docs?: string, };
+timeoutMs?: number, httpVersion?: HttpVersionPref, thresholds?: Array<Threshold>, 
+/**
+ * CSV or JSON data file (relative to the workspace folder, or absolute): each
+ * virtual user takes the next row (user N gets row N % rows); in the
+ * arrival-rate model each request takes the next row. Columns are variables.
+ */
+dataFile?: string, docs?: string, };

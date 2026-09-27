@@ -308,10 +308,7 @@ impl Api {
             }
             "server.log" => {
                 let RunParam { run_id } = params(p)?;
-                let log =
-                    lock(&self.inner.servers.running).get(&run_id).map(|r| r.log.clone()).ok_or_else(not_running)?;
-                let entries: Vec<TrafficEntry> = lock(&log).entries.iter().cloned().collect();
-                ok(entries)
+                ok(self.server_log(&run_id).ok_or_else(not_running)?)
             }
             "server.clearLog" => {
                 let RunParam { run_id } = params(p)?;
@@ -322,6 +319,13 @@ impl Api {
             }
             other => Err(ApiError::new("notFound", format!("Unknown method '{other}'"))),
         }
+    }
+
+    /// What a running server logged, oldest first (`None`: it isn't running).
+    pub(crate) fn server_log(&self, run_id: &str) -> Option<Vec<TrafficEntry>> {
+        let log = lock(&self.inner.servers.running).get(run_id).map(|r| r.log.clone())?;
+        let entries = lock(&log).entries.iter().cloned().collect();
+        Some(entries)
     }
 
     fn find_run(&self, ws: &Workspace, server_id: &str) -> Option<String> {

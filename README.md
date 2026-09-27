@@ -59,12 +59,15 @@
 - **Scripts:** pre-request and post-response JavaScript with a Postman-compatible `pm` API, so imported collections run as they are.
 - **Tests:** `pm.test` and `pm.expect`, with results next to the response.
 - **Collection runner:** run a folder in order, repeat it, drive it with CSV or JSON data, stop on the first failure, export JSON or JUnit reports.
+- **Polling and streams in runs:** send a request again until a condition holds (wait for a job to finish), and test Server-Sent Events streams (`pm.response.events`).
+- **Contract checks:** requests imported from an OpenAPI document are checked against it on every send and run: an undocumented status or a field of the wrong type fails a test.
 - **CI:** `zorvik run` runs the same collections in any pipeline.
 
 ### Mock and serve
 - **Mock APIs** from scratch, from a folder of requests, from an OpenAPI spec, or from a response you just received. Routes with `:params`, templated bodies, delays, fault injection, CORS, and forwarding to a real backend.
 - **Servers:** WebSocket, SSE, TCP, UDP and DNS servers, plus a TCP relay that shows both directions. Every server logs its traffic live.
 - **Headless:** `zorvik serve` runs any of them in CI next to your tests.
+- **Busy port?** The error names the program holding it.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/assets/mock-dark.webp">
@@ -75,6 +78,8 @@
 - **Virtual users or arrival rate,** with stages (ramp up, hold, spike), weighted requests and think time.
 - **Live dashboard:** requests per second, latency percentiles up to p99.9, errors, status codes and the load generator's own CPU.
 - **Thresholds** such as "p95 under 200 ms" pass or fail a run; run history and HTML/JSON reports.
+- **Realistic traffic:** a data file gives each virtual user its own row, and captures pass values from one response (a new order's id) to that user's next requests.
+- **Where the time goes:** time to first byte, transfer and connect per request, the server's own time from `Server-Timing`, and a side-by-side comparison with an earlier run.
 - **In CI:** `zorvik load` exits with an error when a threshold fails.
 
 <picture>
@@ -86,7 +91,8 @@
 TLS inspector (chain, expiry, protocol versions, cipher suites), DNS lookup, port check, ping, network interfaces, HTTP/3 check, and encoders for Base64, URL, hex, JWT, hashes and timestamps.
 
 ### Work your way
-- **Import** Postman collections and environments, OpenAPI 3 and Swagger 2, and cURL commands; **export** any request as cURL.
+- **Import** Postman collections and environments, OpenAPI 3 and Swagger 2 (realistic examples, path parameters as variables), and cURL commands. When the API changes, **update from the spec**: new operations come in, your edits stay.
+- **Export** any request as cURL, or as Kotlin (OkHttp), Swift, JavaScript or Python code.
 - **Built-in docs** for every feature (the book icon in the left rail), a command palette (<kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>K</kbd>) and keyboard shortcuts.
 - **Light and dark themes,** zoom (<kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>+</kbd> <kbd>−</kbd> <kbd>0</kbd>), and your choice of interface and code fonts.
 
@@ -126,7 +132,7 @@ zorvik mcp                                                 # the MCP server for 
 Secrets are not in workspace files; pass them with `--var token=$TOKEN`. Run `zorvik <command> --help` for every option.
 
 ## AI agents
-Coding agents can map the APIs in your code into a collection, send requests, run collections and load tests, and set up mocks, all through Zorvik's MCP server. You see every action in the app as it happens, and anything risky asks you first: deleting, load testing, starting servers, or sending requests to hosts outside your computer.
+Coding agents can map the APIs in your code into a collection, send requests, read event streams, run collections and load tests, build mock servers and read what they received, and export requests as code, all through Zorvik's MCP server. You see every action in the app as it happens, and anything risky asks you first: deleting, load testing, starting servers, or sending requests to hosts outside your computer.
 
 Connect your agent once (Settings → AI agents shows these with the right path for your computer):
 

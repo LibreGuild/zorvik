@@ -5,14 +5,14 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Write as _};
 
-use indexmap::{IndexMap, IndexSet};
+use indexmap::IndexMap;
 use serde::de::{self, DeserializeSeed, Deserializer, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor};
 use serde_json::{Map, Value};
 
 use crate::import::{ImportError, ImportedCollection, ImportedItem};
 use crate::model::{
-    ApiKeyLocation, Auth, Body, BodyType, FolderMeta, GrantType, KeyValue, MultipartField, OAuth2Config, Request,
-    RequestKind, Variable,
+    ApiKeyLocation, Auth, Body, BodyType, FolderMeta, GrantType, KeyValue, MultipartField, OAuth2Config,
+    OpenApiOperation, Request, RequestKind, Variable,
 };
 
 const METHODS: [&str; 8] = ["get", "put", "post", "delete", "options", "head", "patch", "trace"];
@@ -33,12 +33,28 @@ const MAX_OUTPUT: usize = 256 << 20;
 const VISIT_COST: usize = 16;
 /// Values YAML aliases may add on top of the document's own.
 const MAX_YAML_ALIAS_VALUES: usize = 1_000_000;
+/// Most items generated for one array; a larger `minItems` is not honoured.
+const MAX_ITEMS: u64 = 100;
+/// Longest string padded to reach a schema's `minLength`.
+const MAX_PADDING: u64 = 1024;
+/// Example values shared by formats and names.
+const EXAMPLE_UUID: &str = "3fa85f64-5717-4562-b3fc-2c963f66afa6";
+const EXAMPLE_TIMESTAMP: &str = "2024-01-01T12:00:00Z";
+const EXAMPLE_IP: &str = "203.0.113.10";
+const EXAMPLE_SECRET: &str = "secret-value";
 
 /// Import an OpenAPI 3.0/3.1 or Swagger 2.0 document (JSON or YAML).
 pub fn import_openapi(text: &str) -> Result<ImportedCollection, ImportError> {
     let doc = parse(text)?;
     let swagger2 = is_swagger2(&doc)?;
     Ok(Importer::new(&doc, swagger2).run())
+}
+
+/// An OpenAPI 3 / Swagger 2 document (JSON or YAML) as JSON, checked to be one.
+pub fn parse_document(text: &str) -> Result<Value, ImportError> {
+    let doc = parse(text)?;
+    is_swagger2(&doc)?;
+    Ok(doc)
 }
 
 /// `false` for OpenAPI 3.x, `true` for Swagger 2.0.
@@ -256,6 +272,8 @@ struct Importer<'a> {
     warned: HashSet<String>,
     /// Placeholder variables referenced by imported auth (name -> secret).
     vars: IndexMap<&'static str, bool>,
+    /// Variables standing for path parameters (name -> example value); the first value wins.
+    path_vars: IndexMap<String, String>,
     /// Mapped auth per security scheme name (`None` = unsupported).
     schemes: HashMap<String, Option<Auth>>,
     /// Schemas on the current example-generation path (cycle guard).
@@ -279,6 +297,7 @@ impl<'a> Importer<'a> {
             warnings: Vec::new(),
             warned: HashSet::new(),
             vars: IndexMap::new(),
+            path_vars: IndexMap::new(),
             schemes: HashMap::new(),
             active: Vec::new(),
             budget: 0,
@@ -381,6 +400,13 @@ impl<'a> Importer<'a> {
             enabled: true,
             secret: *secret,
         }));
+        // A path variable named like `baseUrl` or an auth placeholder shares that variable.
+        let taken = variables.len();
+        for (key, value) in self.path_vars {
+            if !variables[..taken].iter().any(|v| v.key == key) {
+                variables.push(Variable { key, value, enabled: true, secret: false });
+            }
+        }
         ImportedCollection {
             name,
             variables,
@@ -421,7 +447,7 @@ impl<'a> Importer<'a> {
                     .find(|s| !s.is_empty())
                     .unwrap_or_else(|| label.clone());
                 let (status, content_type, body) = self.response_example(op, &label);
-                let response = MockResponse { method, path: convert_path(path).0, name, status, content_type, body };
+                let response = MockResponse { method, path: convert_path(path), name, status, content_type, body };
                 // The example was charged while it was built; charge the rest.
                 let size = response.name.len() + response.path.len() + response.body.len() + 64;
                 self.afford(size.saturating_sub(before - self.output_left));
@@ -477,7 +503,7 @@ impl<'a> Importer<'a> {
         let base = media_base(media_type);
         let value = match self.media_example(media) {
             Some(v) => self.copy(v),
-            None => media.get("schema").and_then(|s| self.sample(s)),
+            None => media.get("schema").and_then(|s| self.sample(s, "")),
         };
         let json = is_json(&base) || base == "*/*";
         let body = match value {
@@ -519,7 +545,7 @@ impl<'a> Importer<'a> {
         if json_type.is_none() && produces.iter().any(|p| is_xml(&media_base(p))) {
             return (produces.first().cloned(), String::new());
         }
-        let body = self.sample(schema).map(json_text).unwrap_or_default();
+        let body = self.sample(schema, "").map(json_text).unwrap_or_default();
         (Some(json_type.unwrap_or_else(|| "application/json".to_string())), body)
     }
 
@@ -633,6 +659,7 @@ impl<'a> Importer<'a> {
             .unwrap_or_else(|| label.clone());
         let mut req = Request::new(name, RequestKind::Http);
         req.method = method.to_ascii_uppercase();
+        req.openapi = Some(OpenApiOperation { operation: label.clone(), removed: false });
         let description = str_of(op, "description").trim();
         req.docs = match (is_true(op, "deprecated"), description.is_empty()) {
             (true, true) => "Deprecated.".to_string(),
@@ -641,15 +668,14 @@ impl<'a> Importer<'a> {
         };
 
         let params = self.parameters(item, op);
-        let (path_url, path_names) = convert_path(path);
+        let (path_url, path_vars) = variable_path(path);
         let prefix = self.server_override(item, op).unwrap_or_else(|| "{{baseUrl}}".to_string());
         let mut url = prefix + &path_url;
-        for name in path_names {
-            let (value, description) = match params.get(&(name.as_str(), "path")).copied() {
-                Some(p) => (self.param_value(p), description_of(p)),
-                None => (String::new(), String::new()),
-            };
-            req.path_params.push(kv(name, value, true, description));
+        for (name, var) in path_vars {
+            if !self.path_vars.contains_key(&var) {
+                let value = self.path_value(&name, params.get(&(name.as_str(), "path")).copied());
+                self.path_vars.insert(var, value);
+            }
         }
 
         let mut query = Vec::new();
@@ -709,22 +735,45 @@ impl<'a> Importer<'a> {
         out
     }
 
+    /// A parameter's value as text: the one the document gives, else empty.
     fn param_value(&mut self, p: &'a Value) -> String {
-        // OpenAPI 3 parameters carry a `schema` (or `content`); Swagger 2 ones describe the type inline.
-        let media = p.get("content").and_then(Value::as_object).and_then(|c| c.values().next());
-        let schema = match p.get("schema").or_else(|| media.and_then(|m| m.get("schema"))) {
-            Some(s) => self.resolve(s),
-            None if self.swagger2 => Some(p),
-            None => None,
-        };
-        let value = p
-            .get("example")
+        let value = self.given_value(p);
+        value.filter(|v| self.afford_value(v)).map(stringify).unwrap_or_default()
+    }
+
+    /// A path parameter's value as text: the one the document gives, else a realistic one from
+    /// its schema and name (`p` is `None` when the path uses a parameter it does not declare).
+    fn path_value(&mut self, name: &str, p: Option<&'a Value>) -> String {
+        if let Some(p) = p {
+            if let Some(v) = self.given_value(p) {
+                return if self.afford_value(v) { stringify(v) } else { String::new() };
+            }
+            if let Some(v) = self.param_schema(p).and_then(|s| self.sample(s, name)) {
+                return stringify(&v);
+            }
+        }
+        scalar("string", &Value::Null, name).as_ref().map(stringify).unwrap_or_default()
+    }
+
+    /// The value the document gives a parameter: its example(s), its media type's, or its schema's.
+    fn given_value(&mut self, p: &'a Value) -> Option<&'a Value> {
+        let media = param_media(p);
+        let schema = self.param_schema(p);
+        p.get("example")
             .or_else(|| p.get("x-example"))
             .filter(|v| !v.is_null())
             .or_else(|| self.first_example(p))
             .or_else(|| media.and_then(|m| self.media_example(m)))
-            .or_else(|| schema.and_then(explicit_value));
-        value.filter(|v| self.afford_value(v)).map(stringify).unwrap_or_default()
+            .or_else(|| schema.and_then(explicit_value))
+    }
+
+    /// OpenAPI 3 parameters carry a `schema` (or `content`); Swagger 2 ones describe the type inline.
+    fn param_schema(&mut self, p: &'a Value) -> Option<&'a Value> {
+        match p.get("schema").or_else(|| param_media(p).and_then(|m| m.get("schema"))) {
+            Some(s) => self.resolve(s),
+            None if self.swagger2 => Some(p),
+            None => None,
+        }
     }
 
     /// `example`, else the first `examples` entry of a media type (or parameter).
@@ -766,7 +815,7 @@ impl<'a> Importer<'a> {
             body.body_type = BodyType::Json;
             let value = match self.media_example(media) {
                 Some(v) => self.copy(v),
-                None => schema.and_then(|s| self.sample(s)),
+                None => schema.and_then(|s| self.sample(s, "")),
             };
             body.text = value.map(json_text).unwrap_or_default();
         } else if base == "application/x-www-form-urlencoded" {
@@ -814,7 +863,7 @@ impl<'a> Importer<'a> {
                 body.body_type = BodyType::Xml;
             } else {
                 body.body_type = BodyType::Json;
-                body.text = p.get("schema").and_then(|s| self.sample(s)).map(json_text).unwrap_or_default();
+                body.text = p.get("schema").and_then(|s| self.sample(s, "")).map(json_text).unwrap_or_default();
             }
             return body;
         }
@@ -919,12 +968,14 @@ impl<'a> Importer<'a> {
         }
     }
 
-    /// An example value for a schema, or `None` if nothing sensible can be generated.
-    fn sample(&mut self, schema: &'a Value) -> Option<Value> {
+    /// An example value for a schema, or `None` if nothing sensible can be generated. `name` is
+    /// the property or parameter the schema describes (empty for a body), which picks realistic
+    /// values when the schema gives none.
+    fn sample(&mut self, schema: &'a Value, name: &str) -> Option<Value> {
         self.active.clear();
         self.budget = MAX_PROPS;
         self.visits = MAX_VISITS;
-        self.example(schema, 0)
+        self.example(schema, name, 0)
     }
 
     /// Counts one schema visit for the current example; false once the limits are reached.
@@ -934,7 +985,7 @@ impl<'a> Importer<'a> {
         ok
     }
 
-    fn example(&mut self, schema: &'a Value, depth: usize) -> Option<Value> {
+    fn example(&mut self, schema: &'a Value, name: &str, depth: usize) -> Option<Value> {
         if !self.visit() {
             return None;
         }
@@ -949,12 +1000,12 @@ impl<'a> Importer<'a> {
             return None;
         }
         self.active.push(s);
-        let out = self.generate(s, depth);
+        let out = self.generate(s, name, depth);
         self.active.pop();
         out
     }
 
-    fn generate(&mut self, s: &'a Value, depth: usize) -> Option<Value> {
+    fn generate(&mut self, s: &'a Value, name: &str, depth: usize) -> Option<Value> {
         let mut object: Option<Map<String, Value>> = None;
         let mut other = None;
         let mut absorb = |v: Value, object: &mut Option<Map<String, Value>>| match v {
@@ -962,12 +1013,14 @@ impl<'a> Importer<'a> {
             v => other = Some(v),
         };
         for part in s.get("allOf").and_then(Value::as_array).into_iter().flatten() {
-            if let Some(v) = self.example(part, depth) {
+            if let Some(v) = self.example(part, name, depth) {
                 absorb(v, &mut object);
             }
         }
         let options = s.get("oneOf").or_else(|| s.get("anyOf")).and_then(Value::as_array);
-        if let Some(v) = options.into_iter().flatten().find_map(|o| self.example(o, depth).filter(|v| !v.is_null())) {
+        if let Some(v) =
+            options.into_iter().flatten().find_map(|o| self.example(o, name, depth).filter(|v| !v.is_null()))
+        {
             absorb(v, &mut object);
         }
         match schema_type(s) {
@@ -976,14 +1029,24 @@ impl<'a> Importer<'a> {
                 object.get_or_insert_with(Map::new).extend(props);
             }
             Some("array") => {
+                // Items are named after the array: `emails` holds `email`s.
                 let item = match s.get("items") {
-                    Some(items) if depth < MAX_DEPTH => self.example(items, depth + 1),
+                    Some(items) if depth < MAX_DEPTH => self.example(items, &singular(name), depth + 1),
                     _ => None,
                 };
-                absorb(Value::Array(item.into_iter().collect()), &mut object);
+                let count = item_count(s);
+                let mut items = Vec::new();
+                if let Some(item) = item.filter(|_| count > 0) {
+                    while items.len() + 1 < count && self.afford_value(&item) {
+                        items.push(item.clone());
+                    }
+                    items.push(item);
+                }
+                absorb(Value::Array(items), &mut object);
             }
             Some(kind) => {
-                if let Some(v) = scalar(kind, str_of(s, "format")) {
+                let value = scalar(kind, s, name);
+                if let Some(v) = value.filter(|v| self.afford_value(v)) {
                     absorb(v, &mut object);
                 }
             }
@@ -1015,7 +1078,7 @@ impl<'a> Importer<'a> {
             if !self.afford(name.len()) {
                 break;
             }
-            if let Some(v) = self.example(prop, depth + 1) {
+            if let Some(v) = self.example(prop, name, depth + 1) {
                 out.insert(name.clone(), v);
             }
         }
@@ -1185,6 +1248,11 @@ fn multipart_field(f: Field) -> MultipartField {
     MultipartField { key: f.name, value: f.value, file: f.file, content_type: f.content_type, enabled: true }
 }
 
+/// The first media type of an OpenAPI 3 parameter's `content`.
+fn param_media(p: &Value) -> Option<&Value> {
+    p.get("content").and_then(Value::as_object).and_then(|c| c.values().next())
+}
+
 fn first_tag(op: &Value) -> Option<&str> {
     let tag = op.get("tags")?.as_array()?.first()?.as_str()?.trim();
     (!tag.is_empty()).then_some(tag)
@@ -1200,7 +1268,8 @@ fn explicit_value(s: &Value) -> Option<&Value> {
         .or_else(|| s.get("enum")?.as_array()?.iter().find(|v| !v.is_null()))
 }
 
-/// The schema's type; for 3.1 type arrays the first non-null one. Inferred when absent.
+/// The schema's type; for 3.1 type arrays the first non-null one. Inferred when absent
+/// (numeric formats such as `int64` mean a number).
 fn schema_type(s: &Value) -> Option<&str> {
     let explicit = match s.get("type") {
         Some(Value::String(t)) => Some(t.as_str()),
@@ -1216,26 +1285,328 @@ fn schema_type(s: &Value) -> Option<&str> {
         } else if s.get("items").is_some() {
             Some("array")
         } else {
-            None
+            match str_of(s, "format") {
+                "int32" | "int64" => Some("integer"),
+                "float" | "double" => Some("number"),
+                _ => None,
+            }
         }
     })
 }
 
-fn scalar(kind: &str, format: &str) -> Option<Value> {
+/// A realistic value for a scalar schema that gives none itself. Strings follow the `pattern`
+/// when it is a plain literal, then the `format`, then the name of the property or parameter
+/// (see `name_hint`); numbers follow the name. Length, range and step constraints are respected.
+fn scalar(kind: &str, s: &Value, name: &str) -> Option<Value> {
     Some(match kind {
-        "string" => Value::from(match format {
-            "date-time" => "2024-01-01T00:00:00Z",
-            "date" => "2024-01-01",
-            "uuid" => "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-            "email" => "user@example.com",
-            "uri" | "url" => "https://example.com",
-            _ => "string",
-        }),
-        "integer" | "number" => Value::from(0),
+        "string" => Value::String(text_value(s, name_hint(name))),
+        "integer" => number_value(s, name_hint(name), true),
+        "number" => number_value(s, name_hint(name), false),
         "boolean" => Value::Bool(true),
         "null" => Value::Null,
         _ => return None,
     })
+}
+
+fn text_value(s: &Value, hint: Option<Hint>) -> String {
+    if let Some(literal) = pattern_literal(str_of(s, "pattern")) {
+        return literal;
+    }
+    let named = hint.and_then(|h| h.text);
+    let text = match str_of(s, "format") {
+        "date-time" => "2024-01-01T00:00:00Z".to_string(),
+        "date" => "2024-01-01".to_string(),
+        "time" => "12:00:00".to_string(),
+        "uuid" => EXAMPLE_UUID.to_string(),
+        // The name may say which address (`avatar` is an image URL).
+        "email" | "idn-email" => named.filter(|t| t.contains('@')).unwrap_or("user@example.com").to_string(),
+        "uri" | "url" | "uri-reference" | "iri" => {
+            named.filter(|t| t.starts_with("https://")).unwrap_or("https://example.com").to_string()
+        }
+        "hostname" | "idn-hostname" => "api.example.com".to_string(),
+        "ipv4" => EXAMPLE_IP.to_string(),
+        "ipv6" => "2001:db8::1".to_string(),
+        "byte" => "U29tZSBkYXRh".to_string(),
+        "password" => EXAMPLE_SECRET.to_string(),
+        "int32" | "int64" => stringify(&number_value(s, hint, true)),
+        "float" | "double" => stringify(&number_value(s, hint, false)),
+        // Names with only a numeric example (`price`, `page`) still read well as text.
+        _ => match hint {
+            Some(Hint { text: Some(t), .. }) => t.to_string(),
+            Some(Hint { num: Some(n), .. }) => n.to_string(),
+            Some(Hint { int: Some(i), .. }) => i.to_string(),
+            _ => "example".to_string(),
+        },
+    };
+    fit_length(text, s)
+}
+
+/// Pads (with `x`) or cuts `text` to the schema's `minLength` and `maxLength`.
+fn fit_length(mut text: String, s: &Value) -> String {
+    let limit = |key| s.get(key).and_then(Value::as_u64);
+    let count = text.chars().count() as u64;
+    if let Some(min) = limit("minLength").map(|n| n.min(MAX_PADDING))
+        && count < min
+    {
+        text.extend(std::iter::repeat_n('x', (min - count) as usize));
+    }
+    if let Some(max) = limit("maxLength")
+        && let Some((cut, _)) = text.char_indices().nth(max.try_into().unwrap_or(usize::MAX))
+    {
+        text.truncate(cut);
+    }
+    text
+}
+
+/// The only text an anchored literal pattern such as `^v1$` or `^api\.example$` matches;
+/// `None` for anything that needs a regex engine.
+fn pattern_literal(pattern: &str) -> Option<String> {
+    let body = pattern.strip_prefix('^')?.strip_suffix('$')?;
+    let mut out = String::with_capacity(body.len());
+    let mut chars = body.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            // `\.` is a literal dot; `\d`, `\w` and friends are classes.
+            '\\' => match chars.next() {
+                Some(escaped) if !escaped.is_alphanumeric() => out.push(escaped),
+                _ => return None,
+            },
+            '.' | '[' | ']' | '(' | ')' | '{' | '}' | '*' | '+' | '?' | '|' | '^' | '$' => return None,
+            c => out.push(c),
+        }
+    }
+    Some(out)
+}
+
+fn number_value(s: &Value, hint: Option<Hint>, integer: bool) -> Value {
+    let named = match hint {
+        Some(h) if integer => h.int.or(h.num.map(|n| n.trunc() as i64)).map(|i| i as f64),
+        Some(h) => h.num.or(h.int.map(|i| i as f64)),
+        None => None,
+    };
+    let v = constrain(named.unwrap_or(if integer { 1.0 } else { 1.5 }), s, integer);
+    // Whole numbers print without a fraction (`50`, not `50.0`).
+    if integer || (v.fract() == 0.0 && v.abs() < 1e15) {
+        Value::from(v as i64)
+    } else {
+        serde_json::Number::from_f64(v).map_or(Value::from(0), Value::Number)
+    }
+}
+
+/// Moves `v` onto the schema's `multipleOf` and into its `minimum`/`maximum` range, including
+/// the exclusive bounds of OpenAPI 3.0 (a flag) and 3.1 (a number). Integers stay whole.
+fn constrain(v: f64, s: &Value, integer: bool) -> f64 {
+    let num = |key: &str| s.get(key).and_then(Value::as_f64).filter(|n| n.is_finite());
+    let step = match num("multipleOf").filter(|m| *m > 0.0) {
+        Some(m) if !integer || m.fract() == 0.0 => Some(m),
+        _ => integer.then_some(1.0),
+    };
+    // (bound, exclusive); when both forms are given the stricter one counts.
+    let bound = |key: &str, exclusive: &str, lower: bool| {
+        let plain = num(key).map(|b| (b, is_true(s, exclusive)));
+        let strict = num(exclusive).map(|b| (b, true));
+        match (plain, strict) {
+            (Some(p), Some(e)) => Some(if e.0 == p.0 || (e.0 > p.0) == lower { e } else { p }),
+            (p, e) => p.or(e),
+        }
+    };
+    let low = bound("minimum", "exclusiveMinimum", true);
+    let high = bound("maximum", "exclusiveMaximum", false);
+    let snap = |x: f64, round: fn(f64) -> f64| match step {
+        Some(st) => tidy(round(x / st) * st, st),
+        None => x,
+    };
+    let mut v = snap(v, f64::round);
+    if let Some((lo, exclusive)) = low
+        && (v < lo || (exclusive && v <= lo))
+    {
+        v = match step {
+            Some(st) => match snap(lo, f64::ceil) {
+                x if exclusive && x <= lo => tidy(x + st, st),
+                x => x,
+            },
+            None if exclusive => high.map_or(lo + 1.0, |(hi, _)| (lo + hi) / 2.0),
+            None => lo,
+        };
+    }
+    if let Some((hi, exclusive)) = high
+        && (v > hi || (exclusive && v >= hi))
+    {
+        v = match step {
+            Some(st) => match snap(hi, f64::floor) {
+                x if exclusive && x >= hi => tidy(x - st, st),
+                x => x,
+            },
+            None if exclusive => low.map_or(hi - 1.0, |(lo, _)| (lo + hi) / 2.0),
+            None => hi,
+        };
+    }
+    v
+}
+
+/// `v` rounded to as many decimals as `step` has, so steps of 0.1 give 0.3, not 0.30000000000000004.
+fn tidy(v: f64, step: f64) -> f64 {
+    let decimals = step.to_string().split_once('.').map_or(0, |(_, d)| d.len().min(12));
+    let scale = 10f64.powi(decimals as i32);
+    let scaled = (v * scale).round();
+    if scaled.is_finite() { scaled / scale } else { v }
+}
+
+/// How many items to generate for an array: `minItems`, at least one, at most `maxItems`.
+fn item_count(s: &Value) -> usize {
+    let limit = |key| s.get(key).and_then(Value::as_u64);
+    let count = limit("minItems").unwrap_or(1).clamp(1, MAX_ITEMS);
+    limit("maxItems").map_or(count, |max| count.min(max)) as usize
+}
+
+/// Example values suggested by a property or parameter name, per type.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Hint {
+    text: Option<&'static str>,
+    int: Option<i64>,
+    num: Option<f64>,
+}
+
+const fn text_hint(text: &'static str) -> Hint {
+    Hint { text: Some(text), int: None, num: None }
+}
+
+const fn int_hint(int: i64) -> Hint {
+    Hint { text: None, int: Some(int), num: None }
+}
+
+const fn num_hint(num: f64) -> Hint {
+    Hint { text: None, int: None, num: Some(num) }
+}
+
+const ID_HINT: Hint = Hint { text: Some("abc123"), int: Some(1), num: None };
+/// 2024-01-01T12:00:00Z; integers are Unix seconds.
+const TIMESTAMP_HINT: Hint = Hint { text: Some(EXAMPLE_TIMESTAMP), int: Some(1_704_110_400), num: None };
+
+/// Names (as `name_key` gives them) and the values they suggest.
+const NAME_HINTS: &[(&[&str], Hint)] = &[
+    (&["email", "emailaddress", "mail"], text_hint("jane.doe@example.com")),
+    (&["name", "fullname", "displayname"], text_hint("Jane Doe")),
+    (&["firstname", "givenname", "forename"], text_hint("Jane")),
+    (&["lastname", "surname", "familyname"], text_hint("Doe")),
+    (&["username", "login", "handle", "nickname"], text_hint("jane.doe")),
+    (&["phone", "phonenumber", "mobile", "mobilenumber", "telephone", "tel"], text_hint("+1 555 0100")),
+    (&["url", "uri", "website", "homepage", "link", "href"], text_hint("https://example.com")),
+    (
+        &["avatar", "avatarurl", "image", "imageurl", "photo", "photourl", "picture", "thumbnail", "thumbnailurl"],
+        text_hint("https://example.com/image.png"),
+    ),
+    (&["city", "town"], text_hint("Berlin")),
+    (&["country", "countryname"], text_hint("Germany")),
+    (&["countrycode", "countryiso"], text_hint("DE")),
+    (&["currency", "currencycode"], text_hint("EUR")),
+    (&["zip", "zipcode", "postalcode", "postcode"], text_hint("10115")),
+    (&["street", "streetaddress", "address", "addressline", "addressline1"], text_hint("Alexanderplatz 1")),
+    (&["title"], text_hint("Example title")),
+    (&["description", "summary", "bio", "notes", "note", "comment", "message"], text_hint("A short description.")),
+    (&["status", "state"], text_hint("active")),
+    (&["type", "kind", "category"], text_hint("default")),
+    (&["token", "apikey", "secret", "password"], text_hint(EXAMPLE_SECRET)),
+    (&["language", "lang", "languagecode", "locale"], text_hint("en")),
+    (&["timezone", "tz"], text_hint("Europe/Berlin")),
+    (&["color", "colour"], text_hint("#D97757")),
+    (&["ip", "ipaddress"], text_hint(EXAMPLE_IP)),
+    (&["slug"], text_hint("example-slug")),
+    (&["timestamp"], TIMESTAMP_HINT),
+    (
+        &["price", "amount", "total", "subtotal", "cost", "balance"],
+        Hint { text: None, int: Some(1999), num: Some(19.99) },
+    ),
+    (&["quantity", "qty", "count", "size"], int_hint(1)),
+    (&["limit", "pagesize", "perpage"], int_hint(20)),
+    (&["page", "pagenumber"], int_hint(1)),
+    (&["offset"], int_hint(0)),
+    (&["age"], int_hint(30)),
+    (&["year"], int_hint(2024)),
+    (&["rating", "score"], Hint { text: None, int: Some(5), num: Some(4.5) }),
+    (&["percent", "percentage"], int_hint(50)),
+    (&["latitude", "lat"], num_hint(52.52)),
+    (&["longitude", "lng", "lon"], num_hint(13.405)),
+];
+
+/// Words from `NAME_HINTS` that only mean something as the whole name: `companyName` is not a
+/// person and `billingState` is not a status.
+const WHOLE_NAME_ONLY: [&str; 4] = ["name", "state", "login", "handle"];
+
+/// The values a property or parameter name suggests: the whole name first (`firstName`), then
+/// what it ends with (`createdAt`, `userId`, `unitPrice`).
+fn name_hint(name: &str) -> Option<Hint> {
+    let words = name_words(name);
+    let key = words.concat();
+    let lookup = |k: &str| NAME_HINTS.iter().find(|(names, _)| names.contains(&k)).map(|(_, hint)| *hint);
+    if let Some(hint) = lookup(&key) {
+        return Some(hint);
+    }
+    if key.ends_with("uuid") || key.ends_with("guid") {
+        return Some(text_hint(EXAMPLE_UUID));
+    }
+    match words.last()?.as_str() {
+        "id" => Some(ID_HINT),
+        "at" | "date" => Some(TIMESTAMP_HINT),
+        last if words.len() > 1 && !WHOLE_NAME_ONLY.contains(&last) => lookup(last),
+        _ => None,
+    }
+}
+
+/// The lowercase words of a name, split at `_`, `-` and other separators and at case changes:
+/// `session_id`, `session-id`, `sessionId` and `SessionID` all give `["session", "id"]`.
+fn name_words(name: &str) -> Vec<String> {
+    let chars: Vec<char> = name.chars().collect();
+    let mut words = Vec::new();
+    let mut word = String::new();
+    for (i, &c) in chars.iter().enumerate() {
+        if !c.is_alphanumeric() {
+            if !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+            continue;
+        }
+        if c.is_uppercase() && !word.is_empty() {
+            let prev = chars[i - 1];
+            // `sessionId` splits before `I`, `HTMLParser` before `P`.
+            let next_lower = chars.get(i + 1).is_some_and(|n| n.is_lowercase());
+            if !prev.is_uppercase() || next_lower {
+                words.push(std::mem::take(&mut word));
+            }
+        }
+        word.extend(c.to_lowercase());
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
+/// `session_id`, `session-id` and `SessionID` all become `sessionId`.
+fn camel_case(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for (i, word) in name_words(name).iter().enumerate() {
+        let mut chars = word.chars();
+        match chars.next() {
+            Some(first) if i > 0 => out.extend(first.to_uppercase().chain(chars)),
+            _ => out.push_str(word),
+        }
+    }
+    out
+}
+
+/// Naive singular of an English noun: `categories` → `category`, `pets` → `pet`. Words ending in
+/// `ss`, `us` or `is` (`address`, `status`, `analysis`) are left alone.
+fn singular(word: &str) -> String {
+    let lower = word.to_ascii_lowercase();
+    if lower.len() > 3 && lower.ends_with("ies") {
+        let y = if word.ends_with("IES") { "Y" } else { "y" };
+        format!("{}{y}", &word[..word.len() - 3])
+    } else if lower.ends_with('s') && !["ss", "us", "is"].iter().any(|e| lower.ends_with(e)) {
+        word[..word.len() - 1].to_string()
+    } else {
+        word.to_string()
+    }
 }
 
 /// Pretty JSON body text; a string holding a JSON document is expanded.
@@ -1329,29 +1700,67 @@ fn normalize_server(url: &str) -> String {
     if url.starts_with("//") { format!("https:{url}") } else { url.to_string() }
 }
 
-/// Converts `{name}` path templates to `:name`, returning the names in order.
-fn convert_path(path: &str) -> (String, Vec<String>) {
+/// Rewrites each `{name}` template of a path with `f(name, previous segment)`, where the
+/// previous segment is the whole `/`-separated segment before the one holding the template.
+/// Relative paths get a leading `/`; empty (`{}`) and unclosed templates stay as written.
+fn map_templates(path: &str, mut f: impl FnMut(&str, Option<&str>) -> String) -> String {
     let mut out = String::with_capacity(path.len() + 1);
     if !path.starts_with('/') {
         out.push('/');
     }
-    let mut names = IndexSet::new();
-    let mut rest = path;
-    while let Some(start) = rest.find('{') {
-        let Some(len) = rest[start..].find('}') else { break };
-        let name = &rest[start + 1..start + len];
-        out.push_str(&rest[..start]);
+    let mut pos = 0;
+    while let Some(start) = path[pos..].find('{').map(|i| pos + i) {
+        let Some(len) = path[start..].find('}') else { break };
+        let name = &path[start + 1..start + len];
+        out.push_str(&path[pos..start]);
         if name.is_empty() {
             out.push_str("{}");
         } else {
-            out.push(':');
-            out.push_str(name);
-            names.insert(name);
+            let previous = path[..start].rfind('/').and_then(|slash| path[..slash].rsplit('/').next());
+            out.push_str(&f(name, previous.filter(|s| !s.is_empty())));
         }
-        rest = &rest[start + len + 1..];
+        pos = start + len + 1;
     }
-    out.push_str(rest);
-    (out, names.into_iter().map(str::to_string).collect())
+    out.push_str(&path[pos..]);
+    out
+}
+
+/// Converts `{name}` path templates to `:name` (the form mock routes use).
+fn convert_path(path: &str) -> String {
+    map_templates(path, |name, _| format!(":{name}"))
+}
+
+/// Converts `{name}` path templates to `{{variable}}` placeholders (see `path_variable`),
+/// returning each parameter name with its variable, in order of first appearance. A template
+/// with no letters or digits in its name stays as written.
+fn variable_path(path: &str) -> (String, Vec<(String, String)>) {
+    let mut vars: IndexMap<String, String> = IndexMap::new();
+    let out = map_templates(path, |name, previous| {
+        match vars.entry(name.to_string()).or_insert_with(|| path_variable(name, previous)) {
+            var if var.is_empty() => format!("{{{name}}}"),
+            var => format!("{{{{{var}}}}}"),
+        }
+    });
+    (out, vars.into_iter().filter(|(_, var)| !var.is_empty()).collect())
+}
+
+/// Parameter names too generic to stand alone as a variable.
+const GENERIC_PARAMS: [&str; 6] = ["id", "uuid", "key", "slug", "name", "code"];
+
+/// The variable for a path parameter: its camelCase name (`session_id` → `sessionId`), with a
+/// generic name prefixed by the singular of the literal segment before it (`/pets/{id}` →
+/// `petId`, `/categories/{id}` → `categoryId`).
+fn path_variable(name: &str, previous: Option<&str>) -> String {
+    let var = camel_case(name);
+    if !GENERIC_PARAMS.contains(&var.as_str()) {
+        return var;
+    }
+    let prefix = previous.filter(|s| !s.contains(['{', '}'])).map(|s| camel_case(&singular(s))).unwrap_or_default();
+    if prefix.is_empty() {
+        return var;
+    }
+    // Generic names are short ASCII words.
+    format!("{prefix}{}{}", var[..1].to_ascii_uppercase(), &var[1..])
 }
 
 /// Percent-encodes a query component, leaving `{{variable}}` placeholders intact.
@@ -1573,25 +1982,25 @@ mod tests {
             serde_json::json!({
                 "name": "doggie",
                 "born": "2024-01-01",
-                "tags": [{"id": 0, "label": "string"}],
+                "tags": [{"id": 1, "label": "example"}],
                 "status": "available",
-                "weight": 0,
-                "owner": {"email": "user@example.com", "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "vip": true},
+                "weight": 1.5,
+                "owner": {"email": "jane.doe@example.com", "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "vip": true},
                 "home": {"site": "https://example.com", "since": "2024-01-01T00:00:00Z"}
             })
         );
         assert!(create.headers.is_empty());
 
         let get = find(&c, "GET /pets/{petId}");
-        assert_eq!(get.url, "{{baseUrl}}/pets/:petId?v=2");
-        assert_eq!(
-            get.path_params,
-            vec![KeyValue { description: "Overridden".into(), ..KeyValue::new("petId", "dog-1") }]
-        );
+        assert_eq!(get.url, "{{baseUrl}}/pets/{{petId}}?v=2");
+        assert!(get.path_params.is_empty());
         assert_eq!(get.docs, "Deprecated.\n\nReturns a pet");
+        // The first operation's value wins (the operation-level enum, not the shared example 7).
+        assert_eq!(var(&c, "petId").map(|v| (v.value.as_str(), v.secret)), Some(("dog-1", false)));
 
         let update = find(&c, "Update pet");
-        assert_eq!(update.path_params, vec![KeyValue::new("petId", "7")]);
+        assert_eq!(update.url, "{{baseUrl}}/pets/{{petId}}?v=2");
+        assert!(update.path_params.is_empty());
         assert_eq!(update.body.text, "{\n  \"name\": \"Rex\"\n}");
 
         assert_eq!(find(&c, "Delete pet").auth, Auth::None);
@@ -1704,15 +2113,16 @@ webhooks:
 
         let patch = find(&c, "patchWidget");
         assert_eq!(patch.method, "PATCH");
-        assert_eq!(patch.url, "{{baseUrl}}/widgets/:id");
-        assert_eq!(patch.path_params, vec![KeyValue::new("id", "w1")]);
+        assert_eq!(patch.url, "{{baseUrl}}/widgets/{{widgetId}}");
+        assert!(patch.path_params.is_empty());
+        assert_eq!(var(&c, "widgetId").unwrap().value, "w1");
         assert_eq!(patch.body.body_type, BodyType::Json);
         assert_eq!(
             body_json(patch),
             serde_json::json!({
-                "name": "string",
-                "size": 0,
-                "ratio": 0,
+                "name": "Jane Doe",
+                "size": 1,
+                "ratio": 1.5,
                 "when": "2024-01-01T00:00:00Z",
                 "meta": {"active": true, "kind": "gadget", "tags": ["a", "b"]},
                 "choice": "3fa85f64-5717-4562-b3fc-2c963f66afa6"
@@ -1824,9 +2234,11 @@ webhooks:
                 ("password", true),
                 ("apiKey", true),
                 ("clientId", false),
-                ("clientSecret", true)
+                ("clientSecret", true),
+                ("userId", false)
             ]
         );
+        assert_eq!(var(&c, "userId").unwrap().value, "u1");
 
         let list = find(&c, "List users");
         assert_eq!(list.url, "{{baseUrl}}/users");
@@ -1838,7 +2250,7 @@ webhooks:
 
         let create = find(&c, "Create user");
         assert_eq!(create.body.body_type, BodyType::Json);
-        assert_eq!(body_json(create), serde_json::json!({"name": "string", "age": 0, "roles": ["admin"]}));
+        assert_eq!(body_json(create), serde_json::json!({"name": "Jane Doe", "age": 30, "roles": ["admin"]}));
         let Auth::OAuth2(cfg) = &create.auth else { panic!("{:?}", create.auth) };
         assert_eq!(cfg.grant_type, GrantType::AuthorizationCode);
         assert_eq!(cfg.auth_url, "https://auth.example.com/authorize");
@@ -1847,8 +2259,8 @@ webhooks:
         assert_eq!((cfg.client_id.as_str(), cfg.client_secret.as_str()), ("{{clientId}}", "{{clientSecret}}"));
 
         let avatar = find(&c, "Upload avatar");
-        assert_eq!(avatar.url, "{{baseUrl}}/users/:id/avatar");
-        assert_eq!(avatar.path_params, vec![KeyValue::new("id", "u1")]);
+        assert_eq!(avatar.url, "{{baseUrl}}/users/{{userId}}/avatar");
+        assert!(avatar.path_params.is_empty());
         assert_eq!(avatar.body.body_type, BodyType::Multipart);
         assert_eq!(
             avatar.body.multipart.iter().map(|f| (f.key.as_str(), f.value.as_str(), f.file)).collect::<Vec<_>>(),
@@ -1912,11 +2324,11 @@ webhooks:
         let c = import_openapi(doc).unwrap();
         assert_eq!(
             body_json(find(&c, "Node")),
-            serde_json::json!({"name": "string", "children": [], "pair": {"n": 0}})
+            serde_json::json!({"name": "Jane Doe", "children": [], "pair": {"n": 1}})
         );
         assert_eq!(find(&c, "Loop").body.text, "");
         assert!(c.warnings.iter().any(|w| w.contains("loops")), "{:?}", c.warnings);
-        assert_eq!(body_json(find(&c, "Self")), serde_json::json!({"x": 0}));
+        assert_eq!(body_json(find(&c, "Self")), serde_json::json!({"x": 1}));
         // Nesting stops at MAX_DEPTH.
         assert_eq!(body_json(find(&c, "Deep")), serde_json::json!({"d": {"d": {"d": {"d": {"d": {"d": {}}}}}}}));
     }
@@ -2098,11 +2510,58 @@ paths:
     fn helpers() {
         assert_eq!(encode("a b&c/{{token}}é"), "a%20b%26c%2F{{token}}%C3%A9");
         assert_eq!(encode("{{unclosed"), "%7B%7Bunclosed");
+        assert_eq!(convert_path("/a/{id}/b/{name}.{ext}/{id}"), "/a/:id/b/:name.:ext/:id");
+        assert_eq!(convert_path("rel/{x"), "/rel/{x");
+        let pairs =
+            |list: &[(&str, &str)]| list.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect::<Vec<_>>();
         assert_eq!(
-            convert_path("/a/{id}/b/{name}.{ext}/{id}"),
-            ("/a/:id/b/:name.:ext/:id".into(), vec!["id".into(), "name".into(), "ext".into()])
+            variable_path("/files/{name}.{ext}/{id}/v/{id}"),
+            (
+                "/files/{{fileName}}.{{ext}}/{{id}}/v/{{id}}".into(),
+                pairs(&[("name", "fileName"), ("ext", "ext"), ("id", "id")])
+            ),
+            "a repeated parameter keeps its first variable; `{{id}}` after a template stays `id`"
         );
-        assert_eq!(convert_path("rel/{x"), ("/rel/{x".into(), vec![]));
+        assert_eq!(variable_path("rel/{-}/{}/{x"), ("/rel/{-}/{}/{x".into(), vec![]));
+        assert_eq!(variable_path("{id}"), ("/{{id}}".into(), pairs(&[("id", "id")])));
+
+        for (name, words) in [
+            ("session_id", &["session", "id"][..]),
+            ("session-id", &["session", "id"]),
+            ("SessionID", &["session", "id"]),
+            ("HTMLParser", &["html", "parser"]),
+            ("addressLine1", &["address", "line1"]),
+            ("v2Items", &["v2", "items"]),
+            ("", &[]),
+        ] {
+            assert_eq!(name_words(name), words, "{name}");
+        }
+        assert_eq!(camel_case("Created_AT"), "createdAt");
+        for (plural, one) in [("pets", "pet"), ("categories", "category"), ("CATEGORIES", "CATEGORY")] {
+            assert_eq!(singular(plural), one);
+        }
+        for word in ["address", "status", "analysis", "fish"] {
+            assert_eq!(singular(word), word);
+        }
+        for (name, previous, var) in [
+            ("session_id", Some("sessions"), "sessionId"),
+            ("SessionID", None, "sessionId"),
+            ("id", Some("pets"), "petId"),
+            ("ID", Some("categories"), "categoryId"),
+            ("uuid", Some("user-groups"), "userGroupUuid"),
+            ("code", Some("countries"), "countryCode"),
+            ("id", None, "id"),
+            ("id", Some("{petId}"), "id"),
+            ("petId", Some("pets"), "petId"),
+        ] {
+            assert_eq!(path_variable(name, previous), var, "{name} after {previous:?}");
+        }
+
+        assert_eq!(pattern_literal(r"^v1\.0$").as_deref(), Some("v1.0"));
+        assert_eq!(pattern_literal("^$").as_deref(), Some(""));
+        for pattern in ["v1", "^v1", r"^\d+$", "^a.b$", "^(a|b)$", r"^a\$"] {
+            assert_eq!(pattern_literal(pattern), None, "{pattern}");
+        }
         assert_eq!(percent_decode("/paths/~1pets~1%7Bid%7D").as_deref(), Some("/paths/~1pets~1{id}"));
         assert_eq!(percent_decode("/a%zz"), Some("/a%zz".into()));
         assert_eq!(normalize_server("//cdn.test/"), "https://cdn.test");
@@ -2193,7 +2652,7 @@ paths:
         let start = std::time::Instant::now();
         let c = import_openapi(&doc).unwrap();
         assert!(start.elapsed() < std::time::Duration::from_secs(5), "took {:?}", start.elapsed());
-        assert_eq!(body_json(find(&c, "op0")), serde_json::json!({"a": "string"}));
+        assert_eq!(body_json(find(&c, "op0")), serde_json::json!({"a": "example"}));
         assert_eq!(find(&c, "op1").body.text, "");
         assert_eq!(find(&c, "op2").body.form, [KeyValue::new("f", "x")]);
         assert!(c.warnings.is_empty(), "{:?}", c.warnings);
@@ -2252,8 +2711,10 @@ paths:
         let c = import_openapi(&doc.to_string()).unwrap();
         assert!(start.elapsed() < std::time::Duration::from_secs(5), "took {:?}", start.elapsed());
         let r = find(&c, "many");
-        assert_eq!(r.path_params.len(), n);
-        assert_eq!(r.path_params[n - 1], KeyValue::new(format!("p{}", n - 1), (n - 1).to_string()));
+        assert!(r.path_params.is_empty());
+        assert!(r.url.ends_with(&format!("/{{{{p{}}}}}", n - 1)), "{}", &r.url[r.url.len() - 20..]);
+        assert_eq!(c.variables.len(), n + 1);
+        assert_eq!(var(&c, &format!("p{}", n - 1)).unwrap().value, (n - 1).to_string());
     }
 
     #[test]
@@ -2307,5 +2768,272 @@ paths:
 
         let err = import_openapi("openapi: 3.0.0\npaths: {}\npaths: {}\n").unwrap_err().0;
         assert!(err.starts_with("Invalid YAML: duplicate entry with key \"paths\""), "{err}");
+    }
+
+    /// A JSON request body generated from `properties` (YAML flow mappings, one per line).
+    fn generated_body(properties: &str) -> Value {
+        let doc = format!(
+            "openapi: 3.0.3\nservers: [{{url: https://x.test}}]\npaths:\n  /x:\n    post:\n      summary: body\n      \
+             requestBody:\n        content:\n          application/json:\n            schema:\n              \
+             type: object\n              properties:\n{}\ncomponents:\n  schemas:\n    Name: {{type: string, example: Rex}}\n",
+            properties.lines().map(|l| format!("                {}\n", l.trim())).collect::<String>()
+        );
+        let c = import_openapi(&doc).unwrap();
+        assert!(c.warnings.is_empty(), "{:?}", c.warnings);
+        body_json(find(&c, "body"))
+    }
+
+    #[test]
+    fn realistic_values_from_names_and_formats() {
+        let body = generated_body(
+            r#"email: {type: string}
+            contact_email: {type: string, format: email}
+            price: {type: integer}
+            unitPrice: {type: number}
+            amount: {type: string}
+            createdAt: {type: string}
+            due_date: {type: string, format: date}
+            updatedAt: {type: integer}
+            userId: {type: integer}
+            user_uuid: {type: string}
+            orderId: {type: string}
+            is_gift: {type: boolean}
+            website: {type: string, format: uri}
+            avatarUrl: {type: string, format: uri}
+            countryCode: {type: string}
+            country: {type: string}
+            companyName: {type: string}
+            weight: {type: number}
+            count: {type: integer}
+            customer: {type: object, properties: {firstName: {type: string}, last_name: {type: string}, phoneNumber: {type: string}, address: {type: object, properties: {street: {type: string}, city: {type: string}, postalCode: {type: string}}}}}
+            emails: {type: array, minItems: 2, items: {type: string}}
+            tags: {type: array, items: {type: string}}
+            none: {type: array, maxItems: 0, items: {type: string}}
+            lines: {type: array, minItems: 2, items: {type: object, properties: {sku: {type: string}, quantity: {type: integer}}}}
+            ip: {type: string, format: ipv4}
+            host: {type: string, format: hostname}
+            start: {type: string, format: time}
+            blob: {type: string, format: byte}
+            big: {type: string, format: int64}
+            inferred: {format: double}"#,
+        );
+        let line = serde_json::json!({"sku": "example", "quantity": 1});
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "email": "jane.doe@example.com",
+                "contact_email": "jane.doe@example.com",
+                "price": 1999,
+                "unitPrice": 19.99,
+                "amount": "19.99",
+                "createdAt": "2024-01-01T12:00:00Z",
+                "due_date": "2024-01-01",
+                "updatedAt": 1_704_110_400,
+                "userId": 1,
+                "user_uuid": EXAMPLE_UUID,
+                "orderId": "abc123",
+                "is_gift": true,
+                "website": "https://example.com",
+                "avatarUrl": "https://example.com/image.png",
+                "countryCode": "DE",
+                "country": "Germany",
+                "companyName": "example",
+                "weight": 1.5,
+                "count": 1,
+                "customer": {
+                    "firstName": "Jane",
+                    "last_name": "Doe",
+                    "phoneNumber": "+1 555 0100",
+                    "address": {"street": "Alexanderplatz 1", "city": "Berlin", "postalCode": "10115"}
+                },
+                "emails": ["jane.doe@example.com", "jane.doe@example.com"],
+                "tags": ["example"],
+                "none": [],
+                "lines": [line.clone(), line],
+                "ip": "203.0.113.10",
+                "host": "api.example.com",
+                "start": "12:00:00",
+                "blob": "U29tZSBkYXRh",
+                "big": "1",
+                "inferred": 1.5
+            })
+        );
+    }
+
+    #[test]
+    fn realistic_values_respect_constraints() {
+        let body = generated_body(
+            r#"age: {type: integer, minimum: 40}
+            percent: {type: integer, maximum: 10}
+            limit: {type: integer, minimum: 1, maximum: 100}
+            quantity: {type: integer, minimum: 5, exclusiveMinimum: true}
+            score: {type: number, exclusiveMaximum: 4}
+            rating: {type: number, minimum: 0, exclusiveMaximum: 3}
+            size: {type: integer, minimum: 1, multipleOf: 5}
+            price: {type: number, multipleOf: 0.25}
+            total: {type: number, minimum: 0.1, maximum: 0.35, multipleOf: 0.1}
+            code: {type: string, minLength: 10}
+            title: {type: string, maxLength: 7}
+            slug: {type: string, minLength: 3, maxLength: 5}
+            version: {type: string, pattern: "^v1\\.0$"}
+            zip: {type: string, pattern: "^[0-9]{5}$"}"#,
+        );
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "age": 40,
+                "percent": 10,
+                "limit": 20,
+                "quantity": 6,
+                "score": 3,
+                "rating": 1.5,
+                "size": 5,
+                "price": 20,
+                "total": 0.3,
+                "code": "examplexxx",
+                "title": "Example",
+                "slug": "examp",
+                "version": "v1.0",
+                "zip": "10115"
+            })
+        );
+    }
+
+    #[test]
+    fn values_given_by_the_spec_win_over_names() {
+        let body = generated_body(
+            r##"email: {type: string, example: ops@shop.test}
+            price: {type: number, default: 5}
+            status: {type: string, enum: [pending, paid]}
+            country: {const: FR}
+            age: {type: integer, example: 3, minimum: 18}
+            createdAt: {type: string, examples: ["2020-05-05T00:00:00Z"]}
+            name: {$ref: "#/components/schemas/Name"}"##,
+        );
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "email": "ops@shop.test",
+                "price": 5,
+                "status": "pending",
+                "country": "FR",
+                "age": 3,
+                "createdAt": "2020-05-05T00:00:00Z",
+                "name": "Rex"
+            })
+        );
+    }
+
+    const PATH_VARS: &str = r#"
+openapi: 3.0.3
+info: {title: Paths}
+security: [{basic: []}]
+components:
+  securitySchemes:
+    basic: {type: http, scheme: basic}
+paths:
+  /sessions/{session_id}:
+    get:
+      summary: Session
+      parameters:
+        - {name: session_id, in: path, required: true, schema: {type: string}}
+  /pets/{id}:
+    parameters:
+      - {name: id, in: path, required: true, description: The pet, schema: {type: integer, example: 7}}
+    get: {summary: Pet}
+    delete: {summary: Delete pet}
+  /pets/{pet_id}/toys:
+    get:
+      summary: Toys
+      parameters:
+        - {name: pet_id, in: path, required: true, schema: {type: integer, example: 9}}
+  /pets/{petId}/photos/{id}:
+    get:
+      summary: Photo
+      parameters:
+        - {name: petId, in: path, required: true, schema: {type: integer}}
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+  /categories/{id}:
+    get: {summary: Category}
+  /users/{username}:
+    get:
+      summary: User
+      parameters:
+        - {name: username, in: path, required: true, schema: {type: string}}
+  /orders/{OrderID}:
+    get:
+      summary: Order
+      parameters:
+        - {name: OrderID, in: path, required: true, schema: {type: integer, minimum: 1000}}
+"#;
+
+    #[test]
+    fn path_parameters_become_environment_variables() {
+        let c = import_openapi(PATH_VARS).unwrap();
+        let url = |name: &str| {
+            let r = find(&c, name);
+            assert!(r.path_params.is_empty(), "{name}: {:?}", r.path_params);
+            r.url.clone()
+        };
+        assert_eq!(url("Session"), "{{baseUrl}}/sessions/{{sessionId}}");
+        assert_eq!(url("Pet"), "{{baseUrl}}/pets/{{petId}}");
+        assert_eq!(url("Delete pet"), "{{baseUrl}}/pets/{{petId}}");
+        assert_eq!(url("Toys"), "{{baseUrl}}/pets/{{petId}}/toys");
+        assert_eq!(url("Photo"), "{{baseUrl}}/pets/{{petId}}/photos/{{photoId}}");
+        assert_eq!(url("Category"), "{{baseUrl}}/categories/{{categoryId}}");
+        assert_eq!(url("User"), "{{baseUrl}}/users/{{username}}");
+        assert_eq!(url("Order"), "{{baseUrl}}/orders/{{orderId}}");
+
+        // No servers: the variables still go into the imported environment, next to an empty baseUrl.
+        assert!(c.warnings.iter().any(|w| w.contains("no server URL")), "{:?}", c.warnings);
+        let vars: Vec<(&str, &str, bool)> =
+            c.variables.iter().map(|v| (v.key.as_str(), v.value.as_str(), v.secret)).collect();
+        assert_eq!(
+            vars,
+            [
+                ("baseUrl", "", false),
+                // `username` is also the basic auth placeholder: the path shares it and it stays empty.
+                ("username", "", false),
+                ("password", "", true),
+                ("sessionId", "abc123", false),
+                // Shared by `/pets/{id}`, `/pets/{pet_id}/toys` and `/pets/{petId}/photos/{id}`: the first value wins.
+                ("petId", "7", false),
+                ("photoId", EXAMPLE_UUID, false),
+                // Not declared by the operation: a string named like an id.
+                ("categoryId", "abc123", false),
+                ("orderId", "1000", false),
+            ]
+        );
+        assert!(c.variables.iter().all(|v| v.enabled));
+    }
+
+    #[test]
+    fn swagger2_path_parameters_become_variables() {
+        let c = import_openapi(
+            r#"{"swagger": "2.0", "info": {"title": "Old"}, "host": "old.test", "paths": {
+                "/stores/{id}/items/{item_id}": {"get": {"summary": "Item", "parameters": [
+                    {"name": "id", "in": "path", "required": true, "type": "integer", "minimum": 3},
+                    {"name": "item_id", "in": "path", "required": true, "type": "string", "minLength": 8}]}}}}"#,
+        )
+        .unwrap();
+        let item = find(&c, "Item");
+        assert_eq!(item.url, "{{baseUrl}}/stores/{{storeId}}/items/{{itemId}}");
+        assert!(item.path_params.is_empty());
+        let vars: Vec<(&str, &str)> = c.variables.iter().map(|v| (v.key.as_str(), v.value.as_str())).collect();
+        assert_eq!(vars, [("baseUrl", "https://old.test"), ("storeId", "3"), ("itemId", "abc123xx")]);
+    }
+
+    #[test]
+    fn mock_responses_get_realistic_values_and_colon_paths() {
+        let (responses, _) = mock_responses(
+            r#"{"openapi": "3.0.0", "paths": {"/pets/{id}": {"get": {"responses": {"200": {"content": {
+                "application/json": {"schema": {"type": "object", "properties": {"email": {"type": "string"}, "price": {"type": "number"}}}}}}}}}}}"#,
+        )
+        .unwrap();
+        assert_eq!(responses[0].path, "/pets/:id");
+        assert_eq!(
+            serde_json::from_str::<Value>(&responses[0].body).unwrap(),
+            serde_json::json!({"email": "jane.doe@example.com", "price": 19.99})
+        );
     }
 }

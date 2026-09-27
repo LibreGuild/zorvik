@@ -68,11 +68,14 @@ pub fn get_prompt(name: &str, arguments: &Value) -> Option<Value> {
                  with baseUrl, plus others you can find in config files). Use {{{{variables}}}} for ids and tokens; never \
                  put real secrets in requests — mark secret variables with \"secret\": true. Put shared auth on the \
                  folder or the collection with save_folder_settings (auth: inherit on the requests).\n\
-                 5. Save them with save_requests (in batches of up to 50). Name requests the way people would say them \
-                 (\"Create order\"), and write in docs where the handler is (file and line) and what it returns.\n\
+                 5. Save them with save_requests (in batches of up to 50). Put query parameters in `query` (optional ones \
+                 with enabled: false, each with a description) and values of :name path segments in `pathParams`. Name \
+                 requests the way people would say them (\"Create order\"), and write in docs where the handler is (file \
+                 and line) and what it returns.\n\
                  6. If an OpenAPI/Swagger or Postman file exists and is current, import it instead (import with its \
                  text), then fill in what is missing.\n\
-                 7. Finally, tell me what you added, what you could not map, and offer to send a request to check it."
+                 7. Finally, tell me what you added, what you could not map, and offer to send a request to check it \
+                 (or, when the server isn't running, to build a mock of it with create_mock)."
             )
         }
         "test_apis" => {
@@ -85,7 +88,10 @@ pub fn get_prompt(name: &str, arguments: &Value) -> Option<Value> {
                  2. Add Postman-style tests to each request's post-response script with save_requests, for example: \
                  pm.test('status is 200', () => pm.response.to.have.status(200)); \
                  pm.test('has an id', () => pm.expect(pm.response.json().id).to.be.a('string')). Check the status, the \
-                 shape of the body and important values; save ids for later requests with pm.environment.set.\n\
+                 shape of the body and important values; save ids for later requests with pm.environment.set. For work \
+                 that finishes later, give the polling request settings.repeat ({{condition, intervalMs, timeoutMs}}) \
+                 instead of a fixed delay. Requests imported from an OpenAPI document are already checked against it \
+                 (a \"Matches the API spec\" test).\n\
                  3. Run them with run_collection. For failures, read the results, find out whether the API or the test is \
                  wrong (look at the code), and fix the test or tell me about the bug.\n\
                  4. Report what passed, what failed and why."

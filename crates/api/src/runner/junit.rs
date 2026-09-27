@@ -38,9 +38,15 @@ pub fn junit_xml(report: &RunReport) -> String {
                 );
                 match case.outcome {
                     Outcome::Passed => cases.push_str("/>\n"),
-                    Outcome::Skipped => {
+                    Outcome::Skipped(reason) => {
                         counts.skipped += 1;
-                        cases.push_str(">\n      <skipped/>\n    </testcase>\n");
+                        match reason {
+                            Some(r) => cases.push_str(&format!(
+                                ">\n      <skipped message=\"{}\"/>\n    </testcase>\n",
+                                escape(&r)
+                            )),
+                            None => cases.push_str(">\n      <skipped/>\n    </testcase>\n"),
+                        }
                     }
                     Outcome::Failure(message) => {
                         counts.failures += 1;
@@ -112,7 +118,7 @@ impl Counts {
 
 enum Outcome {
     Passed,
-    Skipped,
+    Skipped(Option<String>),
     /// A test or the HTTP status failed.
     Failure(String),
     /// The request could not be sent, or a script broke.
@@ -130,7 +136,12 @@ fn cases_of(r: &RunResult, repeat: bool) -> Vec<Case> {
     let suffix = if repeat { format!(" (iteration {})", r.iteration + 1) } else { String::new() };
     let mut cases = Vec::new();
     if r.skipped {
-        cases.push(Case { name: format!("{}{suffix}", request_label(r)), time: 0.0, outcome: Outcome::Skipped });
+        let reason = r.skip_reason.clone();
+        cases.push(Case {
+            name: format!("{}{suffix}", request_label(r)),
+            time: 0.0,
+            outcome: Outcome::Skipped(reason),
+        });
         return cases;
     }
     let counted = r.tests.iter().any(|t| !t.skipped);
@@ -147,7 +158,7 @@ fn cases_of(r: &RunResult, repeat: bool) -> Vec<Case> {
     }
     for t in &r.tests {
         let outcome = match (&t.error, t.passed, t.skipped) {
-            (_, _, true) => Outcome::Skipped,
+            (_, _, true) => Outcome::Skipped(None),
             (_, true, _) => Outcome::Passed,
             (Some(e), false, _) if !e.is_empty() => Outcome::Failure(e.clone()),
             _ => Outcome::Failure("failed".into()),

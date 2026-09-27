@@ -197,3 +197,93 @@ async fn a_run_saves_its_result_where_its_test_is_when_it_ends() {
     wait_until_idle(&api).await;
     assert_eq!(ok(&api, "load.runs", json!({ "id": new_id })).await, json!([]));
 }
+
+/// Start a saved load test and wait for its result.
+async fn run_to_end(api: &Api, id: &str, test: &Value) -> Value {
+    let run = ok(api, "load.start", json!({ "id": id, "test": test })).await;
+    wait_until_idle(api).await;
+    ok(api, "load.run", json!({ "id": id, "runId": run["runId"] })).await
+}
+
+fn status_counts(metrics: &Value) -> Vec<(u64, u64)> {
+    let mut codes: Vec<(u64, u64)> = metrics["statusCodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| (c[0].as_u64().unwrap(), c[1].as_u64().unwrap()))
+        .collect();
+    codes.sort();
+    codes
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn data_file_rows_and_captures_reach_the_requests() {
+    let server = zorvik_testkit::TestServer::start().await;
+    let (api, _data, ws) = api().await;
+    // The environment defines `code` too: a data row and a captured value win over it.
+    let env = ok(
+        &api,
+        "env.create",
+        json!({ "environment": { "name": "Dev", "variables": [
+            { "key": "base", "value": server.url("") }, { "key": "code", "value": "500" }
+        ] } }),
+    )
+    .await;
+    ok(&api, "env.setActive", json!({ "id": env })).await;
+    std::fs::write(ws.path().join("codes.csv"), "code\n200\n201\n202\n").unwrap();
+    let request =
+        |name: &str, url: &str| json!({ "parent": "", "request": { "name": name, "method": "GET", "url": url } });
+    let status: String =
+        serde_json::from_value(ok(&api, "request.create", request("Status", "{{base}}/status/{{code}}")).await)
+            .unwrap();
+
+    // Three users, three rows: each user sends its own row's code.
+    let mut test = test_json(&[&status]);
+    test["name"] = json!("Rows");
+    test["dataFile"] = json!("codes.csv");
+    test["thinkTimeMs"] = json!(20);
+    test["stages"] = json!([{ "durationSecs": 0, "target": 3 }, { "durationSecs": 1, "target": 3 }]);
+    let id: String = serde_json::from_value(ok(&api, "load.create", json!({ "test": test })).await).unwrap();
+    let summary = run_to_end(&api, &id, &test).await;
+    let codes = status_counts(&summary["totals"]);
+    assert_eq!(codes.iter().map(|(c, _)| *c).collect::<Vec<_>>(), [200, 201, 202], "{codes:?}");
+    // Each user sends about as many as the others.
+    let (least, most) = (codes.iter().map(|c| c.1).min().unwrap(), codes.iter().map(|c| c.1).max().unwrap());
+    assert!(least > 5 && most - least <= 3, "{codes:?}");
+    let timing = &summary["totals"]["timing"];
+    assert_eq!(timing["ttfb"]["count"], summary["totals"]["requests"]);
+    assert!(timing["ttfb"]["p95"].as_f64().unwrap() > 0.0, "{timing}");
+    assert_eq!(timing["server"]["count"], 0);
+
+    // A capture chain: the create's answer names the code the get sends.
+    let create: String =
+        serde_json::from_value(ok(&api, "request.create", request("Create", "{{base}}/echo?next=204")).await).unwrap();
+    let mut chain = test_json(&[&create, &status]);
+    chain["name"] = json!("Chain");
+    chain["targets"][0]["captures"] = json!([
+        { "variable": "code", "from": "json", "path": "$.args.next" },
+        { "variable": "unused", "from": "header", "path": "X-Not-There" }
+    ]);
+    chain["thinkTimeMs"] = json!(20);
+    chain["stages"] = json!([{ "durationSecs": 0, "target": 2 }, { "durationSecs": 1, "target": 2 }]);
+    let id: String = serde_json::from_value(ok(&api, "load.create", json!({ "test": chain })).await).unwrap();
+    assert!(
+        std::fs::read_to_string(ws.path().join(format!("loadtests/{id}.yaml"))).unwrap().contains("path: $.args.next")
+    );
+    let summary = run_to_end(&api, &id, &chain).await;
+    let (create, get) = (&summary["targets"][0]["metrics"], &summary["targets"][1]["metrics"]);
+    assert_eq!(status_counts(get).iter().map(|(c, _)| *c).collect::<Vec<_>>(), [204]);
+    assert_eq!(status_counts(create).iter().map(|(c, _)| *c).collect::<Vec<_>>(), [200]);
+    // The header capture finds nothing on every create: counted, not an error.
+    assert_eq!(create["captureMisses"], create["requests"]);
+    assert_eq!((summary["totals"]["errors"].as_u64(), get["captureMisses"].as_u64()), (Some(0), Some(0)));
+
+    // A broken capture or a data file outside the workspace is refused before anything is sent.
+    chain["targets"][0]["captures"] = json!([{ "variable": "code", "from": "regex", "path": "(" }]);
+    let err = api.call("load.start", json!({ "id": id, "test": chain })).await.unwrap_err();
+    assert!(err.message.contains("capture 'code': invalid regular expression"), "{}", err.message);
+    let outside = tempfile::NamedTempFile::new().unwrap();
+    test["dataFile"] = json!(outside.path());
+    let err = api.call("load.start", json!({ "id": "Rows", "test": test })).await.unwrap_err();
+    assert!(err.message.contains("outside the workspace folder"), "{}", err.message);
+}

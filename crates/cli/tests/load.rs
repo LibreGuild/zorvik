@@ -6,7 +6,8 @@ use std::process::Command;
 use zorvik_testkit::TestServer;
 use zorvik_workspace::Workspace;
 use zorvik_workspace::formats::{
-    Environment, LoadStage, LoadTest, Request, RequestKind, Threshold, ThresholdMetric, ThresholdOp, Variable,
+    CaptureFrom, Environment, LoadCapture, LoadStage, LoadTest, Request, RequestKind, Threshold, ThresholdMetric,
+    ThresholdOp, Variable,
 };
 
 fn request(name: &str, url: &str) -> Request {
@@ -79,6 +80,82 @@ async fn load_command_reports_and_gates_on_thresholds() {
     let (code, out) = tokio::task::spawn_blocking(move || zorvik(&["load", &path, "nope"])).await.unwrap();
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("load test 'nope' not found (load tests: "), "{out}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn load_command_uses_data_rows_captures_and_reports_timing() {
+    let server = TestServer::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let ws = Workspace::create(dir.path(), "Load").unwrap();
+    std::fs::write(dir.path().join("codes.csv"), "code\n200\n201\n").unwrap();
+    let status = ws.create_request("", request("Status", &format!("{}/status/{{{{code}}}}", server.url("")))).unwrap();
+    let create = ws.create_request("", request("Create", &server.url("/echo?next=204"))).unwrap();
+    let mut rows = load_test("Rows", &status);
+    rows.data_file = Some("codes.csv".into());
+    ws.create_load_test(&rows).unwrap();
+    let mut chain = load_test("Chain", &create);
+    chain.targets.extend(load_test("x", &status).targets);
+    chain.targets[0].captures = vec![
+        LoadCapture { variable: "code".into(), from: CaptureFrom::Json, path: "$.args.next".into() },
+        LoadCapture { variable: "etag".into(), from: CaptureFrom::Header, path: "ETag".into() },
+    ];
+    ws.create_load_test(&chain).unwrap();
+    let path = dir.path().to_string_lossy().into_owned();
+    let json = dir.path().join("rows.json").to_string_lossy().into_owned();
+    let codes = |file: &str| -> Vec<u64> {
+        let summary: serde_json::Value = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
+        let mut codes: Vec<u64> =
+            summary["totals"]["statusCodes"].as_array().unwrap().iter().map(|c| c[0].as_u64().unwrap()).collect();
+        codes.sort();
+        codes
+    };
+
+    // Two users, two rows.
+    let (p, j) = (path.clone(), json.clone());
+    let (code, out) =
+        tokio::task::spawn_blocking(move || zorvik(&["load", &p, "Rows", "--quiet", "--json", &j])).await.unwrap();
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(codes(&json), [200, 201], "{out}");
+    assert!(out.contains("First byte p50 ") && out.contains("(request sent to first byte: server + network)"), "{out}");
+    assert!(out.contains("Connect    p50 ") && !out.contains("Server     p50"), "{out}");
+
+    // --var wins over the data file.
+    let (p, j) = (path.clone(), json.clone());
+    let (code, out) = tokio::task::spawn_blocking(move || {
+        zorvik(&["load", &p, "Rows", "--quiet", "--json", &j, "--var", "code=203"])
+    })
+    .await
+    .unwrap();
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(codes(&json), [203], "{out}");
+
+    // The create's answer names the code the next request sends; the ETag capture always misses.
+    let (p, j) = (path.clone(), json.clone());
+    let (code, out) =
+        tokio::task::spawn_blocking(move || zorvik(&["load", &p, "Chain", "--quiet", "--json", &j])).await.unwrap();
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(codes(&json), [200, 204], "{out}");
+    assert!(out.contains("missed (found nothing; the variable kept its value)"), "{out}");
+    assert!(out.contains("1st byte p95") && out.contains("Missed"), "{out}");
+    let summary: serde_json::Value = serde_json::from_slice(&std::fs::read(&json).unwrap()).unwrap();
+    assert_eq!(summary["targets"][0]["metrics"]["captureMisses"], summary["targets"][0]["metrics"]["requests"]);
+    assert!(summary["totals"]["timing"]["ttfb"]["count"].as_u64().unwrap() > 0);
+
+    // A data file outside the workspace needs --allow-outside-files.
+    let outside = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(outside.path(), "code\n200\n").unwrap();
+    rows.name = "Outside".into();
+    rows.data_file = Some(outside.path().to_string_lossy().into_owned());
+    ws.create_load_test(&rows).unwrap();
+    let p = path.clone();
+    let (code, out) = tokio::task::spawn_blocking(move || zorvik(&["load", &p, "Outside", "--quiet"])).await.unwrap();
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("outside the workspace folder"), "{out}");
+    let (code, out) =
+        tokio::task::spawn_blocking(move || zorvik(&["load", &path, "Outside", "--quiet", "--allow-outside-files"]))
+            .await
+            .unwrap();
+    assert_eq!(code, 0, "{out}");
 }
 
 /// Ctrl+C stops the run early and still reports it; the exit code follows the thresholds.

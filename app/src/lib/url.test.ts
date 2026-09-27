@@ -29,6 +29,21 @@ describe("url params", () => {
     expect(applyParamRows("http://h/p?a=1", []).url).toBe("http://h/p");
   });
 
+  it("keeps descriptions of enabled and disabled params", () => {
+    const rows = paramRows("http://h/?page=2", [{ key: "q", value: "", enabled: false, description: "Search text" }], [
+      { key: "page", value: "", description: "Page number" },
+    ]);
+    expect(rows[0]).toEqual({ key: "page", value: "2", description: "Page number" });
+    // Switching `q` on moves its description to the enabled list.
+    const out = applyParamRows("http://h/?page=2", [rows[0], { ...rows[1], enabled: true }]);
+    expect(out.url).toBe("http://h/?page=2&q");
+    expect(out.disabledParams).toEqual([]);
+    expect(out.paramDescriptions).toEqual([
+      { key: "page", value: "", description: "Page number" },
+      { key: "q", value: "", description: "Search text" },
+    ]);
+  });
+
   it("finds path params outside the host", () => {
     expect(pathParamNames("http://localhost:8080/users/:id/posts/:post?x=:no")).toEqual(["id", "post"]);
     expect(pathParamNames("{{base}}/:id")).toEqual(["id"]);

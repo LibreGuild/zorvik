@@ -17,6 +17,10 @@ use zorvik_workspace::formats::{
 };
 use zorvik_workspace::settings::{AgentChanges, AgentTraffic};
 
+mod files;
+mod servers;
+mod state;
+
 use super::redact::Redactor;
 use super::{ActivityStatus, AgentEvent, AgentSessionHandle, AgentTarget, Ask, ConfirmKind, SessionState};
 use crate::load::is_local;
@@ -56,10 +60,15 @@ const DEFAULT_WAIT_SECS: u64 = 45;
 /// Response body characters returned by default, and at most.
 const DEFAULT_BODY_CHARS: usize = 20_000;
 const MAX_BODY_CHARS: usize = 80_000;
+/// The longest an agent's SSE read waits, and event data characters returned per event.
+const MAX_SSE_WAIT_MS: u64 = 120_000;
+const MAX_EVENT_CHARS: usize = 8_000;
 /// GraphQL schema text returned at most (big APIs have hundreds of KB).
 const MAX_SCHEMA_CHARS: usize = 60_000;
 /// Requests saved in one call.
 const MAX_BATCH: usize = 200;
+/// Requests read in one call.
+const MAX_READ: usize = 50;
 /// Request files read to list URLs.
 const MAX_LISTED: usize = 5_000;
 /// Failed results returned for a collection run.
@@ -96,7 +105,17 @@ fn request_schema() -> Value {
             "name": string("Request name, e.g. \"Create order\" (also its file name)."),
             "kind": { "type": "string", "enum": ["http", "grpc", "dns", "websocket", "sse", "tcp", "udp", "mqtt"], "description": "Default http. GraphQL is http with a graphql body." },
             "method": string("HTTP method (default GET). gRPC: package.Service/Method. DNS: the record type (A, AAAA, MX…)."),
-            "url": string("Full URL with the query string, using {{variables}}: {{baseUrl}}/orders/{{orderId}}?expand=items. gRPC: grpc://host:port (grpcs:// for TLS). DNS: the name."),
+            "url": string("Full URL with the query string, using {{variables}}: {{baseUrl}}/orders/{{orderId}}?expand=items. :name path segments take their value from pathParams ({{baseUrl}}/users/:id). gRPC: grpc://host:port (grpcs:// for TLS). DNS: the name."),
+            "query": {
+                "type": "array",
+                "description": "Query parameters, instead of writing them into url: enabled ones become the URL's query string (replacing the one in url), disabled ones are kept switched off, and descriptions are kept for both.",
+                "items": obj(json!({ "key": { "type": "string" }, "value": { "type": "string" }, "enabled": { "type": "boolean", "description": "Default true." }, "description": { "type": "string" } }), &["key"]),
+            },
+            "pathParams": {
+                "type": "array",
+                "description": "Values of :name segments in the URL path, e.g. [{key: \"id\", value: \"{{userId}}\"}] for {{baseUrl}}/users/:id.",
+                "items": obj(json!({ "key": { "type": "string" }, "value": { "type": "string" }, "description": { "type": "string" } }), &["key"]),
+            },
             "headers": { "description": "Headers as [{key, value}] (an object of name → value works too).", "type": "array", "items": obj(json!({ "key": { "type": "string" }, "value": { "type": "string" }, "enabled": { "type": "boolean" } }), &["key", "value"]) },
             "body": obj(json!({
                 "type": { "type": "string", "enum": ["none", "json", "text", "xml", "formUrlencoded", "multipart", "binary", "graphql"] },
@@ -152,6 +171,57 @@ fn variables_schema() -> Value {
     })
 }
 
+/// A load test as agents give it.
+fn load_test_schema() -> Value {
+    obj(
+        json!({
+            "targets": {
+                "type": "array",
+                "description": "Saved requests to send.",
+                "items": obj(json!({
+                    "request": string("Request path as list_requests shows it, e.g. \"Users/List users.yaml\"."),
+                    "weight": { "type": "integer", "description": "How often, relative to the others (default 1): weight 3 is sent three times as often." },
+                    "enabled": { "type": "boolean" },
+                    "captures": {
+                        "type": "array",
+                        "description": "Values saved from this request's responses as variables for the same virtual user's later requests, e.g. create an order, then GET /orders/{{orderId}}. With captures, each user sends the requests in order (by weight), so the create comes before the get. A capture that finds nothing keeps the variable's old value and counts as a capture miss (in the results, not an error). arrivalRate: each request is its own iteration, so captured values are not used by other requests (misses are still counted).",
+                        "items": obj(json!({
+                            "variable": string("Variable name, used as {{name}} in later requests (no spaces or braces)."),
+                            "from": { "type": "string", "enum": ["json", "header", "regex"], "description": "json (default): a JSON path into the body. header: a response header by name (any case). regex: a regular expression over the body; its first group is the value (the whole match without a group)." },
+                            "path": string("json: a path like $.id, $.items[0].id, $.items[-1].id (last item) or $['odd key'] (no wildcards or filters); strings are taken as they are, numbers and booleans as text, objects and arrays as JSON, null counts as a miss. header: the header name, e.g. ETag. regex: e.g. token=(\\w+). Only the first 1 MB of a body is searched."),
+                        }), &["variable", "path"]),
+                    },
+                }), &["request"]),
+            },
+            "dataFile": string("CSV file with a header row, or a JSON array of objects: path relative to the workspace folder (it must be inside the workspace). virtualUsers: user N (in start order) takes row N % rows for its whole life. arrivalRate: each request takes the next row. Columns are variables ({{column}}) that override environment and workspace variables. Requests using them are rendered for every request."),
+            "model": { "type": "string", "enum": ["virtualUsers", "arrivalRate"], "description": "virtualUsers (default): each user sends, waits for the answer, thinks, repeats; stage targets are users. arrivalRate: requests start at a fixed rate however slow the server is; stage targets are requests per second." },
+            "stages": {
+                "type": "array",
+                "description": "Ramped linearly from 0, one after the other, e.g. [{durationSecs: 10, target: 20}, {durationSecs: 60, target: 20}, {durationSecs: 10, target: 0}]. durationSecs 0 jumps straight to the target.",
+                "items": obj(json!({ "durationSecs": { "type": "integer" }, "target": { "type": "integer", "description": "Users (virtualUsers) or requests per second (arrivalRate)." } }), &["durationSecs", "target"]),
+            },
+            "thinkTimeMs": { "type": "integer", "description": "virtualUsers: pause after each answer, per user." },
+            "maxInFlight": { "type": "integer", "description": "arrivalRate: most requests in flight at once (default 1000); more are counted as dropped." },
+            "keepAlive": { "type": "boolean", "description": "Reuse connections (default true). false: a new connection per request." },
+            "timeoutMs": { "type": "integer", "description": "Per-request timeout (default: the app setting)." },
+            "httpVersion": { "type": "string", "enum": ["auto", "http1", "http2"] },
+            "thresholds": {
+                "type": "array",
+                "description": "Checks that pass or fail the run, e.g. {metric: \"p95\", op: \"<\", value: 300} and {metric: \"errorRate\", op: \"<\", value: 1}.",
+                "items": obj(json!({
+                    "metric": { "type": "string", "enum": ["p50", "p90", "p95", "p99", "p999", "avg", "max", "errorRate", "rps"], "description": "p50…p999, avg, max: latency in milliseconds (p999 = 99.9th percentile). errorRate: failed requests (network errors and HTTP status >= 400) in percent, 0-100. rps: completed requests per second." },
+                    "op": { "type": "string", "enum": ["<", "<=", ">", ">="] },
+                    "value": { "type": "number", "description": "In the metric's unit: milliseconds, percent (1 = 1 %) or requests per second." },
+                    "target": string("Only this request path (default: the whole test)."),
+                    "enabled": { "type": "boolean" },
+                }), &["metric", "op", "value"]),
+            },
+            "docs": string("Markdown notes."),
+        }),
+        &["targets", "stages"],
+    )
+}
+
 fn wait_schema() -> Value {
     json!({ "type": "integer", "description": "Seconds to wait for the end (default 45, at most 600); still running then: call again with the runId." })
 }
@@ -180,8 +250,14 @@ fn defs() -> Vec<Def> {
         Def {
             name: "read_request",
             title: "Read a request",
-            description: "Everything saved in a request: URL, headers, body, auth, scripts, docs.",
-            schema: obj(json!({ "path": path("Request") }), &["path"]),
+            description: "Everything saved in one or more requests: URL, query and path parameters, headers, body, auth, scripts, docs.",
+            schema: obj(
+                json!({
+                    "path": path("Request"),
+                    "paths": { "type": "array", "items": { "type": "string" }, "description": "Several requests at once (up to 50), instead of path." },
+                }),
+                &[],
+            ),
             read_only: true,
             destructive: false,
             open_world: false,
@@ -252,7 +328,7 @@ fn defs() -> Vec<Def> {
         Def {
             name: "list_environments",
             title: "List environments",
-            description: "Environments and their variables, the active one, and the collection's variables. Secret values show as ••••••.",
+            description: "Environments and their variables, the active one, and the collection's variables. Values that scripts saved (pm.environment.set, pm.collectionVariables.set) are included and marked setByScript: they are kept on this computer and win over the file's value. Secret values show as ••••••.",
             schema: obj(json!({}), &[]),
             read_only: true,
             destructive: false,
@@ -282,10 +358,32 @@ fn defs() -> Vec<Def> {
         Def {
             name: "import",
             title: "Import",
-            description: "Import requests from a Postman collection (or environment), an OpenAPI 3 / Swagger 2 document or a curl command: give its text, a URL, or an absolute file path (a file asks the user first).",
+            description: "Import requests from a Postman collection (or environment), an OpenAPI 3 / Swagger 2 document or a curl command: give its text, a URL, or an absolute file path (a file asks the user first). OpenAPI path parameters become {{variables}} (e.g. {session_id} → {{sessionId}}) in the new environment, with example values. An OpenAPI document without a full server URL needs baseUrl (the import says so). The document is kept in the workspace (specs/): every response to an imported request is then checked against the documented schema (a test named \"Matches the API spec\"), and update_from_openapi brings in a new version later.",
             schema: obj(
-                json!({ "text": { "type": "string" }, "url": { "type": "string" }, "file": { "type": "string" }, "folder": string("Folder path to import into (default: top level).") }),
+                json!({
+                    "text": { "type": "string" }, "url": { "type": "string" }, "file": { "type": "string" },
+                    "folder": string("Folder path to import into (default: top level)."),
+                    "baseUrl": string("OpenAPI: where the API runs, e.g. http://localhost:8080 (needed when the document has no server URL or a relative one)."),
+                }),
                 &[],
+            ),
+            read_only: false,
+            destructive: false,
+            open_world: true,
+        },
+        Def {
+            name: "update_from_openapi",
+            title: "Update from OpenAPI",
+            description: "Update a folder imported from an OpenAPI document from a new version of the document: new operations are added, changed ones updated field by field where the user left the field as the old document had it (their edits to docs, URLs, headers… stay), and operations the document no longer has are kept and marked removed. Scripts, settings and names are never touched. Call with preview: true first to see what would change, then without it to apply. Give the new document's text, url or file.",
+            schema: obj(
+                json!({
+                    "folder": string("The imported folder (path as list_requests shows it)."),
+                    "text": string("The new document (YAML or JSON)."),
+                    "url": string("URL of the new document."),
+                    "file": string("Absolute path of the new document (the user confirms reading it)."),
+                    "preview": { "type": "boolean", "description": "Only say what would change (default false)." },
+                }),
+                &["folder"],
             ),
             read_only: false,
             destructive: false,
@@ -294,13 +392,18 @@ fn defs() -> Vec<Def> {
         Def {
             name: "send_request",
             title: "Send a request",
-            description: "Send a saved request (`path`), a saved one with changes (`path` + `request`: only the fields given change, nothing is saved), or an unsaved one (`request`), with its scripts and tests, and return the response. HTTP, GraphQL, gRPC (unary) and DNS. The user sees it in Zorvik.",
+            description: "Send a saved request (`path`), a saved one with changes (`path` + `request`: only the fields given change, nothing is saved), or an unsaved one (`request`), with its scripts and tests, and return the response. HTTP, GraphQL, gRPC (unary), DNS, and Server-Sent Events: an SSE request is read until the event named in stream.untilEvent, stream.maxEvents events, or stream.timeoutMs, and returns the events. The user sees it in Zorvik.",
             schema: obj(
                 json!({
                     "path": path("Saved request"),
                     "request": request_schema(),
                     "folder": string("Unsaved request: the folder whose auth and headers it inherits."),
                     "maxBodyChars": { "type": "integer", "description": "Response body characters to return (default 20000, at most 80000)." },
+                    "stream": obj(json!({
+                        "untilEvent": string("SSE: stop after the first event with this name (\"message\" for events without a name)."),
+                        "maxEvents": { "type": "integer", "description": "SSE: stop after this many events (default 100; 0 = only the time limit)." },
+                        "timeoutMs": { "type": "integer", "description": "SSE: stop after this long (default 10000, at most 120000)." },
+                    }), &[]),
                 }),
                 &[],
             ),
@@ -388,11 +491,8 @@ fn defs() -> Vec<Def> {
         Def {
             name: "save_load_test",
             title: "Save a load test",
-            description: "Create or replace a load test. test: {targets: [{request: \"Users/List users.yaml\", weight}], model: virtualUsers|arrivalRate, stages: [{durationSecs, target}], thinkTimeMs, thresholds: [{metric: p95|p99|avg|max|errorRate|rps…, op: \"<\", value}]}.",
-            schema: obj(
-                json!({ "name": { "type": "string" }, "test": { "type": "object", "description": "The load test (see the description)." } }),
-                &["name", "test"],
-            ),
+            description: "Create or replace a load test. Latency thresholds are in milliseconds, errorRate in percent (1 = 1 %, not 0.01), rps in requests per second. Unknown or misspelled fields are refused.",
+            schema: obj(json!({ "name": { "type": "string" }, "test": load_test_schema() }), &["name", "test"]),
             read_only: false,
             destructive: false,
             open_world: false,
@@ -400,7 +500,7 @@ fn defs() -> Vec<Def> {
         Def {
             name: "run_load_test",
             title: "Run a load test",
-            description: "Start a saved load test (the user always confirms in Zorvik) and return its results when it ends within waitSeconds; otherwise poll get_load_test_status.",
+            description: "Start a saved load test (the user always confirms in Zorvik) and return its results when it ends within waitSeconds; otherwise it returns the runId to poll with get_load_test_status. waitSeconds: 0 returns the runId as soon as it starts.",
             schema: obj(json!({ "name": { "type": "string" }, "waitSeconds": wait_schema() }), &["name"]),
             read_only: false,
             destructive: false,
@@ -423,33 +523,6 @@ fn defs() -> Vec<Def> {
             title: "Stop the load test",
             description: "Stop the running load test (its results are kept).",
             schema: obj(json!({}), &[]),
-            read_only: false,
-            destructive: false,
-            open_world: false,
-        },
-        Def {
-            name: "list_servers",
-            title: "List servers",
-            description: "Saved mock APIs and servers (HTTP, WebSocket, SSE, TCP, UDP, DNS, relay) and which are running.",
-            schema: obj(json!({}), &[]),
-            read_only: true,
-            destructive: false,
-            open_world: false,
-        },
-        Def {
-            name: "start_server",
-            title: "Start a server",
-            description: "Start a saved server or mock API (the user confirms in Zorvik).",
-            schema: obj(json!({ "name": { "type": "string" } }), &["name"]),
-            read_only: false,
-            destructive: false,
-            open_world: false,
-        },
-        Def {
-            name: "stop_server",
-            title: "Stop a server",
-            description: "Stop a running server.",
-            schema: obj(json!({ "name": { "type": "string" } }), &["name"]),
             read_only: false,
             destructive: false,
             open_world: false,
@@ -481,9 +554,18 @@ fn defs() -> Vec<Def> {
     ]
 }
 
+/// Every tool: the ones here, then each area's.
+fn all_defs() -> Vec<Def> {
+    let mut all = defs();
+    all.extend(servers::defs());
+    all.extend(state::defs());
+    all.extend(files::defs());
+    all
+}
+
 /// `tools/list` entries.
 pub fn tool_definitions() -> Vec<Value> {
-    defs()
+    all_defs()
         .into_iter()
         .map(|d| {
             json!({
@@ -573,9 +655,12 @@ impl Call<'_> {
 fn describe(name: &str, args: &Value) -> String {
     let s = |key: &str| args.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
     let count = |key: &str| args.get(key).and_then(Value::as_array).map_or(0, Vec::len);
-    let title = defs().into_iter().find(|d| d.name == name).map_or(name, |d| d.title);
+    let title = all_defs().into_iter().find(|d| d.name == name).map_or(name, |d| d.title);
     let what = match name {
-        "read_request" => s("path"),
+        "read_request" | "write_file" => s("path"),
+        "export_request" => {
+            [s("path"), s("format")].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join(" as ")
+        }
         "save_requests" => plural(count("requests"), "request"),
         "save_folder_settings" => {
             if s("folder").is_empty() {
@@ -585,9 +670,8 @@ fn describe(name: &str, args: &Value) -> String {
             }
         }
         "move_item" => s("path"),
-        "save_environment" | "read_load_test" | "save_load_test" | "run_load_test" | "start_server" | "stop_server" => {
-            s("name")
-        }
+        "save_environment" | "read_load_test" | "save_load_test" | "run_load_test" | "start_server" | "stop_server"
+        | "read_server" | "save_server" | "create_mock" | "get_server_traffic" => s("name"),
         "set_active_environment" => {
             args.get("name").and_then(Value::as_str).map_or_else(|| "none".into(), str::to_string)
         }
@@ -609,6 +693,7 @@ fn describe(name: &str, args: &Value) -> String {
         "delete_items" => {
             plural(count("paths") + count("environments") + count("loadTests") + count("servers"), "item")
         }
+        "update_from_openapi" => s("folder"),
         "open_workspace" | "import" => {
             [s("path"), s("url"), s("file")].into_iter().find(|v| !v.is_empty()).unwrap_or_default()
         }
@@ -631,7 +716,7 @@ impl Api {
         progress: ProgressFn,
         cancel: CancellationToken,
     ) -> ToolOutput {
-        if !defs().iter().any(|d| d.name == name) {
+        if !all_defs().iter().any(|d| d.name == name) {
             return ToolOutput::error(format!("Unknown tool '{name}'"));
         }
         let activity = self.activity_start(&session.0, name, describe(name, &args));
@@ -685,6 +770,7 @@ impl Api {
             "save_environment" => run!(self.tool_save_environment(c)),
             "set_active_environment" => run!(self.tool_set_active_environment(c)),
             "import" => run!(self.tool_import(c)),
+            "update_from_openapi" => run!(self.tool_update_from_openapi(c)),
             "send_request" => run!(self.tool_send_request(c)),
             "run_collection" => run!(self.tool_run_collection(c)),
             "get_run_status" => run!(self.tool_run_status(c)),
@@ -698,8 +784,16 @@ impl Api {
             "get_load_test_status" => run!(self.tool_load_status(c)),
             "stop_load_test" => run!(self.tool_stop_load_test()),
             "list_servers" => run!(async move { self.tool_list_servers() }),
+            "read_server" => run!(async move { self.tool_read_server(c) }),
+            "save_server" => run!(self.tool_save_server(c)),
+            "create_mock" => run!(self.tool_create_mock(c)),
             "start_server" => run!(self.tool_start_server(c)),
             "stop_server" => run!(self.tool_stop_server(c)),
+            "get_server_traffic" => run!(async move { self.tool_server_traffic(c) }),
+            "get_variables" => run!(async move { self.tool_get_variables() }),
+            "read_history" => run!(async move { self.tool_read_history(c) }),
+            "write_file" => run!(self.tool_write_file(c)),
+            "export_request" => run!(async move { self.tool_export_request(c) }),
             "open_workspace" => run!(self.tool_open_workspace(c)),
             "open_in_app" => run!(async move { self.tool_open_in_app(c) }),
             _ => {
@@ -922,11 +1016,32 @@ impl Api {
     fn tool_read_request(&self, c: &Call<'_>) -> Outcome {
         #[derive(Deserialize)]
         struct A {
-            path: String,
+            path: Option<String>,
+            paths: Option<Vec<String>>,
         }
-        let A { path } = c.args()?;
-        let request = self.agent_ws()?.read_request(&path)?;
-        Ok(Done::new(json!({ "path": path, "request": request }), path.clone()).at(AgentTarget::Request { path }))
+        let A { path, paths } = c.args()?;
+        let ws = self.agent_ws()?;
+        match (path, paths) {
+            (Some(path), None) => {
+                let request = ws.read_request(&path)?;
+                Ok(Done::new(json!({ "path": path, "request": request }), path.clone())
+                    .at(AgentTarget::Request { path }))
+            }
+            (None, Some(paths)) => {
+                if paths.is_empty() || paths.len() > MAX_READ {
+                    return Err(Fail::Invalid(format!("paths: give 1 to {MAX_READ} request paths")));
+                }
+                let requests: Vec<Value> = paths
+                    .iter()
+                    .map(|p| match ws.read_request(p) {
+                        Ok(request) => json!({ "path": p, "request": request }),
+                        Err(e) => json!({ "path": p, "error": e.to_string() }),
+                    })
+                    .collect();
+                Ok(Done::new(json!({ "requests": requests }), plural(paths.len(), "request")))
+            }
+            _ => Err(Fail::Invalid("Give path, or paths for several requests".into())),
+        }
     }
 
     async fn tool_save_requests(&self, c: &Call<'_>) -> Outcome {
@@ -1242,8 +1357,11 @@ impl Api {
         let ws = self.agent_ws()?;
         let envs = self.environments(&ws)?;
         let active = self.active_env_id(&ws);
-        let masked = |vars: &[Variable]| -> Vec<Value> {
-            vars.iter()
+        let local = self.local_values();
+        // File values, then what scripts saved in that scope (kept on this computer, winning).
+        let listed = |vars: &[Variable], scope: &str, env: Option<&str>| -> Vec<Value> {
+            let mut out: Vec<Value> = vars
+                .iter()
                 .map(|v| {
                     let mut o = json!({ "key": v.key, "value": if v.secret { MASK } else { v.value.as_str() } });
                     if v.secret {
@@ -1254,12 +1372,28 @@ impl Api {
                     }
                     o
                 })
-                .collect()
+                .collect();
+            for l in local.iter().filter(|l| l.scope == scope && l.environment_id.as_deref() == env) {
+                let secret = vars.iter().any(|v| v.key == l.key && v.secret);
+                let value = if secret { MASK } else { l.value.as_str() };
+                match out.iter_mut().find(|o| o["key"] == l.key.as_str()) {
+                    Some(o) => {
+                        o["value"] = json!(value);
+                        o["setByScript"] = json!(true);
+                    }
+                    None => out.push(json!({ "key": l.key, "value": value, "setByScript": true })),
+                }
+            }
+            out
         };
         let value = json!({
             "active": envs.iter().find(|e| Some(&e.id) == active.as_ref()).map(|e| &e.environment.name),
-            "environments": envs.iter().map(|e| json!({ "name": e.environment.name, "variables": masked(&e.environment.variables) })).collect::<Vec<_>>(),
-            "collectionVariables": masked(&self.revealed_meta(&ws).variables),
+            "environments": envs.iter().map(|e| json!({
+                "name": e.environment.name,
+                "active": Some(&e.id) == active.as_ref(),
+                "variables": listed(&e.environment.variables, "environment", Some(&e.id)),
+            })).collect::<Vec<_>>(),
+            "collectionVariables": listed(&self.revealed_meta(&ws).variables, "workspace", None),
         });
         Ok(Done::new(value, plural(envs.len(), "environment")).at(AgentTarget::Environments))
     }
@@ -1309,7 +1443,9 @@ impl Api {
             self.emit_agent(AgentEvent::WorkspaceChanged);
         }
         self.show(AgentTarget::Environments);
-        Ok(Done::new(json!({ "saved": name, "active": activate }), format!("{verb}d {name}"))
+        // Whether it is the active environment now (it may have been before this call).
+        let active = self.active_env_id(&ws).as_deref() == Some(id.as_str());
+        Ok(Done::new(json!({ "saved": name, "active": active }), format!("{verb}d {name}"))
             .at(AgentTarget::Environments))
     }
 
@@ -1346,8 +1482,10 @@ impl Api {
             file: Option<String>,
             #[serde(default)]
             folder: String,
+            #[serde(rename = "baseUrl")]
+            base_url: Option<String>,
         }
-        let A { text, url, file, folder } = c.args()?;
+        let A { text, url, file, folder, base_url } = c.args()?;
         let ws = self.agent_ws()?;
         let at;
         let summary = match (text, url, file) {
@@ -1360,7 +1498,7 @@ impl Api {
                 .await?;
                 let parent = self.ensure_folder(&ws, &folder)?;
                 at = parent.clone();
-                self.import_text(text, parent).await?
+                self.import_text(text, parent, base_url.clone()).await?
             }
             (None, Some(url), None) => {
                 let hosts = host_of(&url).into_iter().collect();
@@ -1368,7 +1506,10 @@ impl Api {
                 self.gate_change(c, "Import into your collection?".into(), vec![url.clone()]).await?;
                 let parent = self.ensure_folder(&ws, &folder)?;
                 at = parent.clone();
-                let download = super::with_guard(guard, self.import_url(crate::ImportUrlParams { url, parent }));
+                let download = super::with_guard(
+                    guard,
+                    self.import_url(crate::ImportUrlParams { url, parent, base_url: base_url.clone() }),
+                );
                 until_cancelled(c, download).await?
             }
             (None, None, Some(file)) => {
@@ -1387,8 +1528,9 @@ impl Api {
                 self.approve(c, ask).await?;
                 let parent = self.ensure_folder(&ws, &folder)?;
                 at = parent.clone();
-                until_cancelled(c, self.import_file(crate::ImportFileParams { path: Some(file), text: None, parent }))
-                    .await?
+                let params =
+                    crate::ImportFileParams { path: Some(file), text: None, parent, base_url: base_url.clone() };
+                until_cancelled(c, self.import_file(params)).await?
             }
             _ => return Err(Fail::Invalid("Give exactly one of text, url or file".into())),
         };
@@ -1396,6 +1538,75 @@ impl Api {
         self.show(target.clone());
         let value = serde_json::to_value(&summary).unwrap_or_default();
         Ok(Done::new(value, format!("Imported {}", plural(summary.requests as usize, "request"))).at(target))
+    }
+
+    async fn tool_update_from_openapi(&self, c: &Call<'_>) -> Outcome {
+        #[derive(Deserialize)]
+        struct A {
+            folder: String,
+            text: Option<String>,
+            url: Option<String>,
+            file: Option<String>,
+            #[serde(default)]
+            preview: bool,
+        }
+        let A { folder, text, url, file, preview } = c.args()?;
+        let folder = folder.trim_matches('/').to_string();
+        let mut guard = None;
+        match (&text, &url, &file) {
+            (Some(_), None, None) => {}
+            (None, Some(url), None) => {
+                guard =
+                    self.gate_traffic(c, "Download the OpenAPI document", host_of(url).into_iter().collect()).await?;
+            }
+            (None, None, Some(file)) => {
+                if !std::path::Path::new(file).is_absolute() {
+                    return Err(Fail::Invalid("file must be an absolute path".into()));
+                }
+                let ask = Ask {
+                    kind: ConfirmKind::File,
+                    title: "Read a file?".into(),
+                    message: format!(
+                        "{} wants Zorvik to read this OpenAPI document to update “{folder}”:",
+                        c.session.info.client
+                    ),
+                    items: vec![file.clone()],
+                    confirm_label: "Read".into(),
+                    session_option: false,
+                    danger: false,
+                };
+                self.approve(c, ask).await?;
+            }
+            _ => return Err(Fail::Invalid("Give the new document's text, url or file (one of them)".into())),
+        }
+        let params = crate::spec_update::SpecUpdateParams { folder: folder.clone(), text, path: file, url };
+        let planned = super::with_guard(guard.clone(), self.spec_update(params.clone(), false))
+            .await
+            .map_err(|e| self.blocked_hint(c, e))?;
+        let summary = |u: &crate::spec_update::SpecUpdate| {
+            format!(
+                "{} added, {} changed, {} removed, {} unchanged",
+                u.added.len(),
+                u.changed.len() + u.restored.len(),
+                u.removed.len(),
+                u.unchanged
+            )
+        };
+        if preview {
+            let detail = format!("Preview: {}", summary(&planned));
+            return Ok(Done::new(serde_json::to_value(&planned).unwrap_or_default(), detail));
+        }
+        let mut items = vec![summary(&planned)];
+        items.extend(planned.added.iter().map(|a| format!("+ {}", a.operation)));
+        items.extend(planned.changed.iter().map(|a| format!("~ {} ({})", a.operation, a.fields.join(", "))));
+        items.extend(planned.removed.iter().map(|a| format!("− {} (kept, marked removed)", a.operation)));
+        self.gate_change(c, format!("Update “{folder}” from its API spec?"), items).await?;
+        let applied =
+            super::with_guard(guard, self.spec_update(params, true)).await.map_err(|e| self.blocked_hint(c, e))?;
+        let target = AgentTarget::Folder { path: folder };
+        self.show(target.clone());
+        let detail = summary(&applied);
+        Ok(Done::new(serde_json::to_value(&applied).unwrap_or_default(), detail).at(target))
     }
 
     // ---- sending -------------------------------------------------------------------------------
@@ -1435,7 +1646,7 @@ impl Api {
             .get("maxBodyChars")
             .and_then(Value::as_u64)
             .map_or(DEFAULT_BODY_CHARS, |n| (n as usize).min(MAX_BODY_CHARS));
-        if !matches!(request.kind, RequestKind::Http | RequestKind::Grpc | RequestKind::Dns) {
+        if !matches!(request.kind, RequestKind::Http | RequestKind::Grpc | RequestKind::Dns | RequestKind::Sse) {
             return Err(Fail::Invalid(format!(
                 "{} requests are live sessions, which agents can't use yet; ask the user to open it in Zorvik",
                 method_label(&request)
@@ -1527,8 +1738,88 @@ impl Api {
                 );
                 Ok(Done { value: result, detail, target })
             }
-            _ => Err(Fail::Invalid("Agents can send HTTP, GraphQL, gRPC and DNS requests".into())),
+            RequestKind::Sse => self.read_sse_for_agent(c, ws, &request, path.as_deref(), target).await,
+            _ => Err(Fail::Invalid("Agents can send HTTP, GraphQL, gRPC, DNS and SSE requests".into())),
         }
+    }
+
+    /// An SSE request read to the end the agent asked for (`stream`), with its events.
+    async fn read_sse_for_agent(
+        &self,
+        c: &Call<'_>,
+        ws: &Workspace,
+        request: &Request,
+        path: Option<&str>,
+        target: Option<AgentTarget>,
+    ) -> Outcome {
+        #[derive(Deserialize, Default)]
+        #[serde(rename_all = "camelCase", default)]
+        struct Stream {
+            until_event: String,
+            max_events: Option<u32>,
+            timeout_ms: Option<u64>,
+        }
+        let stream: Stream = match c.args.get("stream") {
+            Some(v) if !v.is_null() => {
+                serde_json::from_value(v.clone()).map_err(|e| Fail::Invalid(format!("stream: {e}")))?
+            }
+            _ => Stream::default(),
+        };
+        let until = zorvik_workspace::formats::StreamUntil {
+            event: stream.until_event.trim().to_string(),
+            max_events: stream.max_events.unwrap_or(100),
+            timeout_ms: stream.timeout_ms.unwrap_or(10_000).clamp(100, MAX_SSE_WAIT_MS),
+        };
+        let started = Instant::now();
+        let reading = self.read_event_stream(ws, request, path, &until, &c.cancel);
+        let ticking = async {
+            loop {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                (c.progress)(started.elapsed().as_secs_f64(), Some(until.timeout_ms as f64 / 1000.0), "Reading events");
+            }
+        };
+        let read = tokio::select! {
+            r = reading => r.map_err(|e| self.blocked_hint(c, e))?,
+            _ = ticking => unreachable!("ticks forever"),
+        };
+        let redactor = self.redactor(ws);
+        let events: Vec<Value> = read
+            .events
+            .iter()
+            .map(|e| {
+                let (data, cut_now) = cut(&redactor.text(&e.data), MAX_EVENT_CHARS);
+                let mut o = json!({ "event": e.event, "data": data });
+                if let Some(id) = &e.id {
+                    o["id"] = json!(id);
+                }
+                if cut_now {
+                    o["dataTruncated"] = json!(true);
+                }
+                o
+            })
+            .collect();
+        let mut value = json!({
+            "status": read.meta.status,
+            "statusText": read.meta.status_text,
+            "headers": redactor.headers(&read.meta.headers),
+            "ended": read.end,
+            "events": events,
+            "timeMs": read.duration.as_millis() as u64,
+        });
+        if read.dropped > 0 {
+            value["eventsNotKept"] = json!(read.dropped);
+        }
+        if let Some(body) = &read.body {
+            value["body"] = json!(redactor.text(body));
+        }
+        if let Some(error) = &read.error {
+            value["error"] = json!(redactor.text(error));
+        }
+        if !read.unresolved.is_empty() {
+            value["unresolvedVariables"] = json!(read.unresolved);
+        }
+        let detail = format!("{} · {}", read.meta.status, plural(read.events.len(), "event"));
+        Ok(Done { value, detail, target })
     }
 
     /// Run `work` (keyed by `request_id` for `http.cancel`), cancelling it with the call.
@@ -1740,7 +2031,12 @@ impl Api {
         if let Some(t) = test.as_object_mut() {
             t.insert("name".into(), json!(name.trim()));
         }
-        let test: LoadTest = serde_json::from_value(test).map_err(|e| Fail::Invalid(format!("test: {e}")))?;
+        let test: LoadTest = strict(test, "test", &load_test_schema()).map_err(Fail::Invalid)?;
+        if let Some(t) = test.thresholds.iter().find(|t| {
+            t.metric == zorvik_workspace::formats::ThresholdMetric::ErrorRate && !(0.0..=100.0).contains(&t.value)
+        }) {
+            return Err(Fail::Invalid(format!("errorRate thresholds are in percent, 0-100 (got {})", t.value)));
+        }
         let ws = self.agent_ws()?;
         let existing = self.find_load_test(&ws, &name).ok();
         let summary =
@@ -1885,75 +2181,6 @@ impl Api {
         let Some(run_id) = run_id else { return Err(Fail::Invalid("No load test is running".into())) };
         self.call("load.stop", json!({ "runId": run_id })).await?;
         Ok(Done::new(json!({ "stopped": run_id }), "Stopping"))
-    }
-
-    // ---- servers -------------------------------------------------------------------------------
-
-    fn tool_list_servers(&self) -> Outcome {
-        let ws = self.agent_ws()?;
-        let servers = ws.list_servers()?;
-        let running = self.inner.servers.running();
-        let list: Vec<Value> = servers
-            .iter()
-            .map(|s| {
-                let run = running.iter().find(|r| r.server_id == s.id && r.workspace_path == ws.root().to_string_lossy());
-                json!({ "name": s.name, "kind": s.kind, "running": run.map(|r| json!({ "url": r.url, "runId": r.run_id })) })
-            })
-            .collect();
-        let n = list.len();
-        Ok(Done::new(json!({ "servers": list }), plural(n, "server")))
-    }
-
-    async fn tool_start_server(&self, c: &Call<'_>) -> Outcome {
-        #[derive(Deserialize)]
-        struct A {
-            name: String,
-        }
-        let A { name } = c.args()?;
-        let ws = self.agent_ws()?;
-        let node = ws
-            .list_servers()?
-            .into_iter()
-            .find(|s| s.name.eq_ignore_ascii_case(name.trim()) || s.id == name)
-            .ok_or_else(|| Fail::Invalid(format!("Server '{name}' not found (list_servers)")))?;
-        let server = ws.read_server(&node.id)?;
-        let open = matches!(server.host.trim(), "0.0.0.0" | "::" | "[::]");
-        let mut items = vec![format!("{:?} on {}:{}", server.kind, server.host, server.port)];
-        if open {
-            items.push("Other devices on the network can reach it.".into());
-        }
-        let ask = Ask {
-            kind: ConfirmKind::Server,
-            title: format!("Start “{}”?", server.name),
-            message: format!("{} wants to start a server:", c.session.info.client),
-            items,
-            confirm_label: "Start".into(),
-            session_option: false,
-            danger: open,
-        };
-        self.approve(c, ask).await?;
-        let info = self.call("server.start", json!({ "id": node.id, "server": server })).await?;
-        let target = AgentTarget::Server { id: node.id };
-        self.show(target.clone());
-        let url = info["url"].as_str().unwrap_or_default().to_string();
-        Ok(Done::new(json!({ "url": url, "runId": info["runId"] }), format!("Running at {url}")).at(target))
-    }
-
-    async fn tool_stop_server(&self, c: &Call<'_>) -> Outcome {
-        #[derive(Deserialize)]
-        struct A {
-            name: String,
-        }
-        let A { name } = c.args()?;
-        let ws = self.agent_ws()?;
-        let root = ws.root().to_string_lossy().into_owned();
-        let run =
-            self.inner.servers.running().into_iter().find(|r| {
-                r.workspace_path == root && (r.name.eq_ignore_ascii_case(name.trim()) || r.server_id == name)
-            });
-        let Some(run) = run else { return Err(Fail::Invalid(format!("'{name}' is not running"))) };
-        self.call("server.stop", json!({ "runId": run.run_id })).await?;
-        Ok(Done::new(json!({ "stopped": run.name }), "Stopped"))
     }
 
     // ---- app -----------------------------------------------------------------------------------
@@ -2124,29 +2351,184 @@ fn cap_items(mut items: Vec<String>) -> Vec<String> {
     items
 }
 
+/// `value` as a `T`, refusing fields `T` doesn't have (serde would drop them silently, so a
+/// misspelled field would look saved). `what` names the argument in errors; the names in
+/// `schema` (the tool's input schema) are offered as "did you mean".
+fn strict<T: DeserializeOwned>(value: Value, what: &str, schema: &Value) -> Result<T, String> {
+    let mut unknown: Vec<String> = Vec::new();
+    let parsed: T =
+        serde_ignored::deserialize(value, |path| unknown.push(path.to_string())).map_err(|e| format!("{what}: {e}"))?;
+    if unknown.is_empty() {
+        return Ok(parsed);
+    }
+    let mut known = BTreeSet::new();
+    schema_fields(schema, &mut known);
+    let lines: Vec<String> = unknown
+        .iter()
+        .map(|path| {
+            let field = path.rsplit('.').next().unwrap_or(path);
+            let near = known
+                .iter()
+                .map(|k| (strsim::jaro_winkler(&field.to_ascii_lowercase(), &k.to_ascii_lowercase()), k))
+                .filter(|(score, _)| *score >= 0.85)
+                .max_by(|a, b| a.0.total_cmp(&b.0));
+            match near {
+                Some((_, k)) => format!("`{path}` (did you mean `{k}`?)"),
+                None => format!("`{path}`"),
+            }
+        })
+        .collect();
+    Err(format!(
+        "{what}: unknown field{} {}. Nothing was saved; the tool's input schema lists every field.",
+        if lines.len() == 1 { "" } else { "s" },
+        lines.join(", ")
+    ))
+}
+
+/// Every property name in a JSON schema, at any depth.
+fn schema_fields(schema: &Value, out: &mut BTreeSet<String>) {
+    match schema {
+        Value::Object(map) => {
+            if let Some(Value::Object(props)) = map.get("properties") {
+                for (name, sub) in props {
+                    out.insert(name.clone());
+                    schema_fields(sub, out);
+                }
+            }
+            for (key, sub) in map {
+                if key != "properties" {
+                    schema_fields(sub, out);
+                }
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|v| schema_fields(v, out)),
+        _ => {}
+    }
+}
+
+/// JSON Merge Patch (RFC 7396): objects merge field by field, anything else (arrays
+/// included) replaces, and `null` removes the field (it goes back to its default).
+fn merge_patch(target: &mut Value, patch: Value) {
+    match patch {
+        Value::Object(patch) => {
+            if !target.is_object() {
+                *target = json!({});
+            }
+            let map = target.as_object_mut().expect("object");
+            for (key, value) in patch {
+                if value.is_null() {
+                    map.remove(&key);
+                } else {
+                    merge_patch(map.entry(key).or_insert(Value::Null), value);
+                }
+            }
+        }
+        other => *target = other,
+    }
+}
+
 /// A request from an agent, forgiving common shapes (headers as an object, a body
-/// given as text or JSON, auth fields in camelCase like the UI's).
+/// given as text or JSON, auth fields in camelCase like the UI's) but not unknown fields.
 fn parse_request(value: Value) -> Result<Request, String> {
-    let mut value = normalize_request(value)?;
+    let (mut value, query) = normalize_request(value)?;
     if let Some(map) = value.as_object_mut() {
         map.entry("name").or_insert(json!(""));
     }
-    serde_json::from_value(value).map_err(|e| e.to_string())
+    let mut request: Request = strict(value, "request", &request_schema())?;
+    if let Some(rows) = query {
+        apply_query(&mut request, rows);
+    }
+    Ok(request)
 }
 
 /// `patch` (the fields an agent gave) laid over a saved request: what it left out stays.
 fn merge_request(saved: &Request, patch: Value) -> Result<Request, String> {
-    let Value::Object(patch) = normalize_request(patch)? else { return Err("expected an object".into()) };
+    let (patch, query) = normalize_request(patch)?;
+    let Value::Object(patch) = patch else { return Err("expected an object".into()) };
+    // Check the fields given (with the saved name, so a patch without one parses).
+    let mut check = patch.clone();
+    check.entry("name").or_insert(json!(saved.name));
+    strict::<Request>(Value::Object(check), "request", &request_schema())?;
     let mut merged = serde_json::to_value(saved).map_err(|e| e.to_string())?;
     if let Some(map) = merged.as_object_mut() {
         map.extend(patch);
     }
-    serde_json::from_value(merged).map_err(|e| e.to_string())
+    let mut request: Request = serde_json::from_value(merged).map_err(|e| e.to_string())?;
+    if let Some(rows) = query {
+        apply_query(&mut request, rows);
+    }
+    Ok(request)
 }
 
-/// The request shapes agents send, as the model has them.
-fn normalize_request(mut value: Value) -> Result<Value, String> {
+/// Query rows from an agent into the request: enabled ones become the URL's query string,
+/// disabled ones its switched-off params, and descriptions go where each kind keeps them.
+fn apply_query(request: &mut Request, rows: Vec<KeyValue>) {
+    let (base, hash) = {
+        let (rest, hash) = request.url.split_once('#').map_or((request.url.as_str(), ""), |(r, h)| (r, h));
+        (rest.split_once('?').map_or(rest, |(b, _)| b).to_string(), hash.to_string())
+    };
+    let on: Vec<&KeyValue> = rows.iter().filter(|r| r.enabled && !r.key.is_empty()).collect();
+    let query: Vec<String> =
+        on.iter().map(|r| format!("{}={}", encode_query(&r.key), encode_query(&r.value))).collect();
+    let mut url = base;
+    if !query.is_empty() {
+        url.push('?');
+        url.push_str(&query.join("&"));
+    }
+    if !hash.is_empty() {
+        url.push('#');
+        url.push_str(&hash);
+    }
+    request.url = url;
+    request.disabled_params = rows.iter().filter(|r| !r.enabled && !r.key.is_empty()).cloned().collect();
+    request.param_descriptions = on
+        .iter()
+        .filter(|r| !r.description.is_empty())
+        .map(|r| KeyValue {
+            key: r.key.clone(),
+            value: String::new(),
+            enabled: true,
+            description: r.description.clone(),
+        })
+        .collect();
+}
+
+/// Percent-encodes a query component, leaving `{{variable}}` placeholders as they are.
+fn encode_query(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while !rest.is_empty() {
+        if let Some(start) = rest.find("{{")
+            && let Some(len) = rest[start..].find("}}")
+        {
+            out.push_str(&encode_plain(&rest[..start]));
+            out.push_str(&rest[start..start + len + 2]);
+            rest = &rest[start + len + 2..];
+        } else {
+            out.push_str(&encode_plain(rest));
+            break;
+        }
+    }
+    out
+}
+
+fn encode_plain(text: &str) -> String {
+    text.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// The request shapes agents send, as the model has them, and the `query` rows (applied
+/// once the URL is known).
+fn normalize_request(mut value: Value) -> Result<(Value, Option<Vec<KeyValue>>), String> {
     let Some(map) = value.as_object_mut() else { return Err("expected an object".into()) };
+    let query = match map.remove("query") {
+        None | Some(Value::Null) => None,
+        Some(rows) => Some(serde_json::from_value::<Vec<KeyValue>>(rows).map_err(|e| format!("query: {e}"))?),
+    };
     if let Some(h) = map.get("headers").cloned() {
         map.insert("headers".into(), serde_json::to_value(parse_headers(h)?).unwrap_or_default());
     }
@@ -2178,7 +2560,7 @@ fn normalize_request(mut value: Value) -> Result<Value, String> {
     if let Some(auth) = map.get("auth").cloned() {
         map.insert("auth".into(), serde_json::to_value(parse_auth(auth)?).unwrap_or_default());
     }
-    Ok(value)
+    Ok((value, query))
 }
 
 fn parse_headers(value: Value) -> Result<Vec<KeyValue>, String> {

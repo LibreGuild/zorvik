@@ -34,6 +34,7 @@ fn post(code: u16, status: &str, body: &str) -> ScriptInput {
             body: body.into(),
             response_time: 12.5,
             response_size: body.len() as u64,
+            events: None,
         }),
         ..pre()
     }
@@ -612,4 +613,29 @@ fn out_of_memory_in_built_ins_does_not_abort() {
     let limits = Limits { memory: 4 * 1024 * 1024, ..Default::default() };
     let out = run("pm.response.json();", &post(200, "OK", &body), &limits);
     assert!(out.error.unwrap().message.contains("out of memory (limit 4 MB)"));
+}
+
+#[test]
+fn event_streams_expose_their_events() {
+    let mut input = post(200, "OK", "data: 1\n\n");
+    if let Some(r) = &mut input.response {
+        r.events = Some(vec![
+            ScriptEvent { event: "progress".into(), data: "{\"pct\": 50}".into(), id: Some("1".into()) },
+            ScriptEvent { event: "done".into(), data: "ok".into(), id: None },
+        ]);
+    }
+    let out = run_ok(
+        "pm.test('events', () => {
+           pm.expect(pm.response.events.length).to.equal(2);
+           pm.expect(JSON.parse(pm.response.events[0].data).pct).to.equal(50);
+           pm.expect(pm.response.events[1].event).to.equal('done');
+           pm.expect(pm.response.events[1].id).to.equal(null);
+         });",
+        &input,
+    );
+    assert!(out.tests.iter().all(|t| t.passed), "{:?}", out.tests);
+    // Other responses have no events.
+    let out =
+        run_ok("pm.test('none', () => pm.expect(pm.response.events).to.equal(undefined));", &post(200, "OK", "{}"));
+    assert!(out.tests.iter().all(|t| t.passed), "{:?}", out.tests);
 }

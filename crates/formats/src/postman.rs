@@ -202,7 +202,10 @@ impl Importer {
         let settings = settings(obj.get("protocolProfileBehavior"), inherited);
         let children = self.items(obj.get("item"), &path, &settings);
         let docs = description(obj.get("description"));
-        ImportedItem::Folder { meta: FolderMeta { name, seq, auth, headers: Vec::new(), scripts, docs }, children }
+        ImportedItem::Folder {
+            meta: FolderMeta { name, seq, auth, headers: Vec::new(), scripts, docs, openapi: None },
+            children,
+        }
     }
 
     fn request(

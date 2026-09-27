@@ -219,7 +219,7 @@ function RunningServers() {
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content align="end" sideOffset={6} className="zv-pop z-[90] w-80 rounded-xl border border-line bg-elev p-1.5 shadow-pop">
+        <DropdownMenu.Content align="end" sideOffset={6} collisionPadding={8} className="zv-pop z-[90] w-80 rounded-xl border border-line bg-elev p-1.5 shadow-pop max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto overscroll-contain">
           <div className="px-2 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-wide text-faint">Running servers</div>
           {running.map((r) => {
             const here = r.workspacePath === wsPath;
@@ -292,7 +292,7 @@ function EnvironmentPicker() {
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content align="end" sideOffset={6} className="zv-pop z-[90] min-w-[230px] rounded-xl border border-line bg-elev p-1.5 text-[12.5px] shadow-pop">
+        <DropdownMenu.Content align="end" sideOffset={6} collisionPadding={8} className="zv-pop z-[90] min-w-[230px] rounded-xl border border-line bg-elev p-1.5 text-[12.5px] shadow-pop max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto overscroll-contain">
           <DropdownMenu.Item onSelect={() => void setActiveEnvironment(null)} className={item}>
             <span className="w-4">{!info.activeEnvironment && <Check size={13} />}</span>
             <span className="text-muted">No environment</span>

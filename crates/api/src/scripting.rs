@@ -148,6 +148,8 @@ pub struct SendContext<'a> {
     pub jar: Option<&'a CookieJar>,
     /// Hosts requests may go to (AI agents); `None` = any.
     pub guard: Option<zorvik_engine::HostGuard>,
+    /// Imported requests' responses are checked against their OpenAPI document (when kept).
+    pub specs: Option<&'a crate::specs::SpecCache>,
 }
 
 /// A request that was sent.
@@ -159,6 +161,8 @@ pub struct Sent {
     pub response: HttpResponse,
     /// Variables that were referenced but not defined.
     pub unresolved: Vec<String>,
+    /// An event stream: how many events were read and why reading stopped.
+    pub stream: Option<(usize, crate::sse_read::SseEnd)>,
 }
 
 /// Outcome of [`send_scripted`]. The report is kept when the send fails.
@@ -175,10 +179,23 @@ pub struct ScriptedSend {
 /// environment, workspace and global changes collect in `vars.changes`.
 pub async fn send_scripted(
     cx: &SendContext<'_>,
+    request: Request,
+    path: Option<&str>,
+    vars: &mut ScriptVars,
+    iteration: Iteration,
+) -> ScriptedSend {
+    send_scripted_with(cx, request, path, vars, iteration, None).await
+}
+
+/// [`send_scripted`], with `extra` run after the post-response scripts (the runner's
+/// "repeat until" condition, as a test).
+pub(crate) async fn send_scripted_with(
+    cx: &SendContext<'_>,
     mut request: Request,
     path: Option<&str>,
     vars: &mut ScriptVars,
     iteration: Iteration,
+    extra: Option<(String, String)>,
 ) -> ScriptedSend {
     let folders = path.map(|p| cx.ws.ancestors(p)).unwrap_or_default();
     let limits = Limits { timeout: cx.settings.script_timeout(), ..Default::default() };
@@ -210,14 +227,20 @@ pub async fn send_scripted(
         }
     }
 
-    let (resolved, response) = match send(cx, &request, &folders, vars).await {
+    let (resolved, response, events) = match send(cx, &request, &folders, vars).await {
         Ok(sent) => sent,
         Err(e) => return ScriptedSend { report, result: Err(e), next_request },
     };
 
-    let post = chain(cx.meta, &folders, &request, |s| &s.post_response);
+    let mut post = chain(cx.meta, &folders, &request, |s| &s.post_response);
+    post.extend(extra);
     if !post.is_empty() {
-        let res = response_snapshot(&response, limits.memory);
+        let mut res = response_snapshot(&response, limits.memory);
+        res.events = events.as_ref().map(|(list, _)| {
+            list.iter()
+                .map(|e| zorvik_script::ScriptEvent { event: e.event.clone(), data: e.data.clone(), id: e.id.clone() })
+                .collect()
+        });
         let input = script_input(Event::PostResponse, &info, vars, sent_snapshot(&resolved.request), Some(res));
         let merged = report.get_or_insert_with(Default::default);
         match run_chain(Event::PostResponse, post, input, vars.environment.is_some(), limits).await {
@@ -234,17 +257,32 @@ pub async fn send_scripted(
             }),
         }
     }
+    // Checked against the API spec it was imported from, like a test.
+    if let Some(specs) = cx.specs
+        && let Some(test) = crate::specs::spec_test(specs, cx.ws, &folders, &request, &response)
+    {
+        report.get_or_insert_with(Default::default).tests.push(test);
+    }
     let url = resolved.request.url.clone();
-    ScriptedSend { report, result: Ok(Sent { request, url, response, unresolved: resolved.unresolved }), next_request }
+    let stream = events.map(|(list, end)| (list.len(), end));
+    ScriptedSend {
+        report,
+        result: Ok(Sent { request, url, response, unresolved: resolved.unresolved, stream }),
+        next_request,
+    }
 }
 
-/// Resolve against the workspace and `vars`, authorize, send.
+/// Events an event stream was read to, and why reading stopped.
+type StreamRead = (Vec<zorvik_engine::SseEvent>, crate::sse_read::SseEnd);
+
+/// Resolve against the workspace and `vars`, authorize, send. An SSE request is read
+/// until its `settings.stream` says to stop; its response body is the events as text.
 async fn send(
     cx: &SendContext<'_>,
     request: &Request,
     folders: &[FolderMeta],
     vars: &ScriptVars,
-) -> ApiResult<(Resolved, HttpResponse)> {
+) -> ApiResult<(Resolved, HttpResponse, Option<StreamRead>)> {
     let outside_files = cx.settings.files_outside_workspace;
     let inherit = Inheritance { workspace: cx.meta, folders, base_dir: cx.ws.root(), outside_files };
     let mut resolved = resolve(request, &inherit, &vars.var_context())?;
@@ -255,8 +293,45 @@ async fn send(
         let token = oauth2::ensure_token(cx.client, &opts, &config, cx.tokens, &cx.ws.local_key()).await?;
         apply_token(&mut resolved, &token.access_token);
     }
+    if request.kind == zorvik_workspace::formats::RequestKind::Sse {
+        let has = |name: &str| resolved.request.headers.iter().any(|h| h.name.eq_ignore_ascii_case(name));
+        let mut outgoing = resolved.request.clone();
+        if !has("accept") {
+            outgoing.headers.push(zorvik_engine::Header::new("Accept", "text/event-stream"));
+        }
+        if !has("cache-control") {
+            outgoing.headers.push(zorvik_engine::Header::new("Cache-Control", "no-cache"));
+        }
+        let until = request.settings.stream.clone().unwrap_or_default();
+        let started = std::time::Instant::now();
+        let deadline = tokio::time::Instant::now()
+            + std::time::Duration::from_millis(until.timeout_ms.max(1)).min(crate::sse_read::MAX_WAIT);
+        let stream = tokio::select! {
+            r = cx.client.open_stream(outgoing, &opts, cx.jar) => r?,
+            _ = tokio::time::sleep_until(deadline) => {
+                return Err(ApiError::new("timeout", format!("No answer within {} ms", until.timeout_ms)));
+            }
+        };
+        let never = tokio_util::sync::CancellationToken::new();
+        let read = crate::sse_read::collect_events(stream, &until, &never, started, deadline).await?;
+        let body = match &read.body {
+            Some(text) => text.clone().into_bytes(),
+            None => crate::sse_read::events_text(&read.events).into_bytes(),
+        };
+        let mut timing = read.timing;
+        timing.total_ms = read.duration.as_secs_f64() * 1000.0;
+        let response = HttpResponse {
+            meta: read.meta,
+            timing,
+            body_wire_size: body.len() as u64,
+            body,
+            body_truncated: read.dropped > 0,
+            decode_warning: read.error,
+        };
+        return Ok((resolved, response, Some((read.events, read.end))));
+    }
     let response = cx.client.send(resolved.request.clone(), &opts, cx.jar).await?;
-    Ok((resolved, response))
+    Ok((resolved, response, None))
 }
 
 /// The non-empty scripts for `request`, outermost first, with names for messages.
@@ -420,6 +495,7 @@ fn response_snapshot(res: &HttpResponse, max_body: usize) -> ScriptResponse {
         body: String::from_utf8_lossy(&res.body[..res.body.len().min(max_body)]).into_owned(),
         response_time: res.timing.total_ms,
         response_size: res.body.len() as u64,
+        events: None,
     }
 }
 

@@ -6,6 +6,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-28
+
+### Added
+- AI agents can create and change mock servers (`read_server`, `save_server`), build a mock from a folder or an OpenAPI document (`create_mock`), start a server on any free port, and read what it received (`get_server_traffic`).
+- AI agents can read Server-Sent Events streams with `send_request`, read several requests at once, set query parameters (also switched-off ones, with descriptions) and path parameters, read current variables (`get_variables`) and history (`read_history`), export a request as code (`export_request`), and add a small file to the workspace (`write_file`).
+- Copy a request as Kotlin (OkHttp), Swift (URLSession), JavaScript (fetch) or Python (requests) code, next to cURL.
+- Collection runs: "Repeat until" sends a request again until a condition holds (polling), and Server-Sent Events requests run, with `pm.response.events` in scripts.
+- OpenAPI: imported requests are checked against the spec on every send and run (a "Matches the API spec" test); "Update from API spec" brings in a new version with a preview, keeping your edits and marking operations that were removed.
+- OpenAPI import: realistic example values, path parameters become variables (`{session_id}` → `{{sessionId}}`), and a document without a full server URL asks for the base URL.
+- A port that's already in use names the program holding it.
+- Load tests: a data file gives each virtual user its own row; captures (JSON path, header or regex) pass values from a response to the same user's next requests; timing shows time to first byte, transfer, connect and `Server-Timing`; Compare shows a run next to an earlier one.
+
+### Changed
+- Tools that save requests, servers and load tests refuse unknown or misspelled fields, with a suggestion, instead of ignoring them. Their input schemas document every field, unit and placeholder.
+- Load-test threshold units are documented (`errorRate` is a percent, 0-100); `waitSeconds: 0` returns the run id at once.
+- Collection runs say why a request was skipped.
+
+### Fixed
+- Long menus now fit the window and scroll.
+- `save_environment` reported `active: false` for an environment that was active.
+
 ## [0.1.0] - 2026-09-27
 The first public release.
 

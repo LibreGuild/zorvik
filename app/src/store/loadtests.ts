@@ -56,9 +56,11 @@ interface LoadTestsState {
   last: Record<string, FinishedRun>;
   /** Bumped when a test's run history changes (a run finished or was deleted). */
   historyVersion: Record<string, number>;
+  /** The earlier run each test's results are compared with (test id → run id). */
+  compare: Record<string, string>;
 }
 
-export const useLoadTests = create<LoadTestsState>(() => ({ saved: [], active: null, starting: null, last: {}, historyVersion: {} }));
+export const useLoadTests = create<LoadTestsState>(() => ({ saved: [], active: null, starting: null, last: {}, historyVersion: {}, compare: {} }));
 const set = useLoadTests.setState;
 const get = useLoadTests.getState;
 
@@ -311,7 +313,19 @@ export function forgetResult(testId: string, runId: string) {
   set((s) => {
     const last = { ...s.last };
     if (last[testId]?.runId === runId) delete last[testId];
-    return { last, historyVersion: { ...s.historyVersion, [testId]: (s.historyVersion[testId] ?? 0) + 1 } };
+    const compare = { ...s.compare };
+    if (compare[testId] === runId) delete compare[testId];
+    return { last, compare, historyVersion: { ...s.historyVersion, [testId]: (s.historyVersion[testId] ?? 0) + 1 } };
+  });
+}
+
+/** Compare a test's results with an earlier run (`null`: stop comparing). */
+export function setCompareRun(testId: string, runId: string | null) {
+  set((s) => {
+    const compare = { ...s.compare };
+    if (runId) compare[testId] = runId;
+    else delete compare[testId];
+    return { compare };
   });
 }
 

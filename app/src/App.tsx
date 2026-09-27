@@ -11,6 +11,7 @@ import {
   CookiesModal,
   ExportModal,
   FolderSettingsModal,
+  SpecUpdateModal,
   ImportModal,
   MoveModal,
   SaveAsModal,
@@ -168,6 +169,8 @@ function Modals() {
       return <WorkspaceSettingsModal />;
     case "folderSettings":
       return <FolderSettingsModal path={modal.path} />;
+    case "specUpdate":
+      return <SpecUpdateModal folder={modal.folder} name={modal.name} />;
     case "export":
       return <ExportModal tabId={modal.tabId} />;
     case "saveAs":

@@ -40,6 +40,14 @@ scriptErrors: Array<string>,
  */
 unresolved: Array<string>, passed: boolean, 
 /**
- * Not an HTTP request: not sent.
+ * Not a kind the runner sends: not sent.
  */
-skipped: boolean, };
+skipped: boolean, 
+/**
+ * Why it was skipped.
+ */
+skipReason?: string, 
+/**
+ * Sends made for "repeat until" (the result is the last one's).
+ */
+attempts?: number, };
