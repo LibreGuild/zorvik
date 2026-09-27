@@ -9,7 +9,7 @@ crates/academy/          Loads the course (embedded at build time), pattern matc
 crates/api/src/academy/  academy.* RPC: the Bootcamp workspace, labs (servers, checks), progress file
 app/src/components/academy/  Academy view (course map, lessons, rewards), Lab Guide, diagrams
 ```
-- **The Bootcamp workspace** is a normal workspace in the app data folder (`bootcamp/`). It is always listed first and can't be removed; **Reset** empties it (progress stays).
+- **The Bootcamp workspace** is a normal workspace in the app data folder (`bootcamp/`). It is always listed first (pinned in the workspace menu and on the welcome screen, which open the Academy) and can't be removed; **Reset** empties it (progress stays). Only this workspace shows the *Workbench | Academy* switch in the title bar.
 - **Progress** lives in `academy-progress.json` in the app data folder, not in the workspace.
 - **A lab** saves its servers into the workspace as `Lab · <name>` and starts them on free ports, fills the **Lab** environment (`{{api}}`, …) and makes it active. Starting another lab removes the previous lab's servers. The practice servers (the same ones the tests use, `crates/testkit`) start on first use and stay up.
 - **Checks.** While a lab runs, every app call is noted in a short journal. After each call, and once a second, the steps are checked in order from the first one not done; each check looks at everything since the lab started. Rewards reach the UI only as `academy` events.

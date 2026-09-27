@@ -18,10 +18,13 @@ test.afterEach(async ({ page }) => {
 });
 
 test("the Academy: a lesson, its lab in the workbench, the quiz and the rewards", async ({ page }) => {
-  // Academy opens the Bootcamp workspace, which stands out in the title bar.
-  await page.getByTestId("mode-academy").click();
+  // The Workbench | Academy switch belongs to the Bootcamp workspace; the pinned menu entry opens the course.
+  await expect(page.getByTestId("mode-switch")).toHaveCount(0);
+  await page.getByTestId("workspace-menu").click();
+  await page.getByRole("menuitem", { name: /Training Bootcamp/ }).click();
   await expect(page.getByTestId("academy")).toBeVisible();
   await expect(page.getByTestId("workspace-menu")).toContainText("Training Bootcamp");
+  await expect(page.getByTestId("mode-switch")).toBeVisible();
   await expect(page.getByTestId("course-map")).toBeVisible();
 
   await page.getByTestId("lesson-first-request").click();
@@ -92,11 +95,16 @@ test("the Bootcamp is on the welcome screen and pinned in the workspace menu", a
   await expect(bootcamp).toBeVisible();
   await bootcamp.click();
   await expect(page.getByTestId("workspace-menu")).toContainText("Training Bootcamp");
+  await expect(page.getByTestId("academy")).toBeVisible();
   // It is never listed among the recent workspaces, only pinned.
   await page.getByTestId("workspace-menu").click();
   await expect(page.getByRole("menuitem", { name: /Training Bootcamp/ })).toHaveCount(1);
   await page.getByRole("menuitem", { name: "Close workspace" }).click();
   await expect(page.getByTestId("welcome-bootcamp")).toBeVisible();
+  await expect(page.getByTestId("mode-switch")).toHaveCount(0);
+  // The welcome art is not cut off: the page starts at the top.
+  const art = await page.getByTestId("welcome-art").boundingBox();
+  expect(art!.y).toBeGreaterThanOrEqual(0);
   await page.getByTestId("welcome-bootcamp").click();
   await expect(page.getByTestId("academy")).toBeVisible();
 });

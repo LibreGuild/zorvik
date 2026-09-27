@@ -166,7 +166,7 @@ Agent ──MCP over stdio──► zorvik mcp ──127.0.0.1 TCP + token──
 Code: `crates/api/src/agents/` (sessions, confirmations, tool definitions and implementations), `crates/mcp` (JSON-RPC protocol, bridge, listener, `agent.json`).
 
 ## Training Bootcamp
-The **Academy** (title bar switch) is a course inside the app; see [academy.md](academy.md) for the course format and how to write a lesson.
+The **Academy** is a course inside the app, opened from the pinned Training Bootcamp workspace (its title bar then has a Workbench | Academy switch); see [academy.md](academy.md) for the course format and how to write a lesson.
 - **Course**: `crates/academy/course/` (a folder per unit, a Markdown file with YAML front matter per lesson), embedded at build time and validated by tests.
 - **Labs**: `crates/api/src/academy/` saves the lab's servers into the Bootcamp workspace (`Lab · …`), starts them on free ports with the normal server manager, fills and activates the **Lab** environment, and starts practice servers from `crates/testkit` when a lab needs them. While a lab runs, `Api::call` notes each call in a short journal; the steps are checked in order after each call and once a second, against lab servers' traffic, the journal, workspace files, finished runs and typed answers. Rewards reach the UI as `academy` events.
 - **UI**: `app/src/components/academy/` (Academy view, lesson reader with diagrams, Lab Guide docked beside the workbench, celebrations, certificate), `app/src/store/academy.ts`.

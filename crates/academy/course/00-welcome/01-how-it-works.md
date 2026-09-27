@@ -51,10 +51,12 @@ Labs happen in a special workspace called **Training Bootcamp**. It is always th
 
 ## Switching between Academy and Workbench
 
-At the top of the window there is a switch:
+While the Training Bootcamp workspace is open, a switch sits at the top of the window (other workspaces don't show it):
 
 - **Academy** is this place: the course map, lessons and your rewards.
 - **Workbench** is the normal app. During a lab, the Lab Guide stays docked on the right.
+
+In any other workspace, pick **Training Bootcamp** at the top of the workspace menu to come back here.
 
 ## XP, levels and badges
 

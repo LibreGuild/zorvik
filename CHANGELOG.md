@@ -9,7 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [0.1.1] - 2026-09-28
 
 ### Added
-- **Training Bootcamp:** a course inside Zorvik, from networking basics to load testing. 16 units of short lessons with diagrams, hands-on labs in the real workbench (practice servers start on your computer; a Lab Guide checks each step, with hints and "Do it for me"), quick checks, XP, levels, streaks, badges and a graduation certificate. Open it with **Academy** in the title bar; the Training Bootcamp workspace is always there and can be reset.
+- **Training Bootcamp:** a course inside Zorvik, from networking basics to load testing. 16 units of short lessons with diagrams, hands-on labs in the real workbench (practice servers start on your computer; a Lab Guide checks each step, with hints and "Do it for me"), quick checks, XP, levels, streaks, badges and a graduation certificate. Open it from **Training Bootcamp** at the top of the workspace menu or on the welcome screen; the Training Bootcamp workspace is always there and can be reset.
 - AI agents can create and change mock servers (`read_server`, `save_server`), build a mock from a folder or an OpenAPI document (`create_mock`), start a server on any free port, and read what it received (`get_server_traffic`).
 - AI agents can read Server-Sent Events streams with `send_request`, read several requests at once, set query parameters (also switched-off ones, with descriptions) and path parameters, read current variables (`get_variables`) and history (`read_history`), export a request as code (`export_request`), and add a small file to the workspace (`write_file`).
 - Copy a request as Kotlin (OkHttp), Swift (URLSession), JavaScript (fetch) or Python (requests) code, next to cURL.

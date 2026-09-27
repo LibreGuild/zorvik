@@ -53,7 +53,7 @@ export const TOPICS: DocTopic[] = [
       "XP, levels, ranks, streaks and badges; finish the capstone for the Zorvik Bootcamp Graduate certificate",
       "The Training Bootcamp workspace is always there and can't be deleted; Reset it from the Academy menu (progress stays)",
     ],
-    tryIt: ["Click Academy at the top of the window, then Start the Bootcamp.", "Stuck in a lab? Open a hint in the Lab Guide on the right."],
+    tryIt: ["Choose Training Bootcamp at the top of the workspace menu (or on the welcome screen), then Start the Bootcamp.", "Stuck in a lab? Open a hint in the Lab Guide on the right."],
     tip: "Already know a topic? Take the unit's Test out quiz to earn its badge right away.",
   },
   {

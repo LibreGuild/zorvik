@@ -7,7 +7,7 @@ import { Bot, Check, ChevronDown, Cookie, FolderOpen, GraduationCap, Keyboard, L
 import { DropdownMenu } from "radix-ui";
 import { isMac, pickFolder } from "../../lib/platform";
 import { errorMessage, isTauri } from "../../lib/rpc";
-import { enterBootcamp, isBootcampPath, openAcademy, setMode, useAcademy, useInBootcamp } from "../../store/academy";
+import { isBootcampPath, openAcademy, setMode, useAcademy, useInBootcamp } from "../../store/academy";
 import { disconnectAgent, useAgents } from "../../store/agents";
 import { stopLoadRun, useLoadTests } from "../../store/loadtests";
 import { saveSettings, useSettings } from "../../store/settings";
@@ -42,20 +42,20 @@ export function TitleBar() {
   );
 }
 
-/** Workbench | Academy: the normal app, or the Training Bootcamp's course. */
+/** Workbench | Academy, in the Training Bootcamp workspace only: its course, or the normal app. */
 function ModeSwitch() {
   const mode = useAcademy((s) => s.mode);
   const lab = useAcademy((s) => !!s.lab && !s.lab.finished);
-  const hasWorkspace = useWorkspace((s) => !!s.info);
-  const workbench = mode === "workbench" || !hasWorkspace;
+  const inBootcamp = useInBootcamp();
+  if (!inBootcamp) return null;
+  const workbench = mode === "workbench";
   const item = "relative flex h-[26px] items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-accent";
   return (
     <div className="ml-1 inline-flex rounded-lg bg-panel-2 p-0.5" role="group" aria-label="Workbench or Academy" data-testid="mode-switch">
       <button
         aria-pressed={workbench}
-        disabled={!hasWorkspace}
         onClick={() => void setMode("workbench")}
-        className={cx(item, workbench ? "bg-elev text-fg shadow-sm" : "text-muted hover:text-fg", !hasWorkspace && "hidden")}
+        className={cx(item, workbench ? "bg-elev text-fg shadow-sm" : "text-muted hover:text-fg")}
         data-testid="mode-workbench"
       >
         <LayoutPanelLeft size={13} />
@@ -127,7 +127,7 @@ function WorkspaceMenu() {
           label: <BootcampLabel />,
           icon: <GraduationCap size={15} className="text-accent" />,
           checked: bootcamp,
-          onSelect: () => void (bootcamp ? openAcademy() : enterBootcamp()),
+          onSelect: () => void openAcademy(),
         },
         { separator: true as const },
         { label: "Workspace settings…", icon: <SlidersHorizontal size={14} />, onSelect: () => openModal({ type: "workspaceSettings" }) },

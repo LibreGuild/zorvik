@@ -54,8 +54,9 @@ export function Welcome() {
   };
 
   return (
-    <div className="flex h-full items-center justify-center overflow-auto bg-bg p-8">
-      <div className="w-full max-w-[520px]">
+    // Scrolls from the top when the window is short (centering inside the scroller would cut the art off).
+    <div className="h-full overflow-auto bg-bg">
+      <div className="mx-auto flex min-h-full w-full max-w-[584px] flex-col justify-center px-8 py-8">
         <img
           src={welcomeArt}
           alt=""
