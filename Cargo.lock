@@ -7312,7 +7312,7 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 name = "zorvik-api"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "notify",
  "notify-debouncer-full",
  "serde",
@@ -7392,7 +7392,7 @@ dependencies = [
 name = "zorvik-engine"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "brotli-decompressor 6.0.1",
  "bytes",
  "cookie_store",
@@ -7443,7 +7443,7 @@ dependencies = [
 name = "zorvik-formats"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "indexmap 2.14.2",
  "serde",
  "serde_json",
@@ -7507,7 +7507,7 @@ dependencies = [
 name = "zorvik-servers"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "futures-util",
  "hickory-proto",
@@ -7539,7 +7539,7 @@ name = "zorvik-testkit"
 version = "0.1.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "brotli",
  "bytes",
  "flate2",
@@ -7571,7 +7571,7 @@ dependencies = [
 name = "zorvik-workspace"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "indexmap 2.14.2",
  "mime_guess",
