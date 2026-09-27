@@ -494,6 +494,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "brotli"
+version = "9.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8b851b75c23ca7873623d612fe49bd1989aeb03d08fb9432187eb253d3d4c6b"
+dependencies = [
+ "alloc-no-stdlib 3.0.0",
+ "alloc-stdlib 0.3.0",
+ "brotli-decompressor 6.0.1",
+]
+
+[[package]]
 name = "brotli-decompressor"
 version = "5.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4802,6 +4813,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha2"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.1",
+ "digest 0.11.3",
+]
+
+[[package]]
 name = "sharded-slab"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5257,7 +5279,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08279169ff42f8fc45a1dbc9dcae888893ba95288142e5880c59b93a26d2cfc5"
 dependencies = [
  "base64 0.22.1",
- "brotli",
+ "brotli 8.0.4",
  "ico",
  "json-patch",
  "plist",
@@ -5267,7 +5289,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "sha2",
+ "sha2 0.10.9",
  "syn 2.0.119",
  "tauri-utils",
  "thiserror 2.0.21",
@@ -5445,7 +5467,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3e176a18e67764923c4f1ce66f25ae4abe5f688384d5eb1a0fa6c77f3d90f887"
 dependencies = [
  "anyhow",
- "brotli",
+ "brotli 8.0.4",
  "cargo_metadata",
  "ctor",
  "dom_query",
@@ -7060,7 +7082,7 @@ dependencies = [
  "once_cell",
  "percent-encoding",
  "raw-window-handle",
- "sha2",
+ "sha2 0.10.9",
  "soup3",
  "tao-macros",
  "thiserror 2.0.21",
@@ -7312,7 +7334,7 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 name = "zorvik-api"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "notify",
  "notify-debouncer-full",
  "serde",
@@ -7392,7 +7414,7 @@ dependencies = [
 name = "zorvik-engine"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "brotli-decompressor 6.0.1",
  "bytes",
  "cookie_store",
@@ -7421,7 +7443,7 @@ dependencies = [
  "ruzstd",
  "serde",
  "serde_json",
- "sha2",
+ "sha2 0.11.0",
  "socket2",
  "tempfile",
  "thiserror 2.0.21",
@@ -7443,7 +7465,7 @@ dependencies = [
 name = "zorvik-formats"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "indexmap 2.14.2",
  "serde",
  "serde_json",
@@ -7481,7 +7503,7 @@ dependencies = [
  "dirs 7.0.0",
  "serde",
  "serde_json",
- "sha2",
+ "sha2 0.11.0",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -7507,7 +7529,7 @@ dependencies = [
 name = "zorvik-servers"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "futures-util",
  "hickory-proto",
@@ -7539,8 +7561,8 @@ name = "zorvik-testkit"
 version = "0.1.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
- "brotli",
+ "base64 0.23.1",
+ "brotli 9.0.0",
  "bytes",
  "flate2",
  "futures-util",
@@ -7559,7 +7581,7 @@ dependencies = [
  "rustls-pki-types",
  "serde",
  "serde_json",
- "sha2",
+ "sha2 0.11.0",
  "time",
  "tokio",
  "tokio-rustls",
@@ -7571,7 +7593,7 @@ dependencies = [
 name = "zorvik-workspace"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "indexmap 2.14.2",
  "mime_guess",
@@ -7580,7 +7602,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
- "sha2",
+ "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.21",
  "time",
