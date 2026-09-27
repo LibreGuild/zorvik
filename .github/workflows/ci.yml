@@ -103,7 +103,8 @@ jobs:
   # ---- releases ------------------------------------------------------------------------------------
   # A `v*` tag publishes that version (it must match the version in the code). Every push to `main`
   # replaces the "nightly" pre-release. The builds upload to a draft of this run; `publish` makes it
-  # public only when all of them succeeded, so a failed build never replaces a release.
+  # public only when all of them succeeded, so a failed build never replaces a release. A run only
+  # ever touches its own draft: a tag and `main` can build at the same time.
 
   release-draft:
     name: Start the release
@@ -146,11 +147,8 @@ jobs:
             echo "channel=nightly" >> "$GITHUB_OUTPUT"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - name: Create the draft (and drop drafts of earlier runs)
+      - name: Create the draft
         run: |
-          set -euo pipefail
-          gh release list --limit 100 --json tagName,isDraft --jq '.[] | select(.isDraft and (.tagName | startswith("build-"))) | .tagName' \
-            | xargs -r -n1 gh release delete --yes
           gh release create "build-${{ github.run_number }}" --draft --target "$GITHUB_SHA" \
             --title "Zorvik build ${{ github.run_number }}" --notes "Building…"
 
@@ -364,3 +362,18 @@ jobs:
             sleep $((attempt * 5))
           done
           exit 1
+
+  discard-draft:
+    name: Discard the draft
+    # A build failed or the run was cancelled: remove this run's draft (drafts are never public).
+    needs: [release-draft, build-windows, build-macos, build-linux, publish]
+    if: always() && needs.release-draft.result == 'success' && needs.publish.result != 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Delete the draft
+        run: gh release delete "build-${{ github.run_number }}" --yes || true
