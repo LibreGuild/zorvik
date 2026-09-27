@@ -26,7 +26,7 @@ After the checks pass, `release-draft` creates a draft release for the run and c
    ```bash
    cd app && npm run set-version -- 0.2.0
    ```
-   This updates `Cargo.toml`, `Cargo.lock`, `app/package.json`, `app/package-lock.json` and `tauri.conf.json`.
+   This updates `Cargo.toml`, `Cargo.lock`, `app/package.json`, `app/package-lock.json` and `tauri.conf.json`. In the same pull request, move the `Unreleased` notes in [`CHANGELOG.md`](../CHANGELOG.md) under the new version.
 3. After it merges, tag the merge commit. The tag message opens the release notes:
    ```bash
    git switch main && git pull
@@ -56,6 +56,6 @@ The builds are not code-signed yet. Windows SmartScreen asks once (**More info â
 
 ## Repository automation
 - **Dependabot** opens grouped weekly updates for Cargo, npm and GitHub Actions ([`.github/dependabot.yml`](../.github/dependabot.yml)), plus immediate security updates.
-- **CodeQL** scans the Rust, TypeScript and workflow code on every push and pull request.
+- **CodeQL** scans the TypeScript and workflow code on every push and pull request.
 - **Secret scanning** with push protection blocks commits that contain credentials.
 - `main` is protected: changes arrive through pull requests with passing checks; no force pushes or deletion.

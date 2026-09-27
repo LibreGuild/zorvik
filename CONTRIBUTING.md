@@ -61,7 +61,7 @@ npm run e2e                    # Playwright against the real backend (see docs/t
 - **Match the code around you:** naming, comments, error messages and structure. Keep changes focused; unrelated refactors belong in their own PR.
 - **Add tests** for behaviour you add or fix: Rust tests next to the code or in the crate's `tests/`, Vitest for UI logic, Playwright for user flows.
 - **Write for users.** Messages, labels and docs use plain words and say what to do next.
-- **Keep the docs true.** When a feature changes, update its topic in the in-app docs (`app/src/components/docs/content.ts`) and the README; when the design changes, update `docs/`.
+- **Keep the docs true.** When a feature changes, update its topic in the in-app docs (`app/src/components/docs/content.ts`) and the README; when the design changes, update `docs/`. Note user-visible changes under `Unreleased` in [CHANGELOG.md](CHANGELOG.md).
 - **Generated files:** `app/src/bindings/*.ts` come from Rust (`cargo test`); don't edit them by hand.
 - **Security matters here.** Workspace files come from Git and are untrusted; requests may carry secrets. Keep secrets out of files, logs and error messages.
 

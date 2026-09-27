@@ -1,4 +1,5 @@
-# Weekly dependency updates, grouped so each ecosystem opens one pull request.
+# Weekly dependency updates: one pull request per ecosystem for minor and patch
+# updates, and one for major updates (which may need code changes).
 # Security updates are separate and immediate (repository settings).
 version: 2
 updates:
@@ -7,22 +8,28 @@ updates:
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 5
     labels: ["dependencies", "rust"]
     groups:
       rust:
         update-types: ["minor", "patch"]
+      rust-major:
+        update-types: ["major"]
 
   - package-ecosystem: npm
     directory: /app
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 5
     labels: ["dependencies", "javascript"]
+    ignore:
+      # Types follow the Node.js version CI and contributors use (22 LTS).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       npm:
         update-types: ["minor", "patch"]
+      npm-major:
+        update-types: ["major"]
 
   - package-ecosystem: github-actions
     directory: /
