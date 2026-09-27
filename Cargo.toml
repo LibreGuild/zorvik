@@ -84,7 +84,7 @@ uuid = { version = "1", features = ["v4"] }
 time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
 rand = "0.10"
 base64 = "0.22"
-sha2 = "0.10"
+sha2 = "0.11"
 rusqlite = { version = "0.40", features = ["bundled"] }
 ts-rs = { version = "12", features = ["serde-json-impl"] }
 trash = "5"
