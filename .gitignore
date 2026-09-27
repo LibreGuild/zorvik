@@ -1,0 +1,12 @@
+/target
+.DS_Store
+*.swp
+.idea/
+.vscode/
+/dist
+/portable
+.claude/
+app/test-results/
+app/playwright-report/
+# The CLI copied in for packaging (npm run package).
+app/src-tauri/binaries/

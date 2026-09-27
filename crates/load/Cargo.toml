@@ -1,0 +1,34 @@
+[package]
+name = "zorvik-load"
+description = "Load generator for Zorvik: virtual users and arrival-rate models, HdrHistogram metrics, thresholds, reports"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+zorvik-engine.workspace = true
+zorvik-formats.workspace = true
+tokio.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
+serde.workspace = true
+serde_json.workspace = true
+ts-rs.workspace = true
+tracing.workspace = true
+hdrhistogram.workspace = true
+# Generator CPU for the dashboard (this process only).
+sysinfo = { workspace = true, features = ["system"] }
+
+[target.'cfg(unix)'.dependencies]
+# Raise the open-file limit (macOS defaults to 256 descriptors).
+rlimit.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# 1 ms timers during a run (`timeBeginPeriod`); the default 15.6 ms tick delays scheduled starts.
+windows-sys = { workspace = true, features = ["Win32_Media"] }
+
+[dev-dependencies]
+zorvik-testkit.workspace = true
+bytes.workspace = true

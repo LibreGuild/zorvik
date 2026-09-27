@@ -1,0 +1,40 @@
+[package]
+name = "zorvik-servers"
+description = "Servers run by Zorvik: mock HTTP, WebSocket, SSE, TCP, UDP, DNS and a TCP relay"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+zorvik-engine.workspace = true
+zorvik-formats.workspace = true
+zorvik-workspace.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures-util.workspace = true
+bytes.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+rustls-pki-types.workspace = true
+rcgen.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ts-rs.workspace = true
+tracing.workspace = true
+base64.workspace = true
+regex.workspace = true
+# Mock HTTP, WebSocket and SSE servers.
+hyper.workspace = true
+hyper-util.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+tokio-tungstenite.workspace = true
+rand.workspace = true
+# DNS server.
+hickory-proto = { workspace = true, features = ["std"] }
+
+[dev-dependencies]
+tempfile.workspace = true

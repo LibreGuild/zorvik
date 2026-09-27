@@ -1,0 +1,29 @@
+[package]
+name = "zorvik-cli"
+description = "Command-line runner for Zorvik workspaces"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "zorvik"
+path = "src/main.rs"
+
+[dependencies]
+zorvik-api.workspace = true
+zorvik-engine.workspace = true
+zorvik-workspace.workspace = true
+zorvik-servers.workspace = true
+zorvik-load.workspace = true
+zorvik-mcp.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+zorvik-testkit.workspace = true
+tempfile.workspace = true

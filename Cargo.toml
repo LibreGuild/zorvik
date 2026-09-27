@@ -1,0 +1,121 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/engine",
+    "crates/formats",
+    "crates/workspace",
+    "crates/api",
+    "crates/cli",
+    "crates/testkit",
+    "crates/devbridge",
+    "crates/servers",
+    "crates/load",
+    "crates/script",
+    "crates/mcp",
+    "app/src-tauri",
+]
+default-members = [
+    "crates/engine",
+    "crates/formats",
+    "crates/workspace",
+    "crates/api",
+    "crates/cli",
+    "crates/testkit",
+    "crates/devbridge",
+    "crates/servers",
+    "crates/load",
+    "crates/script",
+    "crates/mcp",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+authors = ["The Zorvik contributors"]
+repository = "https://github.com/LibreGuild/zorvik"
+homepage = "https://github.com/LibreGuild/zorvik"
+publish = false
+
+[workspace.dependencies]
+zorvik-engine = { path = "crates/engine" }
+zorvik-formats = { path = "crates/formats" }
+zorvik-workspace = { path = "crates/workspace" }
+zorvik-api = { path = "crates/api" }
+zorvik-testkit = { path = "crates/testkit" }
+zorvik-servers = { path = "crates/servers" }
+zorvik-load = { path = "crates/load" }
+zorvik-script = { path = "crates/script" }
+zorvik-mcp = { path = "crates/mcp" }
+
+tokio = { version = "1.53", features = ["full"] }
+tokio-util = "0.7"
+futures-util = "0.3"
+# JavaScript scripts: QuickJS, compiled from C by `cc`.
+rquickjs = { version = "0.14", features = ["macro"] }
+# gRPC: dynamic messages, JSON mapping, `.proto` compiling without protoc.
+prost = "0.14"
+prost-reflect = { version = "0.16", features = ["serde"] }
+protox = "0.9"
+hyper = { version = "1.11", features = ["client", "server", "http1", "http2"] }
+hyper-util = { version = "0.1.21", features = ["tokio", "server", "server-auto", "service", "http1", "http2"] }
+http = "1"
+http-body-util = "0.1.5"
+bytes = "1"
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26.5", default-features = false, features = ["ring", "tls12", "logging"] }
+rustls-platform-verifier = "0.7.1"
+rustls-pki-types = { version = "1", features = ["std"] }
+x509-parser = "0.18"
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+url = "2.5"
+flate2 = "1.1"
+brotli-decompressor = "6"
+ruzstd = "0.9"
+cookie_store = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml_ng = "0.10"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+rand = "0.10"
+base64 = "0.22"
+sha2 = "0.10"
+rusqlite = { version = "0.40", features = ["bundled"] }
+ts-rs = { version = "12", features = ["serde-json-impl"] }
+trash = "5"
+notify = "8"
+notify-debouncer-full = "0.7"
+clap = { version = "4.6", features = ["derive"] }
+axum = { version = "0.8", features = ["ws", "multipart"] }
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+mime_guess = "2"
+indexmap = { version = "2", features = ["serde"] }
+dirs = "7"
+tempfile = "3"
+regex = "1"
+# Servers and low-level clients. Crates add the features they need; the TLS
+# stack must stay on `ring` (no aws-lc-rs: it needs CMake/NASM on Windows).
+hickory-proto = { version = "0.26", default-features = false }
+hickory-resolver = { version = "0.26", default-features = false }
+rumqttc = { version = "0.25", default-features = false }
+quinn = { version = "0.11", default-features = false }
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
+if-addrs = "0.15"
+socket2 = "0.6"
+windows-sys = "0.61"
+# Load testing.
+hdrhistogram = { version = "7.5", default-features = false }
+sysinfo = { version = "0.39", default-features = false }
+rlimit = "0.11"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true
+panic = "unwind"

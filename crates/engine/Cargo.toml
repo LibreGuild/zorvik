@@ -1,0 +1,71 @@
+[package]
+name = "zorvik-engine"
+description = "Protocol engine: HTTP/1.1, HTTP/2, WebSocket, SSE with timing, TLS, proxies"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+prost.workspace = true
+prost-reflect.workspace = true
+protox.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+rustls-platform-verifier.workspace = true
+rustls-pki-types.workspace = true
+x509-parser.workspace = true
+tokio-tungstenite.workspace = true
+url.workspace = true
+percent-encoding = "2"
+flate2.workspace = true
+brotli-decompressor.workspace = true
+ruzstd.workspace = true
+cookie_store.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+base64.workspace = true
+ts-rs.workspace = true
+time.workspace = true
+# HTTP/3: QUIC on tokio with rustls/ring (no aws-lc-rs).
+quinn = { workspace = true, features = ["runtime-tokio", "rustls-ring"] }
+# Only for the crypto session types quinn does not re-export (see h3.rs CipherProbe).
+quinn-proto = { version = "0.11", default-features = false }
+h3.workspace = true
+h3-quinn.workspace = true
+# Network tools: interfaces, ICMP sockets, certificate fingerprints.
+if-addrs.workspace = true
+socket2.workspace = true
+sha2.workspace = true
+# DNS client: hickory for the wire format and the OS resolver configuration
+# (transports are ours, so TLS stays on the engine's rustls/ring config).
+hickory-proto = { workspace = true, features = ["std"] }
+hickory-resolver = { workspace = true, features = ["system-config"] }
+# MQTT client: rumqttc's packet codec (v3.1.1 + v5) over the engine's TCP/TLS.
+rumqttc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+# ICMP echo (ping) through IcmpSendEcho2 / Icmp6SendEcho2.
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
+    "Win32_System_IO",
+] }
+
+[dev-dependencies]
+rcgen.workspace = true
+zorvik-testkit.workspace = true
+tempfile.workspace = true

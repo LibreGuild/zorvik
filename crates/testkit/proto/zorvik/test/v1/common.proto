@@ -1,0 +1,16 @@
+// Shared types of the Zorvik test service (a separate file, so loading
+// the service exercises imports and reflection dependencies).
+syntax = "proto3";
+
+package zorvik.test.v1;
+
+enum Mood {
+  MOOD_UNSPECIFIED = 0;
+  HAPPY = 1;
+  GRUMPY = 2;
+}
+
+message Tag {
+  string name = 1;
+  Tag parent = 2;
+}

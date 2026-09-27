@@ -1,0 +1,361 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Read-only by default; only the release job gets write access.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  ZORVIK_TEST_TRASH: "1"
+
+jobs:
+  rust-linux:
+    name: Rust (Linux) — fmt, clippy, tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests
+        env:
+          ZORVIK_TEST_TRASH: ""
+        run: cargo test --no-fail-fast
+      - name: TypeScript bindings are up to date
+        # `add -N` makes newly generated (untracked) binding files show up in the diff too.
+        run: |
+          git add -N app/src/bindings
+          git diff --exit-code -- app/src/bindings
+
+  rust-windows:
+    name: Rust (Windows) — tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Tests
+        run: cargo test --no-fail-fast
+
+  ui:
+    name: UI — typecheck, unit tests, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  e2e:
+    name: E2E (Playwright + real backend)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Build dev bridge, test server and CLI (AI agent tests run `zorvik mcp`)
+        run: cargo build -p zorvik-devbridge -p zorvik-testkit -p zorvik-cli
+      - name: Install UI deps
+        working-directory: app
+        run: npm ci && npx playwright install --with-deps chromium
+      - name: Run E2E
+        working-directory: app
+        run: npm run e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        continue-on-error: true
+        with:
+          name: playwright-report
+          path: app/playwright-report
+          retention-days: 7
+
+  # ---- releases ------------------------------------------------------------------------------------
+  # A `v*` tag publishes that version (it must match the version in the code). Every push to `main`
+  # replaces the "nightly" pre-release. The builds upload to a draft of this run; `publish` makes it
+  # public only when all of them succeeded, so a failed build never replaces a release.
+
+  release-draft:
+    name: Start the release
+    needs: [rust-linux, rust-windows, ui, e2e]
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      channel: ${{ steps.channel.outputs.channel }}
+      version: ${{ steps.channel.outputs.version }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Channel and version
+        id: channel
+        run: |
+          set -euo pipefail
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          for file in app/package.json app/src-tauri/tauri.conf.json; do
+            other=$(jq -r .version "$file")
+            if [ "$other" != "$version" ]; then
+              echo "::error file=$file::version $other differs from Cargo.toml ($version)"
+              exit 1
+            fi
+          done
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match the version in the code ($version)"
+              exit 1
+            fi
+            echo "channel=stable" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=nightly" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Create the draft (and drop drafts of earlier runs)
+        run: |
+          set -euo pipefail
+          gh release list --limit 100 --json tagName,isDraft --jq '.[] | select(.isDraft and (.tagName | startswith("build-"))) | .tagName' \
+            | xargs -r -n1 gh release delete --yes
+          gh release create "build-${{ github.run_number }}" --draft --target "$GITHUB_SHA" \
+            --title "Zorvik build ${{ github.run_number }}" --notes "Building…"
+
+  build-windows:
+    name: Build Windows (installer, portable)
+    needs: release-draft
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      # Shown in Settings next to the version (nightly builds only).
+      ZORVIK_BUILD: ${{ needs.release-draft.outputs.channel == 'nightly' && format('nightly {0} · {1}', github.run_number, github.sha) || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Keep the write token out of .git/config while npm/cargo build scripts run.
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Install UI deps
+        working-directory: app
+        run: npm ci
+      - name: Build the app with the CLI inside
+        working-directory: app
+        shell: bash
+        run: |
+          rm -rf ../target/release/bundle
+          npm run package -- --bundles nsis
+      - name: Collect
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $nsis = Get-ChildItem target/release/bundle/nsis/*.exe | Select-Object -First 1
+          Copy-Item $nsis.FullName dist/Zorvik-Windows-Setup-x64.exe
+          New-Item -ItemType Directory -Force portable | Out-Null
+          Copy-Item "target/release/zorvik-desktop.exe" "portable/zorvik-desktop.exe"
+          Copy-Item "target/release/zorvik.exe" "portable/zorvik.exe"
+          Compress-Archive -Path portable/* -DestinationPath dist/Zorvik-Windows-Portable-x64.zip
+          Get-ChildItem dist | Format-Table Name, Length
+      - name: Upload to the draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "build-${{ github.run_number }}" dist/* --clobber
+
+  build-macos:
+    name: Build macOS (universal DMG)
+    needs: release-draft
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    env:
+      ZORVIK_BUILD: ${{ needs.release-draft.outputs.channel == 'nightly' && format('nightly {0} · {1}', github.run_number, github.sha) || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Install UI deps
+        working-directory: app
+        run: npm ci
+      - name: Build the app with the CLI inside (Apple silicon + Intel)
+        working-directory: app
+        run: |
+          rm -rf ../target/universal-apple-darwin/release/bundle
+          npm run package -- --target universal-apple-darwin --bundles app,dmg
+      - name: Collect
+        run: |
+          mkdir -p dist
+          cp target/universal-apple-darwin/release/bundle/dmg/*.dmg dist/Zorvik-macOS-universal.dmg
+          ls -l dist
+      - name: Upload to the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "build-${{ github.run_number }}" dist/* --clobber
+
+  build-linux:
+    name: Build Linux (deb, rpm, AppImage)
+    needs: release-draft
+    # The oldest supported Ubuntu: packages built here run on newer systems (glibc).
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      ZORVIK_BUILD: ${{ needs.release-draft.outputs.channel == 'nightly' && format('nightly {0} · {1}', github.run_number, github.sha) || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: System libraries (WebKitGTK and friends)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf file
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Install UI deps
+        working-directory: app
+        run: npm ci
+      - name: Build the app with the CLI inside
+        working-directory: app
+        run: |
+          rm -rf ../target/release/bundle
+          npm run package -- --bundles deb,rpm,appimage
+      - name: Collect
+        run: |
+          mkdir -p dist
+          cp target/release/bundle/deb/*.deb dist/Zorvik-Linux-amd64.deb
+          cp target/release/bundle/rpm/*.rpm dist/Zorvik-Linux-x86_64.rpm
+          cp target/release/bundle/appimage/*.AppImage dist/Zorvik-Linux-x86_64.AppImage
+          ls -l dist
+      - name: Upload to the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "build-${{ github.run_number }}" dist/* --clobber
+
+  publish:
+    name: Publish the release
+    needs: [release-draft, build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release-${{ needs.release-draft.outputs.channel }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      CHANNEL: ${{ needs.release-draft.outputs.channel }}
+      VERSION: ${{ needs.release-draft.outputs.version }}
+      DRAFT: build-${{ github.run_number }}
+    steps:
+      - name: Release notes
+        run: |
+          set -euo pipefail
+          : > notes.md
+          if [ "$CHANNEL" = stable ]; then
+            # The tag's message (an annotated tag) opens the notes.
+            ref=$(gh api "repos/$GH_REPO/git/ref/tags/$GITHUB_REF_NAME")
+            if [ "$(jq -r .object.type <<< "$ref")" = tag ]; then
+              gh api "repos/$GH_REPO/git/tags/$(jq -r .object.sha <<< "$ref")" --jq .message >> notes.md
+              printf '\n' >> notes.md
+            fi
+          else
+            # shellcheck disable=SC2016 # the backticks are Markdown
+            printf 'Built from `main` (build %s, commit %s). For trying out what is next: use a [release](https://github.com/%s/releases/latest) for everyday work.\n\n' \
+              "$GITHUB_RUN_NUMBER" "${GITHUB_SHA::7}" "$GH_REPO" >> notes.md
+          fi
+          cat >> notes.md <<'NOTES'
+          ## Downloads
+          Each download has the app **and** the `zorvik` command line.
+
+          | System | File | Notes |
+          |---|---|---|
+          | Windows 10/11 | `Zorvik-Windows-Setup-x64.exe` | Installer for your user (no admin); puts `zorvik` on PATH |
+          | Windows 10/11 | `Zorvik-Windows-Portable-x64.zip` | No install: unzip and run `zorvik-desktop.exe` (`zorvik.exe` is beside it) |
+          | macOS 11+ (Apple silicon and Intel) | `Zorvik-macOS-universal.dmg` | Drag to Applications. For `zorvik` in a terminal: Settings → AI agents → Add zorvik to PATH |
+          | Ubuntu 22.04+ / Debian 12+ | `Zorvik-Linux-amd64.deb` | `sudo apt install ./Zorvik-Linux-amd64.deb` |
+          | Fedora / RHEL / openSUSE | `Zorvik-Linux-x86_64.rpm` | `sudo dnf install ./Zorvik-Linux-x86_64.rpm` |
+          | Any Linux (x86-64) | `Zorvik-Linux-x86_64.AppImage` | `chmod +x` and run |
+
+          The builds are not code-signed yet. **Windows:** if SmartScreen appears, choose **More info → Run anyway**. **macOS:** the first open is blocked; open System Settings → Privacy & Security → **Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/Zorvik.app`.
+          NOTES
+          if [ "$CHANNEL" = stable ]; then
+            # What changed: merged pull requests since the previous release (.github/release.yml).
+            printf '\n' >> notes.md
+            gh api "repos/$GH_REPO/releases/generate-notes" -f tag_name="$GITHUB_REF_NAME" --jq .body >> notes.md
+          fi
+      - name: Publish
+        run: |
+          set -euo pipefail
+          if [ "$CHANNEL" = stable ]; then
+            args=(--tag "$GITHUB_REF_NAME" --latest --title "Zorvik $VERSION")
+          else
+            # Move the "nightly" tag to this commit and replace the previous nightly release.
+            gh release delete nightly --yes --cleanup-tag || true
+            gh api "repos/$GH_REPO/git/refs" -f ref=refs/tags/nightly -f sha="$GITHUB_SHA" > /dev/null \
+              || gh api -X PATCH "repos/$GH_REPO/git/refs/tags/nightly" -f sha="$GITHUB_SHA" -F force=true > /dev/null
+            args=(--tag nightly --prerelease --latest=false --title "Zorvik nightly (build $GITHUB_RUN_NUMBER)")
+          fi
+          # Retried: a transient API error must not leave the draft unpublished.
+          for attempt in 1 2 3 4 5; do
+            if gh release edit "$DRAFT" "${args[@]}" --draft=false --notes-file notes.md; then
+              exit 0
+            fi
+            sleep $((attempt * 5))
+          done
+          exit 1

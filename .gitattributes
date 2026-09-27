@@ -1,0 +1,5 @@
+# LF everywhere so tests and generated bindings match on Windows runners.
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.icns binary

@@ -1,0 +1,42 @@
+[package]
+name = "zorvik-testkit"
+description = "Local test servers (HTTP/1.1, HTTP/2, TLS, WebSocket, SSE, proxy, OAuth2) for tests and manual QA"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "zorvik-testserver"
+path = "src/main.rs"
+
+[dependencies]
+tokio.workspace = true
+futures-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
+axum.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+rustls-pki-types.workspace = true
+rcgen.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+flate2.workspace = true
+base64.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+brotli = "8"
+time.workspace = true
+sha2.workspace = true
+quinn = { workspace = true, features = ["runtime-tokio", "rustls-ring"] }
+h3.workspace = true
+h3-quinn.workspace = true
+# gRPC test server: dynamic messages and the test service compiled at startup.
+prost.workspace = true
+prost-reflect.workspace = true
+protox.workspace = true

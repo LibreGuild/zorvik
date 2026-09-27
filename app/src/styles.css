@@ -1,0 +1,353 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  /* Settings → General: a font put first in each stack, the code text size, ligatures. */
+  --ui-font-pick: ui-sans-serif;
+  --code-font-pick: ui-monospace;
+  --code-size: 13px;
+  --code-ligatures: none;
+
+  /* Light: warm ivory, inspired by claude.ai */
+  --bg: #faf9f5;
+  --panel: #f5f4ed;
+  --panel-2: #efede5;
+  --input: #ffffff;
+  --elev: #ffffff;
+  --hover: #e9e6dc;
+  --border: #e6e3d9;
+  --border-strong: #d1cdbf;
+  --text: #141413;
+  --muted: #5e5d59;
+  --faint: #73726c;
+  --accent: #b3532f;
+  --accent-strong: #b3532f;
+  --accent-soft: #b3532f1c;
+  --accent-fg: #ffffff;
+  --success: #3f7d3a;
+  --warning: #9a6a12;
+  --danger: #b8372b;
+  --info: #2f6aa3;
+  --m-get: #3f7d3a;
+  --m-post: #9a6a12;
+  --m-put: #2f6aa3;
+  --m-patch: #7b53b0;
+  --m-delete: #b8372b;
+  --m-head: #6b6962;
+  --m-options: #a8467a;
+  --m-ws: #2d7f8c;
+  --m-sse: #b25a22;
+  --m-tcp: #4b6fa8;
+  --m-udp: #7a6a2a;
+  --m-dns: #5c7f3f;
+  --m-mqtt: #8a4f9e;
+  --m-grpc: #5058c8;
+  --m-gql: #b8327a;
+  --syn-string: #4f7a28;
+  --syn-number: #9a6a12;
+  --syn-bool: #8a4b9c;
+  --syn-null: #8a4b9c;
+  --syn-property: #2f5d8c;
+  --syn-keyword: #8a4b9c;
+  --syn-tag: #b25a22;
+  --syn-comment: #8a877f;
+  --var-ok-bg: #b3532f1f;
+  --var-ok-fg: #9c4526;
+  --var-bad-bg: #b8372b1f;
+  --var-bad-fg: #b8372b;
+  --shadow: 0 12px 32px -12px rgb(40 30 20 / 0.22), 0 2px 6px rgb(40 30 20 / 0.08);
+  color-scheme: light;
+}
+
+.dark {
+  /* Dark: warm charcoal + terracotta, inspired by claude.ai */
+  --bg: #262624;
+  --panel: #1f1e1d;
+  --panel-2: #2b2a27;
+  --input: #30302e;
+  --elev: #30302e;
+  --hover: #353431;
+  --border: #363532;
+  --border-strong: #4a4944;
+  --text: #faf9f5;
+  --muted: #c2c0b6;
+  --faint: #9c9a92;
+  --accent: #d97757;
+  --accent-strong: #b95a3a;
+  --accent-soft: #d977572b;
+  --accent-fg: #ffffff;
+  --success: #86bd7c;
+  --warning: #e3b55e;
+  --danger: #e5786c;
+  --info: #7fa9d6;
+  --m-get: #86bd7c;
+  --m-post: #e3b55e;
+  --m-put: #7fa9d6;
+  --m-patch: #b89cda;
+  --m-delete: #e5786c;
+  --m-head: #a8a59d;
+  --m-options: #d98cb1;
+  --m-ws: #6fbac5;
+  --m-sse: #e3935f;
+  --m-tcp: #8fb0e3;
+  --m-udp: #d6c07a;
+  --m-dns: #a3cf85;
+  --m-mqtt: #c79be0;
+  --m-grpc: #a4aaf2;
+  --m-gql: #ec7fbd;
+  --syn-string: #b6cd8f;
+  --syn-number: #e3b55e;
+  --syn-bool: #d6a0c4;
+  --syn-null: #d6a0c4;
+  --syn-property: #93b8dc;
+  --syn-keyword: #c9a0dc;
+  --syn-tag: #e3935f;
+  --syn-comment: #85837c;
+  --var-ok-bg: #d977572e;
+  --var-ok-fg: #eb9a7c;
+  --var-bad-bg: #e5786c2e;
+  --var-bad-fg: #f09a90;
+  --shadow: 0 18px 44px -14px rgb(0 0 0 / 0.65), 0 2px 8px rgb(0 0 0 / 0.35);
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-panel-2: var(--panel-2);
+  --color-input: var(--input);
+  --color-elev: var(--elev);
+  --color-hover: var(--hover);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-fg: var(--text);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-fg: var(--accent-fg);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+  --font-sans: var(--ui-font-pick), -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: var(--code-font-pick), "SF Mono", "Cascadia Code", "Cascadia Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --shadow-pop: var(--shadow);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+input,
+textarea,
+[contenteditable],
+.selectable,
+.cm-editor {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+button {
+  cursor: default;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 10px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+/* Text fields show focus with their own border, or their field's (focus-within): a second
+   outline would draw a double border. Table cells have no border of their own, so fields
+   inside them keep the outline. Unlayered, so it also beats Tailwind's outline utilities. */
+:is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"]), textarea, select, [contenteditable]):focus-visible:not([role="cell"] *) {
+  outline: none;
+}
+
+/* {{variable}} highlighting in inputs and editors */
+.zv-var {
+  border-radius: 3px;
+  background: var(--var-ok-bg);
+  color: var(--var-ok-fg);
+}
+.zv-var-missing {
+  border-radius: 3px;
+  background: var(--var-bad-bg);
+  color: var(--var-bad-fg);
+}
+
+/* CodeMirror */
+.cm-editor {
+  height: 100%;
+  font-size: var(--code-size);
+  background: transparent;
+}
+.cm-editor.cm-focused {
+  outline: none;
+}
+.cm-scroller {
+  font-family: var(--font-mono) !important;
+  font-variant-ligatures: var(--code-ligatures);
+  line-height: 1.55 !important;
+}
+.cm-gutters {
+  background: transparent !important;
+  border-right: none !important;
+  color: var(--faint) !important;
+}
+.cm-activeLineGutter,
+.cm-activeLine {
+  background: color-mix(in srgb, var(--hover) 60%, transparent) !important;
+}
+.cm-cursor {
+  border-left-color: var(--text) !important;
+}
+.cm-selectionBackground,
+.cm-focused .cm-selectionBackground,
+::selection {
+  background: var(--accent-soft) !important;
+}
+.cm-searchMatch {
+  background: color-mix(in srgb, var(--warning) 30%, transparent) !important;
+}
+.cm-searchMatch-selected {
+  background: color-mix(in srgb, var(--warning) 55%, transparent) !important;
+}
+.cm-panels {
+  background: var(--panel-2) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+.cm-panel input,
+.cm-panel button {
+  font-family: var(--font-sans);
+  font-size: 12px;
+}
+.cm-panel.cm-search input[type="text"],
+.cm-textfield {
+  background: var(--panel) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: 5px;
+  color: var(--text);
+  padding: 2px 6px !important;
+}
+.cm-button {
+  background-image: none !important;
+  background: var(--panel) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: 5px !important;
+  color: var(--text) !important;
+}
+.cm-foldPlaceholder {
+  background: var(--accent-soft) !important;
+  border: none !important;
+  color: var(--accent) !important;
+  padding: 0 4px !important;
+}
+.cm-tooltip {
+  background: var(--elev) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  color: var(--text);
+}
+.cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background: var(--accent-soft) !important;
+  color: var(--text) !important;
+}
+.cm-placeholder {
+  color: var(--faint) !important;
+}
+/* GraphQL hover docs */
+.zv-gql-hover {
+  max-width: 420px;
+  max-height: 280px;
+  overflow: auto;
+  padding: 6px 9px;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+@keyframes zv-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.zv-spin {
+  animation: zv-spin 0.8s linear infinite;
+}
+
+@keyframes zv-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.zv-pop {
+  animation: zv-pop 0.12s ease-out;
+}
+
+@keyframes zv-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.zv-fade {
+  animation: zv-fade 0.15s ease-out;
+}

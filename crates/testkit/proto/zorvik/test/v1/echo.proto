@@ -1,0 +1,54 @@
+// The Zorvik gRPC test service (crates/testkit/src/grpc.rs).
+syntax = "proto3";
+
+package zorvik.test.v1;
+
+import "zorvik/test/v1/common.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+service Echo {
+  // Answers with the request. `delay_ms` waits first.
+  rpc Unary(EchoRequest) returns (EchoReply);
+  // Answers `count` times (default 3), `delay_ms` apart.
+  rpc ServerStream(EchoRequest) returns (stream EchoReply);
+  // Collects the messages and answers once the client is done.
+  rpc ClientStream(stream EchoRequest) returns (EchoReply);
+  // Answers every message right away.
+  rpc Bidi(stream EchoRequest) returns (stream EchoReply);
+  // Fails with `code` (default 5, NOT_FOUND) and `message`, with details.
+  rpc Fail(FailRequest) returns (EchoReply);
+  // Returns the request metadata; sends a header and a trailer.
+  rpc Metadata(google.protobuf.Empty) returns (MetadataReply);
+}
+
+message EchoRequest {
+  string message = 1;
+  int32 count = 2;
+  int64 delay_ms = 3;
+  Mood mood = 4;
+  repeated Tag tags = 5;
+  map<string, string> labels = 6;
+  oneof choice {
+    string text = 7;
+    int32 number = 8;
+  }
+  bytes data = 9;
+  google.protobuf.Timestamp at = 10;
+}
+
+message EchoReply {
+  string message = 1;
+  int32 index = 2;
+  EchoRequest request = 3;
+  repeated string messages = 4;
+}
+
+message FailRequest {
+  int32 code = 1;
+  string message = 2;
+}
+
+message MetadataReply {
+  map<string, string> metadata = 1;
+}

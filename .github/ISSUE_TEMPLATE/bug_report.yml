@@ -1,0 +1,83 @@
+name: Bug report
+description: Something doesn't work as it should.
+labels: ["bug", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please search the [existing issues](https://github.com/LibreGuild/zorvik/issues) first.
+        **Security problems:** don't file them here; see [SECURITY.md](https://github.com/LibreGuild/zorvik/blob/main/SECURITY.md).
+        Remove tokens, passwords and private hosts from anything you paste.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you see, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest set of steps that shows the problem. A request file or an exported cURL command helps a lot.
+      placeholder: |
+        1. Create an HTTP request to …
+        2. Set …
+        3. Press Send
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - HTTP requests
+        - GraphQL
+        - gRPC
+        - WebSocket / SSE / TCP / UDP / MQTT / DNS
+        - Variables, environments or auth
+        - Scripts and tests
+        - Collection runner
+        - Load testing
+        - Mock APIs and servers
+        - Network tools
+        - Import / export
+        - Command line (zorvik)
+        - AI agents (MCP)
+        - Installing or updating
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Zorvik version
+      description: Shown at the bottom of Settings, or run `zorvik --version`.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (Apple silicon)
+        - macOS (Intel)
+        - Linux (deb)
+        - Linux (rpm)
+        - Linux (AppImage)
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or error messages
+      description: Error text, or the end of the app log (macOS `~/Library/Logs/org.libreguild.zorvik`, Windows `%LOCALAPPDATA%\org.libreguild.zorvik\logs`, Linux `~/.local/share/org.libreguild.zorvik/logs`).
+      render: text
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else?
+      description: Screenshots, a proxy or VPN in between, the kind of server, …

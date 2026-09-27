@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or help
+    url: https://github.com/LibreGuild/zorvik/discussions/categories/q-a
+    about: Ask how to do something, or get help with your setup.
+  - name: Idea or feedback
+    url: https://github.com/LibreGuild/zorvik/discussions/categories/ideas
+    about: Share an idea before it becomes a feature request.
+  - name: Security vulnerability
+    url: https://github.com/LibreGuild/zorvik/security/advisories/new
+    about: Report security problems privately, never in a public issue.

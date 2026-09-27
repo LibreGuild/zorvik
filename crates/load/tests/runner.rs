@@ -1,0 +1,364 @@
+//! The load generator against local servers: both models, stages, dropped
+//! iterations, latency from the scheduled start, stop, thresholds, events.
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
+
+use bytes::Bytes;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+use zorvik_engine::{HttpRequest, HttpVersionPref, RequestOptions};
+use zorvik_formats::{LoadModel, LoadStage, Threshold, ThresholdMetric, ThresholdOp};
+use zorvik_load::{
+    EventFn, LoadEvent, LoadRun, MetricsSummary, Plan, PlanTarget, RequestSource, RunPhase, Summary, TargetSummary,
+    TimePoint, html_report, start, validate,
+};
+use zorvik_testkit::TestServer;
+
+fn get(url: String) -> HttpRequest {
+    HttpRequest { method: "GET".into(), url, headers: vec![], body: Bytes::new() }
+}
+
+fn target(name: &str, url: String, weight: u32) -> PlanTarget {
+    PlanTarget { name: name.into(), request: format!("{name}.yaml"), source: RequestSource::Fixed(get(url)), weight }
+}
+
+fn plan(model: LoadModel, stages: &[(u32, u32)], targets: Vec<PlanTarget>) -> Plan {
+    Plan {
+        targets,
+        model,
+        stages: stages.iter().map(|&(duration_secs, target)| LoadStage { duration_secs, target }).collect(),
+        think_time: Duration::ZERO,
+        max_in_flight: 1000,
+        keep_alive: true,
+        options: RequestOptions::default(),
+        thresholds: Vec::new(),
+    }
+}
+
+fn threshold(metric: ThresholdMetric, op: ThresholdOp, value: f64, target: Option<&str>) -> Threshold {
+    Threshold { metric, op, value, target: target.map(str::to_string), enabled: true }
+}
+
+/// Run to the end (calling `stop` after `stop_after`), checking the event
+/// order: snapshots, then exactly one `Finished`, then nothing.
+async fn run(plan: Plan, stop_after: Option<Duration>) -> Summary {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let on_event: EventFn = Arc::new(move |event| {
+        let _ = tx.send(event);
+    });
+    let run: Arc<LoadRun> = Arc::new(start(plan, on_event).expect("plan starts"));
+    if let Some(after) = stop_after {
+        let run = run.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(after).await;
+            run.stop();
+        });
+    }
+    let mut snapshots = 0;
+    let summary = loop {
+        match tokio::time::timeout(Duration::from_secs(30), rx.recv()).await.expect("run finishes") {
+            Some(LoadEvent::Snapshot { snapshot }) => {
+                assert_ne!(snapshot.phase, RunPhase::Finished);
+                snapshots += 1;
+            }
+            Some(LoadEvent::Finished { summary }) => break summary,
+            None => panic!("events ended without Finished"),
+        }
+    };
+    assert!(snapshots >= 1, "no snapshots");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(rx.try_recv().is_err(), "an event came after Finished");
+    assert!(summary.error.is_none(), "{:?}", summary.error);
+    let per_target: u64 = summary.targets.iter().map(|t| t.metrics.requests).sum();
+    assert_eq!(per_target, summary.totals.requests);
+    summary
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn closed_model_follows_think_time_and_reuses_connections() {
+    let server = TestServer::start().await;
+    let mut p = plan(LoadModel::VirtualUsers, &[(0, 5), (2, 5)], vec![target("Ok", server.url("/status/200"), 1)]);
+    p.think_time = Duration::from_millis(100);
+    let summary = run(p, None).await;
+    // 5 users × 2 s / (100 ms think + ~1 ms answer) ≈ 100 (fewer where timers are coarse, as on Windows).
+    let n = summary.totals.requests;
+    assert!((70..=110).contains(&n), "{n} requests");
+    assert_eq!(summary.totals.errors, 0);
+    assert_eq!(summary.totals.connections, 5);
+    assert_eq!(summary.totals.status_codes, vec![(200, n)]);
+    assert!(summary.passed && !summary.stopped_early);
+    assert!(summary.duration_ms >= 2000 && summary.duration_ms < 3000, "{}", summary.duration_ms);
+    assert_eq!(summary.points.iter().map(|p| p.active).collect::<Vec<_>>()[..2], [5, 5]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn open_model_holds_the_rate() {
+    let server = TestServer::start().await;
+    let summary = run(
+        plan(LoadModel::ArrivalRate, &[(0, 200), (3, 200)], vec![target("Ok", server.url("/status/200"), 1)]),
+        None,
+    )
+    .await;
+    let n = summary.totals.requests;
+    println!("open model: {n} requests, {:.1} req/s, p99 {} ms", summary.totals.rps, summary.totals.latency.p99);
+    assert!((510..=690).contains(&n), "{n} requests");
+    assert!((170.0..=230.0).contains(&summary.totals.rps), "{} req/s", summary.totals.rps);
+    assert_eq!(summary.totals.dropped, 0);
+    assert!((170.0..=230.0).contains(&summary.points[1].rps), "{:?}", summary.points);
+    assert_eq!(summary.points[1].target, 200.0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn open_model_drops_iterations_over_the_in_flight_cap() {
+    let server = TestServer::start().await;
+    let mut p = plan(LoadModel::ArrivalRate, &[(0, 100), (2, 100)], vec![target("Slow", server.url("/delay/200"), 1)]);
+    p.max_in_flight = 5;
+    let summary = run(p, None).await;
+    let t = &summary.totals;
+    // 200 scheduled: ~5 per 200 ms can run, the rest are dropped (not queued).
+    assert_eq!(t.requests + t.dropped, 200);
+    assert!(t.dropped >= 120, "{} dropped", t.dropped);
+    assert!(t.latency.p50 >= 200.0 && t.latency.p50 < 400.0, "{}", t.latency.p50);
+    assert_eq!(summary.targets[0].metrics.dropped, t.dropped);
+}
+
+/// HTTP/1.1 server that answers one request at a time (20 ms each) across
+/// all connections: 50 requests per second at most.
+async fn serial_server() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let turn = Arc::new(tokio::sync::Mutex::new(()));
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let turn = turn.clone();
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match socket.read(&mut chunk).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                        }
+                    }
+                    let end = buf.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+                    buf.drain(..end);
+                    let _turn = turn.lock().await;
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    if socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    addr
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn open_model_latency_counts_from_the_scheduled_start() {
+    let addr = serial_server().await;
+    let url = format!("http://{addr}/");
+    // One user never waits in the server's queue: ~20 ms.
+    let closed =
+        run(plan(LoadModel::VirtualUsers, &[(0, 1), (1, 1)], vec![target("Serial", url.clone(), 1)]), None).await;
+    assert!(closed.totals.latency.p99 < 100.0, "{}", closed.totals.latency.p99);
+
+    // 100/s offered, 50/s served: the queue grows and so does the latency.
+    let open = run(plan(LoadModel::ArrivalRate, &[(0, 100), (2, 100)], vec![target("Serial", url, 1)]), None).await;
+    let l = &open.totals.latency;
+    println!("overload: p50 {} ms, p99 {} ms, max {} ms, {} requests", l.p50, l.p99, l.max, open.totals.requests);
+    assert_eq!(open.totals.requests, 200);
+    assert!(l.p99 > 1000.0, "p99 {}", l.p99);
+    assert!(open.points[1].p50 > open.points[0].p50 + 200.0, "{:?}", open.points);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stages_ramp_the_load() {
+    let server = TestServer::start().await;
+    // 0 → 200 requests/s over 2 s: 50 in the first second, 150 in the second.
+    let summary =
+        run(plan(LoadModel::ArrivalRate, &[(2, 200)], vec![target("Ok", server.url("/status/200"), 1)]), None).await;
+    assert_eq!(summary.totals.requests, 200);
+    let p: Vec<&TimePoint> = summary.points.iter().collect();
+    assert!((35.0..=65.0).contains(&p[0].rps) && (130.0..=170.0).contains(&p[1].rps), "{p:?}");
+    // The chart target of a rate is its average over the second, like the count.
+    assert_eq!((p[0].target, p[1].target), (50.0, 150.0));
+
+    // Users ramp too: 0 → 6 over 2 s.
+    let mut users = plan(LoadModel::VirtualUsers, &[(2, 6)], vec![target("Ok", server.url("/status/200"), 1)]);
+    users.think_time = Duration::from_millis(50);
+    let summary = run(users, None).await;
+    let active: Vec<u32> = summary.points.iter().map(|p| p.active).collect();
+    // Sampled just after each second ends: ~3 users after 1 s, 6 at the end.
+    assert!((2..=5).contains(&active[0]) && active[1] >= 5, "{active:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_finishes_promptly_and_cuts_off_stuck_requests() {
+    let server = TestServer::start().await;
+    let stopped = Instant::now() + Duration::from_millis(700);
+    let summary = run(
+        plan(LoadModel::VirtualUsers, &[(0, 10), (30, 10)], vec![target("Ok", server.url("/delay/50"), 1)]),
+        Some(Duration::from_millis(700)),
+    )
+    .await;
+    assert!(summary.stopped_early && summary.passed);
+    assert!(stopped.elapsed() < Duration::from_secs(2), "{:?}", stopped.elapsed());
+    assert!(summary.duration_ms < 2000 && summary.totals.requests > 50, "{summary:?}");
+    assert_eq!(summary.totals.errors, 0);
+
+    // No request timeout: requests still running after the 5 s grace are cut off and count as errors.
+    let mut p = plan(LoadModel::VirtualUsers, &[(0, 3), (30, 3)], vec![target("Stuck", server.url("/delay/60000"), 1)]);
+    p.options.timeout = None;
+    let summary = run(p, Some(Duration::from_millis(300))).await;
+    assert_eq!(summary.totals.requests, 3);
+    assert_eq!(summary.totals.error_kinds, vec![("cancelled".to_string(), 3)]);
+    assert!(summary.totals.latency.min >= 5000.0, "{:?}", summary.totals.latency);
+    assert!(summary.duration_ms < 7000, "{}", summary.duration_ms);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn thresholds_decide_pass_or_fail() {
+    let server = TestServer::start().await;
+    let targets = vec![target("Ok", server.url("/status/200"), 3), target("Broken", server.url("/status/500"), 1)];
+    let mut p = plan(LoadModel::VirtualUsers, &[(0, 2), (1, 2)], targets);
+    p.think_time = Duration::from_millis(20);
+    p.thresholds = vec![
+        threshold(ThresholdMetric::P95, ThresholdOp::Lt, 5000.0, None),
+        threshold(ThresholdMetric::ErrorRate, ThresholdOp::Lte, 30.0, None),
+        threshold(ThresholdMetric::ErrorRate, ThresholdOp::Lt, 1.0, Some("Broken.yaml")),
+        threshold(ThresholdMetric::Rps, ThresholdOp::Gt, 1e9, None),
+        Threshold { enabled: false, ..threshold(ThresholdMetric::Max, ThresholdOp::Lt, 0.001, None) },
+    ];
+    let summary = run(p.clone(), None).await;
+    let results: Vec<(&str, bool)> = summary.thresholds.iter().map(|t| (t.label.as_str(), t.passed)).collect();
+    assert_eq!(
+        results,
+        [
+            ("p95 < 5000 ms", true),
+            ("errorRate <= 30 %", true),
+            ("errorRate < 1 % · Broken", false),
+            ("rps > 1000000000", false)
+        ]
+    );
+    assert_eq!(summary.thresholds[2].actual, Some(100.0));
+    assert!(!summary.passed);
+    // Weights 3:1.
+    let ok = summary.targets[0].metrics.requests as f64;
+    let broken = summary.targets[1].metrics.requests as f64;
+    assert!((ok / broken - 3.0).abs() < 0.3, "{ok} vs {broken}");
+
+    p.thresholds.truncate(2);
+    assert!(run(p, None).await.passed);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn errors_are_counted_by_kind() {
+    let server = TestServer::start().await;
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+    let targets =
+        vec![target("Refused", format!("http://{closed}/"), 1), target("Slow", server.url("/delay/10000"), 1)];
+    let mut p = plan(LoadModel::VirtualUsers, &[(0, 2), (1, 2)], targets);
+    p.think_time = Duration::from_millis(50);
+    // Longer than Windows' ~2 s of retrying a refused connection.
+    p.options.timeout = Some(Duration::from_secs(3));
+    let summary = run(p, None).await;
+    let kinds: Vec<&str> = summary.totals.error_kinds.iter().map(|(k, _)| k.as_str()).collect();
+    assert!(kinds.contains(&"connect") && kinds.contains(&"timeout"), "{kinds:?}");
+    assert_eq!(summary.totals.error_rate, 100.0);
+    // Timeouts have a latency (the time waited); refused connections don't.
+    assert!(summary.targets[1].metrics.latency.p50 >= 3000.0);
+    assert_eq!(summary.targets[0].metrics.latency, Default::default());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dynamic_requests_are_rendered_per_iteration_and_keep_alive_can_be_off() {
+    let server = TestServer::start().await;
+    let renders = Arc::new(AtomicUsize::new(0));
+    let (count, url) = (renders.clone(), server.url("/status/200"));
+    let dynamic = PlanTarget {
+        name: "Dynamic".into(),
+        request: "dynamic.yaml".into(),
+        source: RequestSource::Dynamic(Arc::new(move || {
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok(get(url.clone()))
+        })),
+        weight: 1,
+    };
+    let mut p = plan(LoadModel::VirtualUsers, &[(0, 2), (1, 2)], vec![dynamic]);
+    p.keep_alive = false;
+    p.think_time = Duration::from_millis(50);
+    let summary = run(p, None).await;
+    let n = summary.totals.requests;
+    assert!(n > 10);
+    // One render up front to check the request, then one per iteration.
+    assert_eq!(renders.load(Ordering::SeqCst) as u64, n + 1);
+    assert_eq!(summary.totals.connections, n);
+}
+
+#[test]
+fn plans_are_checked_before_starting() {
+    let on_event: EventFn = Arc::new(|_| {});
+    let mut p = plan(LoadModel::ArrivalRate, &[(1, 10)], vec![target("Bad", "ftp://x/".into(), 1)]);
+    let err = start(p.clone(), on_event.clone()).err().unwrap();
+    assert!(err.starts_with("Bad: "), "{err}");
+    p.options.http_version = HttpVersionPref::Http3;
+    assert_eq!(validate(&p).unwrap_err(), "HTTP/3 isn't supported for load tests yet");
+    p.options.http_version = HttpVersionPref::Auto;
+    p.stages[0].target = 60_000;
+    assert!(validate(&p).unwrap_err().contains("limit"));
+    p.stages[0].target = 10;
+    p.max_in_flight = 1_000_000;
+    assert!(validate(&p).unwrap_err().contains("in flight"));
+}
+
+#[test]
+fn html_report_is_self_contained_and_escapes_text() {
+    let metrics = MetricsSummary {
+        requests: 1200,
+        errors: 12,
+        error_rate: 1.0,
+        rps: 200.0,
+        status_codes: vec![(200, 1188), (500, 12)],
+        error_kinds: vec![("timeout".into(), 2)],
+        ..Default::default()
+    };
+    let summary = Summary {
+        started_at: 1_790_000_000_000.0,
+        duration_ms: 6000,
+        totals: metrics.clone(),
+        targets: vec![TargetSummary {
+            name: "<img src=x onerror=alert(1)>".into(),
+            request: "a&b.yaml".into(),
+            metrics,
+        }],
+        points: (0..6)
+            .map(|s| TimePoint {
+                second: s,
+                rps: 200.0,
+                errors: 2,
+                p50: 10.0 + f64::from(s),
+                p95: 20.0,
+                p99: 30.0,
+                active: 10,
+                target: 200.0,
+            })
+            .collect(),
+        thresholds: Vec::new(),
+        passed: true,
+        stopped_early: false,
+        error: None,
+        peak_cpu_percent: Some(42.0),
+    };
+    let html = html_report("<script>alert(1)</script>", &summary);
+    assert!(!html.contains("<script"), "{html}");
+    assert!(!html.contains("<img"));
+    assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+    assert!(html.contains("a&amp;b.yaml"));
+    assert!(html.contains("<svg") && html.contains("prefers-color-scheme"));
+    assert!(!html.contains("http://") && !html.contains("https://"), "no external resources");
+}
