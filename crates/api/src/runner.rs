@@ -814,6 +814,11 @@ impl Api {
         lock(&self.inner.runner.active).as_ref().is_some_and(|(id, _)| id == run_id)
     }
 
+    /// The finished runs still kept, oldest first.
+    pub(crate) fn finished_runs(&self) -> Vec<Arc<RunReport>> {
+        lock(&self.inner.runner.finished).iter().map(|(_, r)| r.clone()).collect()
+    }
+
     /// A finished run, while it is still kept.
     pub(crate) fn finished_run(&self, run_id: &str) -> Option<Arc<RunReport>> {
         lock(&self.inner.runner.finished).iter().find(|(id, _)| id == run_id).map(|(_, r)| r.clone())

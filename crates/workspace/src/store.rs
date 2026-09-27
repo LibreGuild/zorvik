@@ -767,6 +767,16 @@ impl Workspace {
         self.flat_delete::<Server>(id)
     }
 
+    /// Delete a server file for good, not to the trash: for servers Zorvik saved itself
+    /// (a Training Bootcamp lab's). A missing file is fine.
+    pub fn remove_server(&self, id: &str) -> Result<()> {
+        let file = self.flat_file::<Server>(id)?;
+        match std::fs::remove_file(&file) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(Error::io("Could not remove the server", e)),
+            _ => Ok(()),
+        }
+    }
+
     /// Put the servers in the order of `ids` (sidebar drag and drop).
     pub fn reorder_servers(&self, ids: &[String]) -> Result<()> {
         self.flat_reorder::<Server>(ids)

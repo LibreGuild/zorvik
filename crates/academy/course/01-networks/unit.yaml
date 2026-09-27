@@ -1,0 +1,9 @@
+id: networks
+title: How networks talk
+summary: Addresses, ports, connections and round trips, the basics every request depends on.
+color: "#2F8F8B"
+image: networks
+badge:
+  id: packet-pioneer
+  name: Packet Pioneer
+  description: Learned how computers find and talk to each other.

@@ -7341,6 +7341,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 
 [[package]]
+name = "zorvik-academy"
+version = "0.1.1"
+dependencies = [
+ "indexmap 2.14.2",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "ts-rs",
+ "zorvik-formats",
+]
+
+[[package]]
 name = "zorvik-api"
 version = "0.1.1"
 dependencies = [
@@ -7360,6 +7373,7 @@ dependencies = [
  "ts-rs",
  "url",
  "uuid",
+ "zorvik-academy",
  "zorvik-engine",
  "zorvik-load",
  "zorvik-script",

@@ -1,0 +1,9 @@
+id: welcome
+title: Welcome to Bootcamp
+summary: Find your way around Zorvik and send your very first request.
+color: "#4A90C2"
+image: welcome
+badge:
+  id: first-contact
+  name: First Contact
+  description: Sent your first request and saved it.

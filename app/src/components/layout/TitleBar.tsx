@@ -3,10 +3,11 @@
 // window controls on the right. Empty areas drag the window.
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Bot, Check, ChevronDown, Cookie, FolderOpen, Keyboard, Layers, LogOut, Minus, Monitor, Moon, Settings, SlidersHorizontal, Square, Sun, X } from "lucide-react";
+import { Bot, Check, ChevronDown, Cookie, FolderOpen, GraduationCap, Keyboard, Layers, LayoutPanelLeft, LogOut, Minus, Monitor, Moon, Settings, SlidersHorizontal, Square, Sun, X } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { isMac, pickFolder } from "../../lib/platform";
 import { errorMessage, isTauri } from "../../lib/rpc";
+import { enterBootcamp, isBootcampPath, openAcademy, setMode, useAcademy, useInBootcamp } from "../../store/academy";
 import { disconnectAgent, useAgents } from "../../store/agents";
 import { stopLoadRun, useLoadTests } from "../../store/loadtests";
 import { saveSettings, useSettings } from "../../store/settings";
@@ -30,6 +31,7 @@ export function TitleBar() {
       <div {...drag} className={cx("flex min-w-0 items-center gap-1.5", isTauri && isMac ? "pl-[84px]" : "pl-3")}>
         <img src="/icon.png" alt="" className="h-5 w-5 shrink-0" draggable={false} />
         {info ? <WorkspaceMenu /> : <span className="px-2 text-[13px] font-semibold text-fg">Zorvik</span>}
+        <ModeSwitch />
       </div>
       <div {...drag} className="h-full min-w-4 flex-1" />
       <div className={cx("flex shrink-0 items-center gap-1", !customControls && "pr-3")}>
@@ -40,9 +42,59 @@ export function TitleBar() {
   );
 }
 
+/** Workbench | Academy: the normal app, or the Training Bootcamp's course. */
+function ModeSwitch() {
+  const mode = useAcademy((s) => s.mode);
+  const lab = useAcademy((s) => !!s.lab && !s.lab.finished);
+  const hasWorkspace = useWorkspace((s) => !!s.info);
+  const workbench = mode === "workbench" || !hasWorkspace;
+  const item = "relative flex h-[26px] items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-accent";
+  return (
+    <div className="ml-1 inline-flex rounded-lg bg-panel-2 p-0.5" role="group" aria-label="Workbench or Academy" data-testid="mode-switch">
+      <button
+        aria-pressed={workbench}
+        disabled={!hasWorkspace}
+        onClick={() => void setMode("workbench")}
+        className={cx(item, workbench ? "bg-elev text-fg shadow-sm" : "text-muted hover:text-fg", !hasWorkspace && "hidden")}
+        data-testid="mode-workbench"
+      >
+        <LayoutPanelLeft size={13} />
+        Workbench
+        {lab && !workbench && (
+          <>
+            <span aria-hidden className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-accent" />
+            <span className="sr-only">(a lab is running)</span>
+          </>
+        )}
+      </button>
+      <button
+        aria-pressed={!workbench}
+        onClick={() => void setMode("academy")}
+        className={cx(item, !workbench ? "bg-elev text-accent shadow-sm" : "text-muted hover:text-accent")}
+        data-testid="mode-academy"
+      >
+        <GraduationCap size={14} />
+        Academy
+      </button>
+    </div>
+  );
+}
+
+/** The Training Bootcamp entry: pinned first, and it stands out. */
+function BootcampLabel() {
+  const progress = useAcademy((s) => s.progress);
+  return (
+    <span className="flex items-center gap-2">
+      <span className="bg-gradient-to-r from-accent to-[#d9902f] bg-clip-text font-semibold text-transparent">Training Bootcamp</span>
+      {progress && <span className="rounded-full bg-accent-soft px-1.5 text-[10.5px] font-semibold text-accent">Lvl {progress.level}</span>}
+    </span>
+  );
+}
+
 function WorkspaceMenu() {
   const info = useWorkspace((s) => s.info)!;
   const recent = useWorkspace((s) => s.recent);
+  const bootcamp = useInBootcamp();
   const switchTo = async (path: string) => {
     resetTabs();
     try {
@@ -58,15 +110,26 @@ function WorkspaceMenu() {
     <Menu
       trigger={
         <button
-          className="flex h-7 min-w-0 max-w-[280px] items-center gap-1.5 rounded-lg px-2 text-[13px] font-semibold text-fg hover:bg-hover"
+          className={cx(
+            "flex h-7 min-w-0 max-w-[280px] items-center gap-1.5 rounded-lg px-2 text-[13px] font-semibold text-fg hover:bg-hover",
+            bootcamp && "bg-accent-soft ring-1 ring-accent/30",
+          )}
           data-testid="workspace-menu"
           title={info.path}
         >
+          {bootcamp && <GraduationCap size={14} className="shrink-0 text-accent" />}
           <span className="truncate">{info.meta.name}</span>
           <ChevronDown size={13} className="shrink-0 text-faint" />
         </button>
       }
       entries={[
+        {
+          label: <BootcampLabel />,
+          icon: <GraduationCap size={15} className="text-accent" />,
+          checked: bootcamp,
+          onSelect: () => void (bootcamp ? openAcademy() : enterBootcamp()),
+        },
+        { separator: true as const },
         { label: "Workspace settings…", icon: <SlidersHorizontal size={14} />, onSelect: () => openModal({ type: "workspaceSettings" }) },
         {
           label: "Open workspace…",
@@ -77,7 +140,7 @@ function WorkspaceMenu() {
           },
         },
         ...recent
-          .filter((r) => r.path !== info.path)
+          .filter((r) => r.path !== info.path && !isBootcampPath(r.path))
           .slice(0, 6)
           .map((r) => ({ label: r.name, icon: <Layers size={14} />, onSelect: () => void switchTo(r.path) })),
         { separator: true as const },

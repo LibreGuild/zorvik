@@ -1,0 +1,17 @@
+[package]
+name = "zorvik-academy"
+description = "Training Bootcamp: the course (lessons, labs, quizzes), answer matching and progress rules"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+zorvik-formats.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+indexmap.workspace = true
+regex.workspace = true
+ts-rs.workspace = true

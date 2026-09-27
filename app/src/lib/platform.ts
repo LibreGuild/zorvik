@@ -24,9 +24,9 @@ export async function pickFile(title: string, extensions?: string[]): Promise<st
   return window.prompt(`${title}\nEnter an absolute file path:`)?.trim() || null;
 }
 
-export async function pickSavePath(title: string, defaultPath?: string): Promise<string | null> {
+export async function pickSavePath(title: string, defaultPath?: string, filters?: { name: string; extensions: string[] }[]): Promise<string | null> {
   if (isTauri) {
-    return (await save({ title, defaultPath })) ?? null;
+    return (await save({ title, defaultPath, filters })) ?? null;
   }
   return window.prompt(`${title}\nEnter an absolute file path:`, defaultPath)?.trim() || null;
 }

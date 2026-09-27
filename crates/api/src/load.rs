@@ -505,7 +505,7 @@ impl Api {
         Ok(stored.summary)
     }
 
-    fn load_history(&self, ws: &Workspace, test_id: &str) -> ApiResult<Vec<LoadRunRecord>> {
+    pub(crate) fn load_history(&self, ws: &Workspace, test_id: &str) -> ApiResult<Vec<LoadRunRecord>> {
         let Ok(entries) = std::fs::read_dir(self.history_dir(ws, test_id)?) else { return Ok(Vec::new()) };
         let mut runs: Vec<LoadRunRecord> = entries
             .flatten()

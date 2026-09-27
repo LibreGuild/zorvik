@@ -12,6 +12,7 @@ members = [
     "crates/load",
     "crates/script",
     "crates/mcp",
+    "crates/academy",
     "app/src-tauri",
 ]
 default-members = [
@@ -26,6 +27,7 @@ default-members = [
     "crates/load",
     "crates/script",
     "crates/mcp",
+    "crates/academy",
 ]
 
 [workspace.package]
@@ -48,6 +50,7 @@ zorvik-servers = { path = "crates/servers" }
 zorvik-load = { path = "crates/load" }
 zorvik-script = { path = "crates/script" }
 zorvik-mcp = { path = "crates/mcp" }
+zorvik-academy = { path = "crates/academy" }
 
 tokio = { version = "1.53", features = ["full"] }
 tokio-util = "0.7"

@@ -13,6 +13,9 @@ zorvik-workspace.workspace = true
 zorvik-servers.workspace = true
 zorvik-load.workspace = true
 zorvik-script.workspace = true
+zorvik-academy.workspace = true
+# Practice servers for Training Bootcamp labs (the same ones the tests use).
+zorvik-testkit.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 serde.workspace = true

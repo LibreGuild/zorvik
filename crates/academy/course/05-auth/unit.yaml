@@ -1,0 +1,9 @@
+id: auth
+title: Identity & auth
+summary: Prove who you are to an API with Basic auth, API keys, bearer tokens, OAuth 2.0 and cookies, and read what 401 and 403 are telling you.
+color: "#C9A227"
+image: auth
+badge:
+  id: token-tamer
+  name: Token Tamer
+  description: Logged in every way an API asks for.

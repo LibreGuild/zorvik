@@ -1,16 +1,47 @@
 import { useState } from "react";
-import { FolderOpen, FolderPlus, Layers, X } from "lucide-react";
+import { ArrowRight, FolderOpen, FolderPlus, GraduationCap, Layers, X } from "lucide-react";
 import { formatRelative } from "../../lib/format";
 import { pickFolder } from "../../lib/platform";
 import { api, errorMessage } from "../../lib/rpc";
+import { isBootcampPath, openAcademy, useAcademy } from "../../store/academy";
 import { restoreTabs } from "../../store/tabs";
 import { toast } from "../../store/toasts";
 import { createWorkspace, openOrInitWorkspace, useWorkspace } from "../../store/workspace";
 import { Button, Field, Input, Modal } from "../ui";
 import welcomeArt from "../../assets/welcome-art.webp";
 
+/** The Training Bootcamp, first on the welcome screen. */
+function BootcampCard() {
+  const progress = useAcademy((s) => s.progress);
+  const started = !!progress && (progress.xp > 0 || !!progress.lastLesson);
+  return (
+    <button
+      onClick={() => void openAcademy()}
+      className="group relative mb-3 flex w-full items-center gap-4 overflow-hidden rounded-xl border border-accent/40 p-4 text-left transition-[border-color,box-shadow] hover:border-accent hover:shadow-sm"
+      style={{ background: "linear-gradient(120deg, color-mix(in srgb, var(--accent) 14%, var(--elev)), var(--elev) 70%)" }}
+      data-testid="welcome-bootcamp"
+    >
+      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent text-accent-fg shadow-sm">
+        <GraduationCap size={22} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 text-[14px] font-semibold text-fg">
+          Training Bootcamp
+          {progress && started && <span className="rounded-full bg-accent-soft px-1.5 text-[10.5px] font-semibold text-accent">Level {progress.level} · {progress.rank}</span>}
+        </div>
+        <div className="text-[12px] text-muted">
+          {started && progress
+            ? `${progress.completedLessons} of ${progress.totalLessons} lessons done. Pick up where you left off.`
+            : "New to APIs and networks? Learn hands-on: short lessons, real labs, badges and a certificate."}
+        </div>
+      </div>
+      <ArrowRight size={16} className="shrink-0 text-accent transition-transform group-hover:translate-x-0.5" />
+    </button>
+  );
+}
+
 export function Welcome() {
-  const recent = useWorkspace((s) => s.recent);
+  const recent = useWorkspace((s) => s.recent).filter((r) => !isBootcampPath(r.path));
   const version = useWorkspace((s) => s.appInfo?.version);
   const [creating, setCreating] = useState(false);
 
@@ -39,6 +70,7 @@ export function Welcome() {
             <p className="text-[13px] text-muted">Build, test, mock and load test APIs. Every protocol, one workbench.</p>
           </div>
         </div>
+        <BootcampCard />
         <div className="grid grid-cols-2 gap-3">
           <button
             onClick={() => setCreating(true)}

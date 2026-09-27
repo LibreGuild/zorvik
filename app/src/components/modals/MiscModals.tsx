@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Cookie, FileJson, Globe, ListChecks, Search, Terminal, Trash2 } from "lucide-react";
+import { Cookie, FileJson, Globe, GraduationCap, ListChecks, Search, Terminal, Trash2 } from "lucide-react";
 import type { CookieInfo } from "../../bindings/CookieInfo";
 import type { CurlFlavor } from "../../bindings/CurlFlavor";
 import type { SnippetLanguage } from "../../bindings/SnippetLanguage";
@@ -19,6 +19,7 @@ import { formatDuration, MODELS } from "../loadtests/model";
 import { SERVER_KINDS } from "../servers/kinds";
 import { TOOLS } from "../tools/registry";
 import { toast } from "../../store/toasts";
+import { openAcademy } from "../../store/academy";
 import { closeModal, toggleExpanded } from "../../store/ui";
 import { refreshEnvironments, refreshTree, reloadWorkspace, useWorkspace } from "../../store/workspace";
 import { CodeEditor } from "../CodeEditor";
@@ -899,6 +900,15 @@ export function CommandPalette() {
         trail: "Runner",
         terms: "runner run collection tests",
         open: () => openRunner("", workspaceName),
+      },
+      {
+        key: "academy",
+        badge: <GraduationCap size={13} />,
+        color: "var(--accent)",
+        name: "Open the Academy",
+        trail: "Training Bootcamp",
+        terms: "academy bootcamp learn course lessons training tutorial",
+        open: () => void openAcademy(),
       },
       ...flatten(tree).map(({ node, trail }) => ({
         key: `r:${node.path}`,

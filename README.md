@@ -37,6 +37,7 @@
 - **Local first.** No account, no cloud sync, no tracking. It works offline and behind corporate proxies and TLS inspection.
 - **Scriptable and automatable.** Postman-compatible scripts and tests, a collection runner with data files, and the `zorvik` command line for CI.
 - **Built for AI agents.** Claude Code, Codex, Gemini CLI, Cursor and others can drive Zorvik over MCP while you watch and approve.
+- **Learn it inside the app.** The Training Bootcamp teaches networks and APIs from zero, with hands-on labs in the real workbench.
 
 <p align="center">
   <img src=".github/assets/banner.webp" width="760" alt="">
@@ -86,6 +87,12 @@
   <source media="(prefers-color-scheme: dark)" srcset=".github/assets/loadtest-dark.webp">
   <img alt="A finished load test: settings on the left, results and thresholds on the right" src=".github/assets/loadtest-light.webp">
 </picture>
+
+### Learn: the Training Bootcamp
+- **A course built in,** from "what is a network?" to load testing: 16 units on networks, DNS, HTTP, sending data, auth and JWT, TLS, environments, testing, GraphQL and gRPC, WebSocket and SSE, TCP and UDP, mocking, performance and automation, plus a capstone project.
+- **Hands-on labs** in the real workbench: **Start lab** runs practice servers on your computer and fills in a Lab environment, and the **Lab Guide** ticks each step off the moment you get it right. Hints go from a nudge to the exact clicks.
+- **Plain words and diagrams:** short readings with sequence, flow and layer diagrams, and a quick check after each lesson.
+- **Rewards:** XP, levels and ranks, daily streaks, 24 badges, and a *Zorvik Bootcamp Graduate* certificate. The **Academy** switch in the title bar opens it; its workspace is always there and resets in one click.
 
 ### Inspect the network
 TLS inspector (chain, expiry, protocol versions, cipher suites), DNS lookup, port check, ping, network interfaces, HTTP/3 check, and encoders for Base64, URL, hex, JWT, hashes and timestamps.
@@ -170,6 +177,7 @@ You need Rust (stable) and Node.js 22+; [CONTRIBUTING.md](CONTRIBUTING.md) lists
 ## Documentation
 - In the app: the **Docs** section covers every feature.
 - [Architecture](docs/architecture.md): how the pieces fit together.
+- [Training Bootcamp](docs/academy.md): how the Academy works, and how to write a lesson.
 - [Testing](docs/testing.md): the test suites and how to run them.
 - [CI and releases](docs/ci-release.md): how builds and releases are made.
 

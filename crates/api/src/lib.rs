@@ -2,6 +2,7 @@
 //! shared by the Tauri shell (IPC) and the dev bridge (HTTP), so both run the
 //! exact same code. The methods are the arms of the `match` in `Api::dispatch`.
 
+pub mod academy;
 pub mod agents;
 mod batch;
 mod dns;
@@ -170,6 +171,8 @@ struct Inner {
     tool_runs: Mutex<HashMap<String, (u64, CancellationToken)>>,
     /// AI agents connected over MCP (`agent.*`).
     agents: agents::AgentHub,
+    /// Training Bootcamp labs and progress (`academy.*`).
+    academy: academy::AcademyState,
 }
 
 /// Responses kept in memory for `read_history`, and body characters kept of each.
@@ -377,17 +380,32 @@ impl Api {
             watcher: Mutex::new(None),
             tool_runs: Mutex::new(HashMap::new()),
             agents: Default::default(),
+            academy: Default::default(),
             generation: Default::default(),
         };
         Self { inner: Arc::new(inner) }
     }
 
     /// Dispatch one RPC call.
-    pub async fn call(&self, method: &str, p: Value) -> ApiResult<Value> {
-        // The dispatch future holds the state of every method (tens of KB).
-        // Boxed, callers' futures stay small; unoptimized builds copy a future
-        // onto the stack at each await, which overflowed test threads.
-        Box::pin(self.dispatch(method, p)).await
+    ///
+    /// The dispatch future holds the state of every method (tens of KB). Boxed, callers'
+    /// futures stay small (unoptimized builds copy a future onto the stack at each await,
+    /// which overflowed test threads); named as `Send`, methods that call back into the API
+    /// (Bootcamp "Do it for me") stay `Send` too.
+    pub fn call<'a>(
+        &'a self,
+        method: &'a str,
+        p: Value,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ApiResult<Value>> + Send + 'a>> {
+        Box::pin(async move {
+            // A running Bootcamp lab checks its steps against what the app does.
+            let watched = self.academy_watching(method).then(|| p.clone());
+            let result = self.dispatch(method, p).await;
+            if let Some(params) = watched {
+                self.academy_observe(method, params, &result);
+            }
+            result
+        })
     }
 
     async fn dispatch(&self, method: &str, p: Value) -> ApiResult<Value> {
@@ -402,6 +420,7 @@ impl Api {
             "grpc" => return self.call_grpc(method, p).await,
             "runner" => return self.call_runner(method, p).await,
             "agent" => return self.call_agent(method, p).await,
+            "academy" => return self.call_academy(method, p).await,
             _ => {}
         }
         match method {

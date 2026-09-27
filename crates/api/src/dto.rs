@@ -192,6 +192,8 @@ pub enum StreamEvent {
     /// Settings changed in the backend (e.g. the user allowed AI agents).
     #[serde(rename_all = "camelCase")]
     SettingsChanged { settings: zorvik_workspace::settings::Settings },
+    /// Training Bootcamp: the lab, progress and what was just earned.
+    Academy { update: Box<crate::academy::AcademyUpdate> },
     /// Several events at once, in order (see `BatchingSink`).
     #[serde(rename_all = "camelCase")]
     Batch { events: Vec<StreamEvent> },

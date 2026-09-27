@@ -39,6 +39,24 @@ export const SHORTCUTS: [string, string][] = [
 
 export const TOPICS: DocTopic[] = [
   {
+    id: "academy",
+    group: "Learn",
+    title: "Training Bootcamp",
+    tagline: "Learn networks and APIs hands-on, from zero to load testing.",
+    image: "docs-academy",
+    intro:
+      "A course built into Zorvik. Each lesson is a short reading with diagrams, a lab you do in the real workbench against practice servers on your own computer, and a quick check. The Lab Guide ticks steps off the moment you get them right.",
+    features: [
+      "16 units: networks, DNS, HTTP, sending data, auth and JWT, TLS, environments, testing, GraphQL and gRPC, WebSocket and SSE, TCP and UDP, mocking, load testing, automation, and a capstone",
+      "Labs start their own servers and fill in a Lab environment; nothing leaves your machine",
+      "Hints from a nudge to the exact clicks, and Do it for me when you're stuck",
+      "XP, levels, ranks, streaks and badges; finish the capstone for the Zorvik Bootcamp Graduate certificate",
+      "The Training Bootcamp workspace is always there and can't be deleted; Reset it from the Academy menu (progress stays)",
+    ],
+    tryIt: ["Click Academy at the top of the window, then Start the Bootcamp.", "Stuck in a lab? Open a hint in the Lab Guide on the right."],
+    tip: "Already know a topic? Take the unit's Test out quiz to earn its badge right away.",
+  },
+  {
     id: "requests",
     group: "Build & send",
     title: "HTTP requests",

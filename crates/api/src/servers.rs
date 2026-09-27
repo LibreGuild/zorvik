@@ -321,6 +321,37 @@ impl Api {
         }
     }
 
+    /// Stop a running server (nothing when it already stopped).
+    pub(crate) fn stop_run(&self, run_id: &str) {
+        let run = lock(&self.inner.servers.running).remove(run_id);
+        drop(run);
+    }
+
+    /// Stop the servers running from a saved server of `ws`.
+    pub(crate) fn stop_server_file(&self, ws: &Workspace, server_id: &str) {
+        if let Some(run_id) = self.find_run(ws, server_id) {
+            self.stop_run(&run_id);
+        }
+    }
+
+    /// Stop every server of the workspace in folder `root`.
+    pub(crate) fn stop_servers_in(&self, root: &str) {
+        let stopped: Vec<Running> = {
+            let mut running = lock(&self.inner.servers.running);
+            let ids: Vec<String> =
+                running.iter().filter(|(_, r)| r.info.workspace_path == root).map(|(id, _)| id.clone()).collect();
+            ids.into_iter().filter_map(|id| running.remove(&id)).collect()
+        };
+        drop(stopped);
+    }
+
+    /// Run `f` on a running server's log in place (`None`: it isn't running).
+    pub(crate) fn with_server_log<T>(&self, run_id: &str, f: impl FnOnce(&VecDeque<TrafficEntry>) -> T) -> Option<T> {
+        let log = lock(&self.inner.servers.running).get(run_id).map(|r| r.log.clone())?;
+        let log = lock(&log);
+        Some(f(&log.entries))
+    }
+
     /// What a running server logged, oldest first (`None`: it isn't running).
     pub(crate) fn server_log(&self, run_id: &str) -> Option<Vec<TrafficEntry>> {
         let log = lock(&self.inner.servers.running).get(run_id).map(|r| r.log.clone())?;
@@ -336,7 +367,12 @@ impl Api {
             .map(|(id, _)| id.clone())
     }
 
-    async fn start_server(&self, ws: &Workspace, server_id: String, server: Server) -> ApiResult<RunningServerInfo> {
+    pub(crate) async fn start_server(
+        &self,
+        ws: &Workspace,
+        server_id: String,
+        server: Server,
+    ) -> ApiResult<RunningServerInfo> {
         if self.find_run(ws, &server_id).is_some() {
             return Err(ApiError::invalid(format!("'{}' is already running", server.name)));
         }

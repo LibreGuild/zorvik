@@ -1,0 +1,10 @@
+id: capstone
+title: "Capstone: Ship it"
+summary: Put everything together and take a real API from contract to launch, then graduate.
+color: "#5B3FA8"
+image: capstone
+capstone: true
+badge:
+  id: graduate
+  name: Graduate
+  description: Finished the Zorvik Bootcamp.

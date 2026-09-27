@@ -1,0 +1,9 @@
+id: organize
+title: Organized like a pro
+summary: Keep environments, secrets and folders tidy, and move requests in and out of Zorvik with import and export.
+color: "#4F5DB8"
+image: organize
+badge:
+  id: workspace-architect
+  name: Workspace Architect
+  description: Keeps requests, environments and secrets tidy.

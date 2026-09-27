@@ -1,0 +1,9 @@
+id: beyond-rest
+title: "Beyond REST: GraphQL & gRPC"
+summary: Ask for exactly the data you need with GraphQL, and call fast, strictly typed services with gRPC.
+color: "#B8478F"
+image: beyond-rest
+badge:
+  id: query-crafter
+  name: Query Crafter
+  description: Speaks GraphQL and gRPC as well as REST.

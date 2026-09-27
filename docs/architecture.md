@@ -19,7 +19,9 @@ crates/engine/       Networking only: HTTP/1.1, HTTP/2, HTTP/3, TLS, proxy, WebS
                      TCP/UDP/DNS/MQTT/gRPC clients, cookies, decoding, timing, network tools
 crates/cli/          `zorvik`: run, load, serve and mcp (the command line inside every install)
 crates/mcp/          MCP for AI agents: the stdio bridge (`zorvik mcp`) and the app's listener
-crates/testkit/      Local test servers used by the tests (HTTP, TLS, proxy, OAuth, GraphQL, gRPC)
+crates/testkit/      Local test servers used by the tests (HTTP, TLS, proxy, OAuth, GraphQL, gRPC),
+                     and the practice servers of Training Bootcamp labs
+crates/academy/      Training Bootcamp: the course (lessons, labs, quizzes as files), patterns, progress rules
 ```
 
 ## Design rules
@@ -163,6 +165,13 @@ Agent ──MCP over stdio──► zorvik mcp ──127.0.0.1 TCP + token──
 
 Code: `crates/api/src/agents/` (sessions, confirmations, tool definitions and implementations), `crates/mcp` (JSON-RPC protocol, bridge, listener, `agent.json`).
 
+## Training Bootcamp
+The **Academy** (title bar switch) is a course inside the app; see [academy.md](academy.md) for the course format and how to write a lesson.
+- **Course**: `crates/academy/course/` (a folder per unit, a Markdown file with YAML front matter per lesson), embedded at build time and validated by tests.
+- **Labs**: `crates/api/src/academy/` saves the lab's servers into the Bootcamp workspace (`Lab · …`), starts them on free ports with the normal server manager, fills and activates the **Lab** environment, and starts practice servers from `crates/testkit` when a lab needs them. While a lab runs, `Api::call` notes each call in a short journal; the steps are checked in order after each call and once a second, against lab servers' traffic, the journal, workspace files, finished runs and typed answers. Rewards reach the UI as `academy` events.
+- **UI**: `app/src/components/academy/` (Academy view, lesson reader with diagrams, Lab Guide docked beside the workbench, celebrations, certificate), `app/src/store/academy.ts`.
+- **Every lab is tested**: `crates/api/tests/academy.rs` runs each step's solution and checks the step passes only after it.
+
 ## Data locations
 - **Workspace folder** (shared through Git): requests, folders, environments, servers, load tests, kept OpenAPI documents.
-- **App data folder** (per computer, `org.libreguild.zorvik` in the OS data directory): `settings.json`, `history.sqlite3`, `secrets.json`, `cookies/`, `oauth-tokens.json`, `local-values.json`, `state.json`, `trusted-servers.json`, `load-runs/`, `agent.json`. Logs go to the OS log folder for the app.
+- **App data folder** (per computer, `org.libreguild.zorvik` in the OS data directory): `settings.json`, `history.sqlite3`, `secrets.json`, `cookies/`, `oauth-tokens.json`, `local-values.json`, `state.json`, `trusted-servers.json`, `load-runs/`, `agent.json`, the Training Bootcamp workspace (`bootcamp/`) and progress (`academy-progress.json`). Logs go to the OS log folder for the app.

@@ -1,0 +1,9 @@
+id: sockets
+title: "Raw sockets: TCP & UDP"
+summary: Go below HTTP to open raw TCP connections, frame your own messages, send UDP datagrams and watch every byte pass through a relay.
+color: "#B8683A"
+image: sockets
+badge:
+  id: socket-smith
+  name: Socket Smith
+  description: Talks to servers byte by byte.

@@ -1,0 +1,9 @@
+id: testing
+title: Testing APIs
+summary: Write tests that check every response, chain requests, run whole folders with data, and hold an API to its spec.
+color: "#2A9DB5"
+image: testing
+badge:
+  id: test-pilot
+  name: Test Pilot
+  description: Writes tests that catch bugs before users do.

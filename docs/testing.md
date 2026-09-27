@@ -24,8 +24,9 @@ E2E needs the CLI built once, because the AI agent tests start the real `zorvik 
 | Load generator | `crates/load/tests/runner.rs`: both models against real servers (counts, ramps, overload latency, stop, errors, data rows per user, capture chains, timing phases, Server-Timing); JSON paths, captures and Server-Timing parsing in `crates/load/src/capture.rs` |
 | Command line | `crates/cli/tests/`: `zorvik run`, `load`, `serve` and `mcp` as real processes |
 | AI agents | `crates/mcp/tests/agents.rs` (bridge, listener, token proof, confirmations; mock servers built, started and inspected; variables, history, streams, files and exports) and `app/e2e/agents.spec.ts` |
+| Training Bootcamp | `crates/academy` (the course loads and validates, patterns, XP and badge rules), `crates/api/tests/academy.rs` (every lab finished step by step with its solutions; progress, rewards, reset), `app/src/components/academy/academy.test.ts`, `app/e2e/academy.spec.ts`. One lab: `ACADEMY_LESSON=<id> cargo test -p zorvik-api --test academy` |
 | UI logic | `app/src/**/*.test.ts(x)` (Vitest, jsdom) |
-| User flows | `app/e2e/*.spec.ts`: requests, GraphQL, gRPC, scripts, runner, load tests, servers, docs, appearance, AI agents |
+| User flows | `app/e2e/*.spec.ts`: requests, GraphQL, gRPC, scripts, runner, load tests, servers, docs, appearance, AI agents, the Academy |
 
 ## End-to-end setup
 `app/playwright.config.ts` starts three things, on ports chosen to avoid clashes with your own servers:

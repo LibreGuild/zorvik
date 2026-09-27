@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Sidebar } from "./components/sidebar/Sidebar";
 import { Splitter } from "./components/Splitter";
 import { TabBar } from "./components/layout/TabBar";
@@ -19,12 +19,15 @@ import {
   WorkspaceSettingsModal,
 } from "./components/modals/MiscModals";
 import { ActivityRail } from "./components/layout/ActivityRail";
+import { Celebrations } from "./components/academy/Celebrations";
+import { LabGuide } from "./components/academy/LabGuide";
 import { AgentConfirmDialog } from "./components/agents/AgentConfirmDialog";
 import { Dialogs, Toasts } from "./components/modals/Overlays";
 import { SettingsModal } from "./components/modals/SettingsModal";
 import { Spinner, TooltipProvider } from "./components/ui";
 import { isMac, modKey } from "./lib/platform";
 import { errorMessage } from "./lib/rpc";
+import { initAcademy, useAcademy, useInBootcamp } from "./store/academy";
 import { loadAgents } from "./store/agents";
 import { useDialogs } from "./store/dialogs";
 import { refreshLoadTests, resetLoadTestResults, restoreActiveRun, toggleLoadRun } from "./store/loadtests";
@@ -49,6 +52,9 @@ import {
 import { toast } from "./store/toasts";
 import { openModal, useUi } from "./store/ui";
 import { initWorkspace, useWorkspace } from "./store/workspace";
+
+// The Academy is its own screen, loaded the first time it opens.
+const AcademyView = lazy(() => import("./components/academy/AcademyView"));
 
 function useTheme() {
   const theme = useSettings((s) => s.settings?.theme ?? "system");
@@ -190,15 +196,20 @@ export default function App() {
   const ready = useWorkspace((s) => s.ready);
   const info = useWorkspace((s) => s.info);
   const sidebarWidth = useUi((s) => s.sidebarWidth);
+  const academyMode = useAcademy((s) => s.mode === "academy");
+  const labRunning = useAcademy((s) => !!s.lab);
+  const inBootcamp = useInBootcamp();
+  const academy = academyMode && inBootcamp;
+  const labGuide = labRunning && inBootcamp;
   const [fatal, setFatal] = useState<string | null>(null);
   useTheme();
   useZoomKeys();
-  useShortcuts(!!info);
+  useShortcuts(!!info && !academy);
 
   useEffect(() => {
     (async () => {
       try {
-        await Promise.all([loadSettings(), initWorkspace(), loadAgents()]);
+        await Promise.all([loadSettings(), initWorkspace(), loadAgents(), initAcademy()]);
         const ws = useWorkspace.getState().info;
         if (ws) await restoreTabs(ws.path);
       } catch (e) {
@@ -247,7 +258,21 @@ export default function App() {
     <TooltipProvider>
       <div className="flex h-full flex-col bg-panel">
         <TitleBar />
-        {info ? (
+        {academy ? (
+          <div className="min-h-0 flex-1 px-2 pb-2">
+            <div className="h-full overflow-hidden rounded-xl border border-line/70 bg-bg">
+              <Suspense
+                fallback={
+                  <div className="flex h-full items-center justify-center">
+                    <Spinner size={20} />
+                  </div>
+                }
+              >
+                <AcademyView />
+              </Suspense>
+            </div>
+          </div>
+        ) : info ? (
           <div className="flex min-h-0 flex-1 pb-2 pr-2">
             <ActivityRail />
             <div style={{ width: sidebarWidth }} className="min-h-0 shrink-0">
@@ -264,6 +289,7 @@ export default function App() {
                 <Workbench />
               </div>
             </main>
+            {labGuide && <LabGuide />}
           </div>
         ) : (
           <div className="min-h-0 flex-1 px-2 pb-2">
@@ -277,6 +303,7 @@ export default function App() {
       <Dialogs />
       <AgentConfirmDialog />
       <Toasts />
+      <Celebrations />
     </TooltipProvider>
   );
 }

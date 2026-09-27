@@ -351,3 +351,93 @@ input[type="number"] {
 .zv-fade {
   animation: zv-fade 0.15s ease-out;
 }
+
+/* Academy: diagrams play in, rewards pop */
+@keyframes zv-seq-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.zv-seq-in {
+  animation: zv-seq-in 0.35s ease-out both;
+}
+@keyframes zv-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.96);
+  }
+  15% {
+    opacity: 1;
+    transform: none;
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-18px);
+  }
+}
+.zv-rise {
+  animation: zv-rise 2.2s ease-out both;
+}
+@keyframes zv-badge-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.4) rotate(-12deg);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.08) rotate(3deg);
+  }
+  100% {
+    transform: none;
+  }
+}
+.zv-badge-in {
+  animation: zv-badge-in 0.7s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+@keyframes zv-shine {
+  from {
+    transform: translateX(-120%) skewX(-18deg);
+  }
+  to {
+    transform: translateX(220%) skewX(-18deg);
+  }
+}
+.zv-shine::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.35), transparent);
+  animation: zv-shine 2.6s ease-in-out 0.4s infinite;
+  pointer-events: none;
+}
+@keyframes zv-step-done {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 45%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 10px transparent;
+  }
+}
+.zv-step-done {
+  animation: zv-step-done 0.9s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .zv-seq-in,
+  .zv-rise,
+  .zv-badge-in,
+  .zv-step-done {
+    animation: none;
+  }
+  .zv-shine::after {
+    display: none;
+  }
+}
