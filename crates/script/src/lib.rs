@@ -41,8 +41,12 @@ const WRAP_START: &str = "(function () {";
 const UNHANDLED_TAG: &str = "__zvUnhandled";
 /// For scripts that `await` (`await pm.sendRequest(…)`): an async function.
 const WRAP_ASYNC: &str = "(async function () {";
-/// QuickJS stack limit; well below the 2 MB of the threads scripts run on.
-const MAX_STACK: usize = 768 * 1024;
+/// QuickJS stack limit. Libraries such as ajv recurse deeply, and QuickJS frames are
+/// larger in some builds (MSVC on Windows), so scripts get room to spare.
+const MAX_STACK: usize = 4 * 1024 * 1024;
+/// Every script runs on its own thread with this stack: the same headroom on every
+/// system and from every caller, whatever the stack of the calling thread.
+const THREAD_STACK: usize = 8 * 1024 * 1024;
 /// Response bodies longer than this reach scripts cut (the rest of the memory is for the script).
 const MAX_BODY_DIVISOR: usize = 4;
 /// Time limit for collecting a script's results after it ran.
@@ -321,7 +325,16 @@ pub fn run_with(source: &str, input: &ScriptInput, limits: &Limits, host: Option
         Err(e) => return failed(format!("Could not prepare the script: {e}")),
     };
     let body = input.response.as_ref().map(|r| cut(&r.body, limits.memory / MAX_BODY_DIVISOR)).unwrap_or("");
-    let mut out = match execute(source, &input_json, body, limits, host) {
+    let executed = std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("zorvik-script".into())
+            .stack_size(THREAD_STACK)
+            .spawn_scoped(scope, || execute(source, &input_json, body, limits, host))
+            .map_err(|e| format!("Could not start the script: {e}"))?
+            .join()
+            .map_err(|_| "The script engine stopped unexpectedly".to_string())?
+    });
+    let mut out = match executed {
         Ok(out) => out,
         Err(message) => return failed(message),
     };

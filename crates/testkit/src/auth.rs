@@ -259,7 +259,7 @@ fn ntlm_verifies(m: &[u8], server_challenge: [u8; 8], domain: &str, user: &str, 
         m.get(offset..offset + len)
     };
     let text = |bytes: &[u8]| {
-        String::from_utf16_lossy(&bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect::<Vec<_>>())
+        String::from_utf16_lossy(&bytes.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect::<Vec<_>>())
     };
     let (Some(nt), Some(msg_domain), Some(msg_user)) = (field(20), field(28), field(36)) else { return false };
     let unicode = m.get(60..64).is_some_and(|f| f[0] & 1 == 1);

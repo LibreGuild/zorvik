@@ -91,7 +91,7 @@ pub fn parse_challenge(b64: &str) -> Result<NtlmChallenge, AuthError> {
     let target_name = field(&data, 12).ok_or_else(bad)?;
     let target_name = if flags & NEGOTIATE_UNICODE != 0 {
         String::from_utf16_lossy(
-            &target_name.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect::<Vec<_>>(),
+            &target_name.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect::<Vec<_>>(),
         )
     } else {
         String::from_utf8_lossy(target_name).into_owned()

@@ -93,11 +93,11 @@ jobs:
           ref: ${{ steps.release.outputs.ref }}
           path: release
           persist-credentials: false
+      # No npm cache: this job builds a release tag's code with the default branch's
+      # permissions, and a shared cache would let one build's files reach another.
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: "*/docs/pages/package-lock.json"
       - name: Build the main site
         working-directory: release/docs/pages
         env:

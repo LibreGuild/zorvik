@@ -44,7 +44,7 @@ pm.test("async works", async () => {
 | `pm.sendRequest` per script | 100 requests | Further calls fail with `pm.sendRequest: at most 100 requests per script` |
 | `pm.visualizer` result | 5 MB | `pm.visualizer: the result is larger than 5 MB` |
 | Memory per script | 64 MB of JavaScript heap | The script stops: `The script ran out of memory (limit 64 MB)` |
-| Call stack | 768 KB | Deep recursion throws a `RangeError` (a normal error the script can catch) |
+| Call stack | 4 MB (each script runs on its own thread) | Deep recursion throws a `RangeError` (a normal error the script can catch) |
 | Collecting the results after the script | 1 s | `Collecting the script's results took too long (did it replace built-in functions?)`, for scripts that break built-ins the report needs |
 | Response body seen by scripts | First 16 MB | `pm.response.text()` and `json()` see the start, and the console warns `The response body is larger than 16 MB; scripts see only its start.` |
 | Sent body in `pm.request.body` (post-response) | First 1 MB | Cut |
