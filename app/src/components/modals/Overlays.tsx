@@ -44,7 +44,18 @@ export function Dialogs() {
       }
     >
       {current.kind === "confirm" ? (
-        <p className="text-[13px] text-muted">{current.message}</p>
+        <div className="flex flex-col gap-2.5">
+          <p className="text-[13px] text-muted">{current.message}</p>
+          {current.details && current.details.length > 0 && (
+            <ul className="selectable max-h-48 overflow-auto rounded-lg border border-line bg-panel-2 px-3 py-2 font-mono text-[12px] text-fg" data-testid="confirm-details">
+              {current.details.map((d, i) => (
+                <li key={i} className="break-all">
+                  {d}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       ) : (
         <div className="flex flex-col gap-2">
           {current.message && <p className="text-[13px] text-muted">{current.message}</p>}

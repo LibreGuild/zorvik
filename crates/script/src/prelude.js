@@ -1806,6 +1806,8 @@
       for (var i = 1; i < timers.length; i++) if (timers[i].at < next.at) next = timers[i];
       var wait = next.at - Date.now();
       if (wait > 0) host.sleep(wait);
+      // The sleep ends early at the script's time limit: a timer that isn't due never runs.
+      if (Date.now() < next.at) return false;
       if (next.every) next.at = Math.max(next.at, Date.now()) + next.every;
       else clearTimer(next.id);
       next.fn.apply(undefined, next.args);

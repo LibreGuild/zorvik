@@ -11,6 +11,8 @@ import { GrpcMessageTab, GrpcMetadataTab, GrpcProtoFilesTab } from "./GrpcEditor
 import { GrpcMethodPrefix } from "./GrpcMethodPicker";
 // Its store registers the gRPC sender (grpc.invoke / grpc.start).
 import { GrpcResultPane } from "./GrpcResultPane";
+// Its store registers the trust question for MCP programs.
+import { McpCallTab, McpConnectionTab, McpResultPane } from "./Mcp";
 import { MqttOptions } from "./MqttOptions";
 import { MqttSubscriptions } from "./MqttSubscriptions";
 import { MqttTopicField } from "./MqttTopicField";
@@ -25,6 +27,7 @@ export interface KindPaneProps {
 export const RESULT_PANES: Partial<Record<RequestKind, ComponentType<KindPaneProps>>> = {
   dns: DnsResultPane,
   grpc: GrpcResultPane,
+  mcp: McpResultPane,
 };
 
 /** Editor tabs of a kind: shown instead of Params/Headers/Body/Auth. */
@@ -49,6 +52,11 @@ export const KIND_EDITOR_TABS: Partial<Record<RequestKind, KindEditorTab[]>> = {
   ],
   // Shown before the HTTP-like tabs (Params, Headers, Auth, …).
   socketio: [{ id: "connection", label: "Connection", View: SocketIoOptions }],
+  // Followed by Headers, Auth, Settings, Scripts and Docs.
+  mcp: [
+    { id: "call", label: "Call", View: McpCallTab },
+    { id: "connection", label: "Connection", View: McpConnectionTab },
+  ],
 };
 
 /** Kinds whose editor tabs come before the usual Params, Headers, Auth and Settings. */
@@ -76,4 +84,5 @@ export const URL_PLACEHOLDERS: Partial<Record<RequestKind, string>> = {
   mqtt: "mqtt://localhost:1883",
   grpc: "grpc://localhost:50051",
   socketio: "http://localhost:3000/chat",
+  mcp: "http://localhost:3000/mcp  or  npx -y @modelcontextprotocol/server-everything",
 };

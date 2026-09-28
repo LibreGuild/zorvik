@@ -10,8 +10,10 @@
 //! - `ctx.control` carries sends/disconnects from the UI.
 
 mod connections;
+mod connections_limit;
 mod dns;
 mod http;
+pub mod mcp;
 mod relay;
 pub mod report;
 pub mod rules;
@@ -150,7 +152,7 @@ impl Drop for RunningServer {
 /// ALPN protocols offered by a TLS listener of this kind.
 fn alpn(kind: ServerKind) -> &'static [&'static [u8]] {
     match kind {
-        ServerKind::Http | ServerKind::Sse => &[b"h2", b"http/1.1"],
+        ServerKind::Http | ServerKind::Sse | ServerKind::Mcp => &[b"h2", b"http/1.1"],
         // WebSocket upgrades need HTTP/1.1.
         ServerKind::Websocket | ServerKind::SocketIo => &[b"http/1.1"],
         _ => &[],
@@ -166,8 +168,8 @@ pub fn display_url(kind: ServerKind, tls: bool, addr: SocketAddr) -> String {
     };
     let host = SocketAddr::new(ip, addr.port());
     let scheme = match (kind, tls) {
-        (ServerKind::Http | ServerKind::Sse | ServerKind::SocketIo, false) => "http",
-        (ServerKind::Http | ServerKind::Sse | ServerKind::SocketIo, true) => "https",
+        (ServerKind::Http | ServerKind::Sse | ServerKind::SocketIo | ServerKind::Mcp, false) => "http",
+        (ServerKind::Http | ServerKind::Sse | ServerKind::SocketIo | ServerKind::Mcp, true) => "https",
         (ServerKind::Websocket, false) => "ws",
         (ServerKind::Websocket, true) => "wss",
         (ServerKind::Tcp | ServerKind::TcpProxy, false) => "tcp",
@@ -228,6 +230,8 @@ pub async fn start(
     } else {
         None
     };
+    // An MCP server's address is its endpoint, which clients are configured with.
+    let endpoint = (kind == ServerKind::Mcp).then(|| format!("/{}", server.mcp.path.trim().trim_matches('/')));
     let (live_tx, live_rx) = watch::channel(Arc::new(Live { server, vars }));
     let (control_tx, control_rx) = mpsc::unbounded_channel();
     let cancel = CancellationToken::new();
@@ -270,13 +274,17 @@ pub async fn start(
                 ServerKind::Sse => Box::pin(sse::run(listener, ctx)),
                 ServerKind::Tcp => Box::pin(tcp::run(listener, ctx)),
                 ServerKind::SocketIo => Box::pin(socketio::run(listener, ctx)),
+                ServerKind::Mcp => Box::pin(mcp::run(listener, ctx)),
                 ServerKind::TcpProxy => Box::pin(relay::run(listener, ctx)),
                 ServerKind::Udp | ServerKind::Dns => unreachable!("bound above"),
             };
             (addr, run)
         }
     };
-    let url = display_url(kind, tls.is_some(), addr);
+    let mut url = display_url(kind, tls.is_some(), addr);
+    if let Some(path) = endpoint {
+        url.push_str(&path);
+    }
     let token = cancel.clone();
     tokio::spawn(async move {
         // A bug must not leave the server looking alive: a panic stops it like an error.

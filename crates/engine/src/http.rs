@@ -323,6 +323,22 @@ impl Sender {
     }
 }
 
+/// The most of a 401's body read before answering its challenge on the same connection.
+const MAX_CHALLENGE_BODY: usize = 1 << 20;
+
+/// Read a body to its end, at most `limit` bytes: whether it ended within them.
+async fn drain(mut body: hyper::body::Incoming, limit: usize) -> bool {
+    let mut read = 0;
+    while let Some(frame) = body.frame().await {
+        let Ok(frame) = frame else { return false };
+        read += frame.data_ref().map_or(0, Bytes::len);
+        if read > limit {
+            return false;
+        }
+    }
+    true
+}
+
 pub(crate) struct Prepared {
     pub(crate) method: http::Method,
     pub(crate) url: Url,
@@ -394,6 +410,7 @@ impl Client {
         accept_compressed: bool,
     ) -> Result<(Hop, Vec<RedirectHop>, Duration)> {
         let mut current = prepare(req)?;
+        let origin = current.url.origin();
         let mut redirects = Vec::new();
         let started = Instant::now();
         let mut redirect_time = Duration::ZERO;
@@ -401,7 +418,10 @@ impl Client {
             if let Some(guard) = &opts.host_guard {
                 guard.check(&current.url)?;
             }
-            let hop = self.exchange(&current, opts, jar, accept_compressed).await?;
+            // Digest and NTLM answer challenges for the request's own origin only, never for a
+            // site a redirect leads to (like the Authorization header).
+            let challenge_ok = current.url.origin() == origin;
+            let hop = self.exchange(&current, opts, jar, accept_compressed, challenge_ok).await?;
             if let Some(jar) = jar {
                 let set_cookies = header_values(&hop.parts.headers, "set-cookie");
                 jar.store(&current.url, &set_cookies);
@@ -437,8 +457,15 @@ impl Client {
         opts: &RequestOptions,
         jar: Option<&CookieJar>,
         accept_compressed: bool,
+        challenge_ok: bool,
     ) -> Result<Hop> {
+        let challenge = opts.challenge_auth.as_ref().filter(|_| challenge_ok).map(|c| c.0.clone());
         if opts.http_version == HttpVersionPref::Http3 {
+            if challenge.is_some() {
+                return Err(EngineError::invalid(
+                    "Digest and NTLM need HTTP/1.1 or HTTP/2: choose another HTTP version in the request's settings",
+                ));
+            }
             return self.exchange_h3(req, opts, jar, accept_compressed).await;
         }
         let url = &req.url;
@@ -447,7 +474,6 @@ impl Client {
         let bare_host = host.trim_start_matches('[').trim_end_matches(']');
         let port = url.port_or_known_default().unwrap_or(if https { 443 } else { 80 });
         let proxy = opts.proxy.for_target(bare_host, https);
-        let challenge = opts.challenge_auth.as_ref().map(|c| c.0.clone());
         let bound = challenge.as_ref().is_some_and(|c| c.connection_bound());
         if bound && opts.http_version == HttpVersionPref::Http2 {
             return Err(EngineError::invalid("NTLM needs HTTP/1.1: choose HTTP/1.1 or Auto in the request's settings"));
@@ -551,8 +577,25 @@ impl Client {
                 .answer(&challenges, req.method.as_str(), &target, &req.body)
                 .map_err(|message| EngineError::new(ErrorKind::Protocol, message))?;
             if let Some(answer) = answer {
-                // The connection is reused only once the first response is read to its end.
-                let _ = response.into_body().collect().await;
+                let closing = response.version() == http::Version::HTTP_10
+                    || header_value(response.headers(), "connection")
+                        .is_some_and(|v| v.to_ascii_lowercase().contains("close"));
+                // The connection is reused only once the first response is read to its end
+                // (a bounded read: the body of a 401 is thrown away).
+                let drained = drain(response.into_body(), MAX_CHALLENGE_BODY).await;
+                if (closing || !drained) && !auth.connection_bound() {
+                    // Digest works on any connection: answer on a new one.
+                    let mut retry = Prepared {
+                        method: req.method.clone(),
+                        url: req.url.clone(),
+                        headers: req.headers.clone(),
+                        body: req.body.clone(),
+                    };
+                    retry.headers.retain(|h| !h.name.eq_ignore_ascii_case("authorization"));
+                    retry.headers.push(Header::new("Authorization", answer));
+                    drop(guard);
+                    return Box::pin(self.exchange(&retry, opts, jar, accept_compressed, false)).await;
+                }
                 headers.retain(|h| !h.name.eq_ignore_ascii_case("authorization"));
                 headers.push(Header::new("Authorization", answer));
                 let (builder, retry_headers) = request_head(&req.method, uri, version, headers)?;

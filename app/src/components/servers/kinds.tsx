@@ -1,11 +1,12 @@
 // Server kinds: how each is labelled and which editor configures it.
 import type { ComponentType, ReactNode } from "react";
-import { ArrowLeftRight, Globe, Network, Radio, Router, Server as ServerIcon, Unplug, Zap } from "lucide-react";
+import { ArrowLeftRight, Bot, Globe, Network, Radio, Router, Server as ServerIcon, Unplug, Zap } from "lucide-react";
 import type { RunningServerInfo } from "../../bindings/RunningServerInfo";
 import type { Server } from "../../bindings/Server";
 import type { ServerKind } from "../../bindings/ServerKind";
 import { DnsServerEditor } from "./DnsServerEditor";
 import { HttpMockEditor } from "./HttpMockEditor";
+import { McpServerEditor } from "./McpServerEditor";
 import { RelayEditor } from "./RelayEditor";
 import { SocketIoServerEditor } from "./SocketIoServerEditor";
 import { SocketServerEditor } from "./SocketServerEditor";
@@ -41,6 +42,15 @@ export const SERVER_KINDS: Record<ServerKind, ServerKindInfo> = {
     icon: (size) => <Globe size={size} />,
     description: "Routes with canned responses, delays and faults. Build it from a collection or an OpenAPI spec.",
     Editor: HttpMockEditor,
+    connections: false,
+  },
+  mcp: {
+    label: "MCP server",
+    short: "MCP",
+    color: "var(--m-mcp)",
+    icon: (size) => <Bot size={size} />,
+    description: "Tools, resources and prompts for AI apps and agents, over Streamable HTTP, HTTP+SSE or stdio. Test an MCP client against it.",
+    Editor: McpServerEditor,
     connections: false,
   },
   websocket: {
@@ -108,4 +118,4 @@ export const SERVER_KINDS: Record<ServerKind, ServerKindInfo> = {
   },
 };
 
-export const SERVER_KIND_ORDER: ServerKind[] = ["http", "websocket", "socketio", "sse", "tcp", "udp", "dns", "tcpProxy"];
+export const SERVER_KIND_ORDER: ServerKind[] = ["http", "mcp", "websocket", "socketio", "sse", "tcp", "udp", "dns", "tcpProxy"];

@@ -50,7 +50,8 @@ Editors also close brackets and quotes as you type, fold blocks, and complete `{
 ## When shortcuts work
 
 - The app shortcuts work when a workspace is open, in the workbench. They are off in the Training Bootcamp's **Academy** view.
-- While a dialog is open, only <kbd>Mod</kbd> <kbd>K</kbd> and the zoom keys work; the other keys belong to the dialog.
+- While a dialog is open, only the zoom keys work; the other keys belong to the dialog.
+- In the tab bar, <kbd>←</kbd> and <kbd>→</kbd> move between tabs (<kbd>Home</kbd> and <kbd>End</kbd> to the first and last) and <kbd>Enter</kbd> or <kbd>Space</kbd> opens one.
 - The zoom keys work everywhere, also on the welcome screen and in dialogs.
 - Combinations with <kbd>Alt</kbd> / <kbd>Option</kbd> are left to the system.
 - On macOS, Zorvik uses <kbd>⌘</kbd> so that <kbd>Ctrl</kbd> keeps its text-editing meaning in fields.

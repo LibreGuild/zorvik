@@ -586,6 +586,16 @@ fn timers_run_after_the_script() {
     let limits = Limits { timeout: Duration::from_millis(200), ..Default::default() };
     let out = run("setInterval(() => {}, 10);", &pre(), &limits);
     assert!(out.error.unwrap().message.contains("took longer"));
+    // A timer due after the time limit never runs (its changes aren't kept).
+    let out = run("setTimeout(() => pm.environment.set('late', 'yes'), 60000);", &pre(), &limits);
+    assert_eq!(env(&out, "late"), None);
+}
+
+#[test]
+fn a_rejection_whose_reason_rejects_again_is_reported() {
+    let script = "const reason = {}; Object.defineProperty(reason, 'message', { get() { Promise.reject(new Error('inner')); return 'outer'; } }); Promise.reject(reason);";
+    let out = run(script, &pre(), &Limits::default());
+    assert!(out.error.is_some());
 }
 
 #[test]

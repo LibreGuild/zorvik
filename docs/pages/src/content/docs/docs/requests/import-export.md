@@ -172,7 +172,7 @@ A leading `$ ` prompt is ignored. Only the first command is imported.
 | `-T`, `--upload-file` | A binary file body; the method becomes `PUT` |
 | `-G`, `--get` | The data goes into the query string, with `GET` |
 | `-I`, `--head` | `HEAD` |
-| `-u`, `--user` | Basic auth |
+| `-u`, `--user` | Basic auth; Digest with `--digest`, NTLM with `--ntlm` (`DOMAIN\user` stays the user name) |
 | `--oauth2-bearer` | Bearer token |
 | `-b`, `--cookie` with `name=value` | A `Cookie` header (cookie files are ignored, with a note) |
 | `-A`, `--user-agent`; `-e`, `--referer` | `User-Agent`; `Referer` |
@@ -197,7 +197,7 @@ The dialog lists the languages on the left (type in the search box to find one b
 
 | Language | Libraries | Notes |
 |---|---|---|
-| **cURL** | bash / zsh, Windows cmd, PowerShell (`curl.exe`) | bash / zsh is the default on macOS and Linux, Windows cmd on Windows |
+| **cURL** | bash / zsh, Windows cmd, PowerShell (`curl.exe`) | bash / zsh is the default on macOS and Linux, Windows cmd on Windows. Binary bodies go through base64 (bash) or a temporary file (cmd, PowerShell), so every byte arrives |
 | **HTTPie** | HTTPie 3 | A shell command |
 | **Wget** | Wget 1.15+ | A shell command; binary bodies go through a temporary file |
 | **PowerShell** | `Invoke-WebRequest` | PowerShell 7 |

@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use zorvik_engine::{HttpRequest, HttpVersionPref, RequestOptions};
+use zorvik_engine::{Header, HttpRequest, HttpVersionPref, RequestOptions};
 use zorvik_formats::{CaptureFrom, LoadCapture, LoadModel, LoadStage, Threshold, ThresholdMetric, ThresholdOp};
 use zorvik_load::{
     DataRow, EventFn, LoadEvent, LoadRun, MetricsSummary, PhaseSummary, Plan, PlanTarget, RequestSource, RunPhase,
@@ -144,6 +144,10 @@ async fn open_model_drops_iterations_over_the_in_flight_cap() {
     let server = TestServer::start().await;
     let mut p = plan(LoadModel::ArrivalRate, &[(0, 100), (2, 100)], vec![target("Slow", server.url("/delay/200"), 1)]);
     p.max_in_flight = 5;
+    p.thresholds = vec![
+        threshold(ThresholdMetric::P95, ThresholdOp::Lt, 5000.0, None),
+        threshold(ThresholdMetric::ErrorRate, ThresholdOp::Lt, 1.0, None),
+    ];
     let summary = run(p, None).await;
     let t = &summary.totals;
     // 200 scheduled: ~5 per 200 ms can run, the rest are dropped (not queued).
@@ -151,6 +155,34 @@ async fn open_model_drops_iterations_over_the_in_flight_cap() {
     assert!(t.dropped >= 120, "{} dropped", t.dropped);
     assert!(t.latency.p50 >= 200.0 && t.latency.p50 < 400.0, "{}", t.latency.p50);
     assert_eq!(summary.targets[0].metrics.dropped, t.dropped);
+    // Every answer was a 200, but a dropped request failed: the error rate says so.
+    assert_eq!(t.errors, 0);
+    let rate = t.dropped as f64 * 100.0 / 200.0;
+    assert!((t.error_rate - rate).abs() < 1e-9, "{} %", t.error_rate);
+    let results: Vec<(Option<f64>, bool)> = summary.thresholds.iter().map(|t| (t.actual, t.passed)).collect();
+    assert_eq!(results[1], (Some(t.error_rate), false), "{results:?}");
+    assert!(results[0].1 && !summary.passed);
+    let html = html_report("Dropped", &summary);
+    assert!(html.contains(&format!("0 failed, {} dropped", t.dropped)), "{html}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn throughput_leaves_out_the_wait_for_requests_in_flight() {
+    let server = TestServer::start().await;
+    // 50/s for 2 s; one request in ten hangs until the 2 s timeout, so the run
+    // waits up to ~2 s after the planned end for the last of them.
+    let targets = vec![target("Ok", server.url("/status/200"), 9), target("Hangs", server.url("/delay/60000"), 1)];
+    let mut p = plan(LoadModel::ArrivalRate, &[(0, 50), (2, 50)], targets);
+    p.options.timeout = Some(Duration::from_secs(2));
+    p.thresholds = vec![threshold(ThresholdMetric::Rps, ThresholdOp::Gte, 45.0, None)];
+    let summary = run(p, None).await;
+    let t = &summary.totals;
+    assert_eq!(t.requests, 100);
+    assert_eq!(t.error_kinds, vec![("timeout".to_string(), 10)]);
+    assert!(summary.duration_ms > 3000, "{}", summary.duration_ms);
+    // 100 requests started over 2 s: 50/s, not 100 over the ~4 s the run lasted.
+    assert!((t.rps - 50.0).abs() < 2.0, "{} req/s", t.rps);
+    assert!(summary.passed, "{:?}", summary.thresholds);
 }
 
 /// HTTP/1.1 server that answers one request at a time (20 ms each) across
@@ -482,6 +514,75 @@ async fn a_rendered_request_may_not_leave_the_hosts_it_started_with() {
     assert_eq!(summary.totals.status_codes, vec![(200, 1)]);
     assert_eq!(summary.totals.error_kinds[0].0, "notAllowed");
     assert_eq!(zorvik_load::hosts(&plan(LoadModel::VirtualUsers, &[(1, 1)], vec![])), Vec::<String>::new());
+}
+
+/// A target rendered per iteration that may also set a `Host` header.
+fn rendered_with_host(
+    name: &str,
+    render: impl Fn(&UserVars) -> (String, Option<String>) + Send + Sync + 'static,
+) -> PlanTarget {
+    PlanTarget {
+        name: name.into(),
+        request: format!("{name}.yaml"),
+        source: RequestSource::Dynamic(Arc::new(move |vars| {
+            let (url, host) = render(vars);
+            let mut req = get(url);
+            req.headers.extend(host.map(|h| Header::new("Host", h)));
+            Ok(req)
+        })),
+        weight: 1,
+        captures: Vec::new(),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rendered_request_may_not_move_to_another_port_or_virtual_host() {
+    let (server, other) = (TestServer::start().await, TestServer::start().await);
+    let (base, other_base) = (server.url(""), other.url(""));
+    assert_ne!(base, other_base);
+
+    // Same host, another port (another service on that machine): refused.
+    let (b, o) = (base.clone(), other_base.clone());
+    let mut hop = rendered("Hop", move |vars| match vars.get("next") {
+        Some(next) => format!("{next}/status/200"),
+        None => format!("{b}/echo?next={o}"),
+    });
+    hop.captures = vec![capture("next", CaptureFrom::Json, "$.args.next")];
+    let mut p = plan(LoadModel::VirtualUsers, &[(0, 1), (1, 1)], vec![hop]);
+    p.think_time = Duration::from_millis(20);
+    let summary = run(p, None).await;
+    assert_eq!(summary.totals.status_codes, vec![(200, 1)]);
+    assert_eq!(summary.totals.error_kinds[0].0, "notAllowed");
+
+    // A Host header from a captured value (another virtual host): refused. A
+    // Host header the plan always sends is where the run was started to send.
+    let b = base.clone();
+    let mut vhost = rendered_with_host("Vhost", move |vars| match vars.get("vhost") {
+        Some(vhost) => (format!("{b}/status/201"), Some(vhost.to_string())),
+        None => (format!("{b}/echo?vhost=admin.internal"), None),
+    });
+    vhost.captures = vec![capture("vhost", CaptureFrom::Json, "$.args.vhost")];
+    let b = base.clone();
+    let pinned = rendered_with_host("Pinned", move |_| (format!("{b}/status/202"), Some("App.test".into())));
+    let mut p = plan(LoadModel::VirtualUsers, &[(0, 1), (1, 1)], vec![vhost, pinned]);
+    p.think_time = Duration::from_millis(20);
+    let summary = run(p, None).await;
+    let codes: Vec<u16> = summary.totals.status_codes.iter().map(|(code, _)| *code).collect();
+    assert_eq!(codes, [202, 200], "{:?}", summary.totals.status_codes);
+    assert_eq!(summary.totals.error_kinds[0].0, "notAllowed");
+    assert_eq!(summary.targets[1].metrics.errors, 0);
+
+    // The port from the data file: every row's port is known before the run.
+    let port = |url: &str| url.rsplit(':').next().unwrap().to_string();
+    let rows = vec![row(&[("port", port(&base).as_str())]), row(&[("port", port(&other_base).as_str())])];
+    let by_row =
+        rendered("By row", |vars| format!("http://127.0.0.1:{}/status/200", vars.get("port").unwrap_or("{{port}}")));
+    let mut p = plan(LoadModel::VirtualUsers, &[(0, 2), (1, 2)], vec![by_row]);
+    p.think_time = Duration::from_millis(20);
+    p.rows = rows;
+    assert_eq!(zorvik_load::hosts(&p), ["127.0.0.1"]);
+    let summary = run(p, None).await;
+    assert!(summary.totals.requests > 10 && summary.totals.errors == 0, "{:?}", summary.totals);
 }
 
 #[test]

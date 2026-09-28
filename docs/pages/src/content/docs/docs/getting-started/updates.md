@@ -61,6 +61,7 @@ The `zorvik` command line inside the app updates with the app.
 Sometimes Zorvik can't update itself: the download was interrupted, a network filter changed the file on the way (its signature then doesn't match, so it is never installed), or the app's folder can't be written to. Zorvik doesn't show an error for that. The notice says the new version is out, with **Open downloads**, which opens its release page on GitHub: download and install it the same way as the first time.
 
 - **"Could not reach GitHub"** (after **Check for updates**): you are offline, or a proxy or firewall blocks `github.com`. Set the proxy in **Settings → Proxy**, or download the new version by hand.
+- **"GitHub didn't answer in time"**: the connection is very slow, or none of GitHub's download servers answered. Zorvik tries each of their addresses for a few seconds, so one unreachable server doesn't hold the check up; try again later, or download by hand. The app's log has the details.
 - **On macOS**, keep Zorvik in `/Applications`: a copy opened from the disk image can't replace itself.
 - The reason is in the [log file](../../reference/data-locations/#logs).
 

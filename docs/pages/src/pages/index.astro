@@ -27,6 +27,7 @@ const PROTOCOLS = [
   { label: "HTTP/3", color: "#86bd7c" },
   { label: "GraphQL", color: "#ec7fbd" },
   { label: "gRPC", color: "#a4aaf2" },
+  { label: "MCP", color: "#f0937a" },
   { label: "WebSocket", color: "#6fbac5" },
   { label: "Socket.IO", color: "#6fd3b4" },
   { label: "SSE", color: "#e3935f" },
@@ -58,6 +59,7 @@ const released = release.date ? new Date(release.date).toLocaleDateString("en", 
 
 const TOUR = [
   { id: "requests", label: "Requests", image: "request-dark.webp", alt: "A request, its JSON response and tests passing", caption: "Every protocol, one editor: params, auth, scripts and a response with timing, TLS and the headers that really left your machine." },
+  { id: "mcp", label: "MCP", image: "mcp-dark.webp", alt: "An MCP call: a tool picked from the server's catalog, its arguments, and the structured answer with tests passing", caption: "Test the tools AI agents use: connect to any MCP server, pick a tool from its schema, call it and test the answer. Or build an MCP server in minutes." },
   { id: "mocks", label: "Mock servers", image: "mock-dark.webp", alt: "A mock API with routes and its live traffic", caption: "Mock APIs from scratch, an OpenAPI spec or a response you just got. Templates, delays, faults, CORS, and live traffic." },
   { id: "load", label: "Load tests", image: "loadtest-dark.webp", alt: "A finished load test with latency percentiles and thresholds", caption: "Virtual users or arrival rate, stages and thresholds. Honest percentiles, even when the server starts queueing." },
   { id: "academy", label: "Academy", image: "academy-dark.webp", alt: "The Academy course map with level, streak and badges", caption: "A course inside the app: short lessons, labs in the real workbench, badges and a certificate." },
@@ -77,7 +79,7 @@ const TERMINAL = [
   '<span class="prompt">$</span> echo $?',
   '1',
 ];
-const AGENT_TOOLS = 37;
+const AGENT_TOOLS = 38;
 const AGENT_SESSION = [
   '<span class="prompt">$</span> claude mcp add --scope user zorvik -- zorvik mcp',
   '<span class="d">Added stdio MCP server zorvik</span>',
@@ -97,12 +99,12 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Zorvik: one workbench for every wire</title>
-    <meta name="description" content="Zorvik is a free, open-source desktop app to build, test, mock and load test APIs over HTTP, GraphQL, gRPC, WebSocket, Socket.IO, SSE, MQTT, TCP, UDP and DNS. Local first, for Windows, macOS and Linux." />
+    <meta name="description" content="Zorvik is a free, open-source desktop app to build, test, mock and load test APIs over HTTP, GraphQL, gRPC, WebSocket, Socket.IO, SSE, MQTT, TCP, UDP and DNS, and to test and mock the MCP servers AI agents use. Local first, for Windows, macOS and Linux." />
     <meta name="theme-color" content="#161514" />
     <link rel="icon" href={`${base}favicon.png`} />
     {NEXT ? <meta name="robots" content="noindex" /> : <link rel="canonical" href={`https://libreguild.github.io${base}`} />}
     <meta property="og:title" content="Zorvik: one workbench for every wire" />
-    <meta property="og:description" content="Build, test, mock and load test APIs, and see what really happens on the network. Free and open source." />
+    <meta property="og:description" content="Build, test, mock and load test APIs and MCP servers, and see what really happens on the network. Free and open source." />
     <meta property="og:image" content={`https://libreguild.github.io${base}shots/banner.webp`} />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
@@ -119,6 +121,7 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
         </a>
         <nav aria-label="Main">
           <a href="#features">Features</a>
+          <a href="#mcp">MCP</a>
           <a href="#agents">AI agents</a>
           <a href="#bootcamp">Bootcamp</a>
           <a href="#cli">Command line</a>
@@ -145,7 +148,7 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
             </a>
             <h1>One workbench<br />for <span class="grad">every wire.</span></h1>
             <p class="lead">
-              Build, test, mock and load test APIs over HTTP, GraphQL, gRPC, WebSocket, Socket.IO, SSE, MQTT, TCP, UDP and DNS, and see what really happens on the network.
+              Build, test, mock and load test APIs over HTTP, GraphQL, gRPC, WebSocket, Socket.IO, SSE, MQTT, TCP, UDP and DNS, test the MCP servers AI agents use, and see what really happens on the network.
             </p>
             <div class="cta-row">
               <a class="btn btn-primary btn-lg" id="hero-download" href="#download" data-goatcounter-click="download-hero">
@@ -162,7 +165,7 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
             </p>
           </div>
           <div class="hero-art">
-            <svg class="wire" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Zorvik at the center of every protocol: HTTP, GraphQL, gRPC, WebSocket, Socket.IO, SSE, MQTT, TCP, UDP and DNS">
+            <svg class="wire" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Zorvik at the center of every protocol: HTTP, GraphQL, gRPC, MCP, WebSocket, Socket.IO, SSE, MQTT, TCP, UDP and DNS">
               <defs>
                 <radialGradient id="pkt-out"><stop offset="0" stop-color="#ffd2bd" /><stop offset=".45" stop-color="#d97757" /><stop offset="1" stop-color="#d97757" stop-opacity="0" /></radialGradient>
                 <radialGradient id="pkt-back"><stop offset="0" stop-color="#cdf3ee" /><stop offset=".45" stop-color="#4fb2ad" /><stop offset="1" stop-color="#4fb2ad" stop-opacity="0" /></radialGradient>
@@ -228,7 +231,7 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
         <div class="marquee-track">
           {[0, 1].map((copy) => (
             <ul aria-hidden={copy === 1 ? "true" : undefined}>
-              {["HTTP/1.1", "HTTP/2", "HTTP/3", "GraphQL", "GraphQL subscriptions", "gRPC", "WebSocket", "Socket.IO 3 & 4", "Server-Sent Events", "MQTT 3.1.1 & 5", "TCP", "UDP", "DNS over UDP, TCP, TLS, HTTPS", "OpenAPI 3", "Swagger 2", "Postman", "cURL", "OAuth 2.0", "mTLS", "JUnit"].map((p) => <li>{p}</li>)}
+              {["HTTP/1.1", "HTTP/2", "HTTP/3", "GraphQL", "GraphQL subscriptions", "gRPC", "MCP: Streamable HTTP & stdio", "WebSocket", "Socket.IO 3 & 4", "Server-Sent Events", "MQTT 3.1.1 & 5", "TCP", "UDP", "DNS over UDP, TCP, TLS, HTTPS", "OpenAPI 3", "Swagger 2", "Postman", "cURL", "OAuth 2.0", "mTLS", "JUnit"].map((p) => <li>{p}</li>)}
             </ul>
           ))}
         </div>
@@ -298,6 +301,18 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
             </svg>
           </article>
 
+          <article class="card c-wide glow">
+            <div class="card-copy">
+              <h3>Test MCP servers</h3>
+              <p>See what an AI agent sees: an MCP server's tools, their schemas and answers. Call them over HTTP or stdio, test them in CI, or build an MCP server for your own agent to use.</p>
+            </div>
+            <div class="agent">
+              <div class="tool"><span class="ok">✓</span> tools/call search_tickets <em>structuredContent matches the schema</em></div>
+              <div class="tool"><span class="ok">✓</span> tools/call refund_order <em>isError: “older than 30 days”</em></div>
+              <div class="tool"><span class="ok">✓</span> resources/read kb://refund-policy <em>text/markdown</em></div>
+            </div>
+          </article>
+
           <article class="card c-half glow">
             <h3>Your API work is plain files</h3>
             <p>A workspace is a folder of readable YAML. Commit it, review it in pull requests, share it. Secret values stay on your computer.</p>
@@ -333,6 +348,31 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
             <h3>Works where you work</h3>
             <p>System or manual proxies, the OS certificate store, custom CAs and client certificates. Offline, with no account.</p>
           </article>
+        </div>
+      </section>
+
+      <!-- MCP -->
+      <section class="section wrap agents" id="mcp">
+        <div class="agents-grid">
+          <div class="agents-copy">
+            <p class="eyebrow">New · MCP testing</p>
+            <h2>Test the tools your AI agents use.</h2>
+            <p class="sub">
+              AI apps and agents reach tools through MCP servers, and a model trusts whatever a tool's description, schema and answer say. Zorvik shows you
+              exactly what the agent sees: connect to any MCP server, call its tools with your own arguments, watch every JSON-RPC message, and test the
+              answers in CI. Building an agent? Give it an MCP server whose tools, failures and delays you control.
+            </p>
+            <ul class="ticks">
+              <li>Streamable HTTP, HTTP+SSE and stdio programs like <code>npx …</code>, with auth and OAuth 2.0</li>
+              <li>Tools with their schemas, resources, templates and prompts; tests and <code>zorvik run</code></li>
+              <li>MCP servers for AI apps, over HTTP or <code>zorvik serve … --stdio</code></li>
+            </ul>
+            <a class="btn btn-ghost btn-lg" href={`${docs}mcp/overview/`}>MCP in Zorvik <span aria-hidden="true">→</span></a>
+          </div>
+          <div class="window small">
+            <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span></div>
+            <img src={`${base}shots/mcp-dark.webp`} alt="An MCP call in Zorvik: the tool's description and arguments, and the server's structured answer" width="1600" height="978" loading="lazy" decoding="async" />
+          </div>
         </div>
       </section>
 

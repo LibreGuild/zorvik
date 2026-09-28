@@ -27,9 +27,11 @@ export function exampleName(base: string, taken: string[]): string {
  * Returns whether it was written to the file.
  */
 export async function saveAsExample(tabId: string, result: SendResult): Promise<boolean> {
+  if (!isRequestTab(useTabs.getState().tabs.find((t) => t.id === tabId))) return false;
+  const { text } = await api.responseText(result.responseId);
+  // As the tab is now: edits typed while the body loaded wait to be saved with the others.
   const tab = useTabs.getState().tabs.find((t) => t.id === tabId);
   if (!isRequestTab(tab)) return false;
-  const { text } = await api.responseText(result.responseId);
   const clean = !isDirty(tab) && !!tab.path;
   const status = result.meta.status;
   updateDraft(tabId, (r) => {

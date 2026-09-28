@@ -3,7 +3,7 @@
 The one place for the rules of this repository, for people and for AI coding agents. `CLAUDE.md`, `AGENTS.md` and `GEMINI.md` only point here, so every agent reads the same rules. When you learn something the next person needs (a rule, a trap, a decision), write it in this file, not in an agent-specific one.
 
 ## What Zorvik is
-An open-source desktop app for API and network testing: an API client (HTTP, GraphQL, gRPC, WebSocket, SSE, MQTT, TCP, UDP, DNS), collection runs, load tests, mock and test servers, a Training Bootcamp, and a `zorvik` command line. Coding agents control it through MCP (`zorvik mcp`).
+An open-source desktop app for API and network testing: an API client (HTTP, GraphQL, gRPC, WebSocket, Socket.IO, SSE, MQTT, TCP, UDP, DNS), an MCP client and MCP servers for testing the tools AI agents use, collection runs, load tests, mock and test servers, a Training Bootcamp, and a `zorvik` command line. Coding agents control it through MCP (`zorvik mcp`).
 
 Promises that shape every change:
 - **Every feature is free.** No paid plans, no accounts, no cloud sync, none planned.
@@ -69,7 +69,8 @@ E2E needs `cargo build -p zorvik-cli` once. Ports it uses: test servers 18787, d
 
 ## Notes
 Things that cost time once. Add to this list when you hit a new one.
-- `Api::call` returns a boxed future; long `match` arms inflate the stack in debug builds, so the Academy harness spawns solutions instead of awaiting them inline.
+- `Api::call` returns a boxed future; long `match` arms inflate the stack in debug builds, so the Academy harness spawns solutions instead of awaiting them inline. The same goes for big futures awaited inside one arm (an MCP connect): `Box::pin` them, or agent tests overflow the stack.
+- MCP requests that start programs: workspaces are untrusted, so check `mcp::check_program` (or ask, for agents) before anything spawns; never add a path that starts a workspace's program without it.
 - In E2E, pick CodeMirror completions by clicking: it ignores Enter for 75 ms after the list opens.
 - Tests that use the OS trash run only with `ZORVIK_TEST_TRASH=1`.
 - Updates are signed with the project's updater key: the public key is in `app/src-tauri/tauri.conf.json`, the private key only in the GitHub environment `release`, which only `main` and `v*` tags can use, and only the `sign-updates` job reads it (see `docs/ci-release.md`). Never change the public key casually; installed copies stop accepting updates. `ZORVIK_UPDATE_URL` points a build at a local `latest.json` for testing.

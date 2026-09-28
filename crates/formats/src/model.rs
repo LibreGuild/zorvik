@@ -62,6 +62,9 @@ pub enum RequestKind {
     /// Socket.IO client: `url` is the server and namespace (`http://localhost:3000/chat`).
     #[serde(rename = "socketio")]
     SocketIo,
+    /// MCP client: `url` is the server's endpoint (`https://example.com/mcp`), or the command
+    /// that starts a stdio server (`npx -y @modelcontextprotocol/server-everything`).
+    Mcp,
 }
 
 fn two() -> u8 {
@@ -154,6 +157,63 @@ impl Default for SocketIoOptions {
             ack: false,
         }
     }
+}
+
+/// How an MCP client reaches its server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum McpTransport {
+    /// `http(s)://…`: Streamable HTTP, falling back to HTTP+SSE; anything else: a program (stdio).
+    #[default]
+    Auto,
+    StreamableHttp,
+    /// The HTTP+SSE transport of protocol version 2024-11-05.
+    Sse,
+    Stdio,
+}
+
+/// What an MCP request calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum McpCallKind {
+    #[default]
+    Tool,
+    /// Read a resource (`name` is its URI or URI template).
+    Resource,
+    /// Get a prompt.
+    Prompt,
+}
+
+/// Options of MCP requests: how to connect, and the call that Send (and collection runs) make.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct McpOptions {
+    #[serde(default, skip_serializing_if = "is_default")]
+    #[ts(optional, as = "Option<McpTransport>")]
+    pub transport: McpTransport,
+    /// stdio: environment variables for the program (values may use `{{variables}}`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<KeyValue>>")]
+    pub env: Vec<KeyValue>,
+    /// stdio: the program's working directory, relative to the workspace folder (empty: the folder).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub cwd: String,
+    #[serde(default, skip_serializing_if = "is_default")]
+    #[ts(optional, as = "Option<McpCallKind>")]
+    pub call: McpCallKind,
+    /// The tool or prompt to call, or the resource URI (a template's `{name}` parts come from
+    /// the arguments).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub name: String,
+    /// The arguments as JSON text (may contain `{{variables}}`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub arguments: String,
 }
 
 /// Options of DNS requests.
@@ -1047,6 +1107,9 @@ pub struct Request {
     #[ts(optional, as = "Option<SocketIoOptions>")]
     pub socketio: SocketIoOptions,
     #[serde(default, skip_serializing_if = "is_default")]
+    #[ts(optional, as = "Option<McpOptions>")]
+    pub mcp: McpOptions,
+    #[serde(default, skip_serializing_if = "is_default")]
     #[ts(optional, as = "Option<Scripts>")]
     pub scripts: Scripts,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1156,6 +1219,7 @@ impl Request {
             mqtt: MqttOptions::default(),
             grpc: GrpcOptions::default(),
             socketio: SocketIoOptions::default(),
+            mcp: McpOptions::default(),
             scripts: Scripts::default(),
             docs: String::new(),
             openapi: None,

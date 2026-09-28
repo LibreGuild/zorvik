@@ -275,6 +275,21 @@ Workspace scripts run first, then the folders' (outer to inner), then the reques
 | `event` | `""` | The event the composer emits. |
 | `ack` | `false` | The composer asks for an acknowledgement. |
 
+#### MCP (`mcp`)
+
+`url` is the MCP server's URL (`http://localhost:3004/mcp`) or the command that starts it (`npx -y @modelcontextprotocol/server-everything`). See [MCP client](../../mcp/client/).
+
+| Field | Default | Meaning |
+|---|---|---|
+| `transport` | `auto` | `auto` (Streamable HTTP for `http(s)://`, falling back to HTTP+SSE; a program otherwise), `streamableHttp`, `sse` or `stdio`. |
+| `call` | `tool` | `tool`, `resource` or `prompt`. |
+| `name` | `""` | The tool or prompt name, or the resource URI (a template's `{parts}` come from the arguments). |
+| `arguments` | `""` | The arguments as JSON text (an object; may contain `{{variables}}`). |
+| `cwd` | `""` | Programs: the folder they start in, relative to the workspace folder (empty: the workspace folder). |
+| `env` | `[]` | Programs: environment variables (`key`, `value`, `enabled`). |
+
+A workspace can only start a program once you allowed that exact command, folder and environment on your computer; `zorvik run` needs `--allow-programs`.
+
 #### WebSocket and SSE
 
 WebSocket requests use `ws://` or `wss://` URLs and keep the message draft in `body.text`. SSE requests use `http://` or `https://` URLs; `settings.stream` says when runs stop reading.
@@ -369,15 +384,16 @@ http:
 | Field | Default | Meaning |
 |---|---|---|
 | `name` | | Display name. |
-| `kind` | `http` | `http` (mock API), `websocket`, `socketio`, `sse`, `tcp`, `udp`, `dns` or `tcpProxy` (a TCP relay that shows both directions). |
+| `kind` | `http` | `http` (mock API), `mcp`, `websocket`, `socketio`, `sse`, `tcp`, `udp`, `dns` or `tcpProxy` (a TCP relay that shows both directions). |
 | `seq` | `0` | Position in the sidebar. |
 | `host` | `127.0.0.1` | Address to listen on: `127.0.0.1` (this computer only) or `0.0.0.0` (other devices too). |
-| `port` | `0` | Port; `0` = any free port. New servers made in the app get 3000 (HTTP), 3001 (WebSocket), 3002 (SSE), 3003 (Socket.IO), 9000 (TCP), 9001 (UDP), 1053 (DNS) or 9100 (relay). |
-| `tls` | off | `enabled`, `certPath`, `keyPath` (PEM). Without paths, a self-signed certificate for `localhost` is generated. For `http`, `websocket`, `socketio`, `sse` and `tcp`. |
+| `port` | `0` | Port; `0` = any free port. New servers made in the app get 3000 (HTTP), 3001 (WebSocket), 3002 (SSE), 3003 (Socket.IO), 3004 (MCP), 9000 (TCP), 9001 (UDP), 1053 (DNS) or 9100 (relay). |
+| `tls` | off | `enabled`, `certPath`, `keyPath` (PEM). Without paths, a self-signed certificate for `localhost` is generated. For `http`, `mcp`, `websocket`, `socketio`, `sse` and `tcp`. |
 | `autoStart` | `false` | Start with the workspace. Only configurations this computer has started or saved before start by themselves; one that is new or changed outside Zorvik (e.g. by a Git pull) must be started once by hand. |
 | `http` | | Mock API: routes and fallback (below). |
 | `websocket` | | WebSocket server: `mode`, `greeting`, `rules`. |
 | `socketio` | | Socket.IO server (below). |
+| `mcp` | | MCP server (below). |
 | `sse` | | SSE server: `events`, `intervalMs`, `repeat`. |
 | `socket` | | TCP and UDP servers: `mode`, `greeting`, `rules`, `encoding`, `framing`, `lengthBytes`, `lineEnding`. |
 | `dns` | | DNS server: `records`, `upstream`. |
@@ -436,6 +452,20 @@ Status, headers and body are templates: `{{request.params.id}}`, `{{request.quer
 | `cors` | `false` | Allow browsers on other origins. |
 
 See [Socket.IO servers](../../servers/socketio-server/).
+
+### MCP server (`mcp`)
+
+| Field | Default | Meaning |
+|---|---|---|
+| `serverName`, `version` | the server's name, `1.0.0` | What clients see in `initialize`. |
+| `instructions` | `""` | Sent with `initialize`: how to use the server. |
+| `tools` | `[]` | `name`, `title`, `description`, `inputSchema` and `outputSchema` (JSON Schema as JSON text), `result`, `isError`, `delayMs`, `enabled`. |
+| `resources` | `[]` | `uri` (with `{parts}` for a template), `name`, `title`, `description`, `mimeType`, `text`, `enabled`. |
+| `prompts` | `[]` | `name`, `title`, `description`, `arguments` (`name`, `description`, `required`), `messages` (`role`, `text`), `enabled`. |
+| `path` | `/mcp` | The Streamable HTTP endpoint (HTTP+SSE clients use `/sse`). |
+| `cors` | `false` | Allow browser-based clients on other origins. |
+
+Results, resource texts and prompt messages can use `{{args.name}}`, `{{args}}`, `{{params.name}}`, dynamic and environment variables. See [MCP servers](../../mcp/servers/).
 
 ### SSE server (`sse`)
 

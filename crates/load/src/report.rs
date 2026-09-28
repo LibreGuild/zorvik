@@ -63,9 +63,11 @@ pub struct MetricsSummary {
     /// Network errors plus HTTP status ≥ 400.
     #[ts(type = "number")]
     pub errors: u64,
-    /// Percent of requests that failed.
+    /// Percent of requests that failed: `errors` plus `dropped`, of
+    /// `requests` plus `dropped`.
     pub error_rate: f64,
-    /// Completed requests per second over the elapsed time.
+    /// Completed requests per second while requests were being started (the
+    /// wait for the last answers after the end or a stop is left out).
     pub rps: f64,
     #[ts(type = "number")]
     pub bytes_in: u64,
@@ -79,6 +81,7 @@ pub struct MetricsSummary {
     #[ts(type = "Array<[string, number]>")]
     pub error_kinds: Vec<(String, u64)>,
     /// Open model: iterations not started because `maxInFlight` was reached.
+    /// They count as failed in `error_rate`.
     #[ts(type = "number")]
     pub dropped: u64,
     /// New connections opened (each new connection pays DNS/TCP/TLS).
@@ -87,7 +90,8 @@ pub struct MetricsSummary {
     /// Connect, time to first byte, transfer and server-reported time.
     #[serde(default)]
     pub timing: TimingSummary,
-    /// Captures that found nothing in a response (the variable kept its value).
+    /// Captures that found nothing in a response, or a value over 64 KB (the
+    /// variable kept its value).
     #[serde(default)]
     #[ts(type = "number")]
     pub capture_misses: u64,

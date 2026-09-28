@@ -2,7 +2,7 @@
 import { create } from "zustand";
 
 export type DialogRequest =
-  | { kind: "confirm"; title: string; message: string; confirmLabel: string; danger: boolean; resolve: (ok: boolean) => void }
+  | { kind: "confirm"; title: string; message: string; details?: string[]; confirmLabel: string; danger: boolean; resolve: (ok: boolean) => void }
   | { kind: "prompt"; title: string; message?: string; value: string; placeholder?: string; confirmLabel: string; resolve: (v: string | null) => void };
 
 export const useDialogs = create<{ current: DialogRequest | null }>(() => ({ current: null }));
@@ -15,9 +15,18 @@ function show(request: DialogRequest) {
   else previous?.resolve(null);
 }
 
-export function confirm(opts: { title: string; message: string; confirmLabel?: string; danger?: boolean }): Promise<boolean> {
+/** `details`: lines shown as they are, below the message (e.g. a command to allow). */
+export function confirm(opts: { title: string; message: string; details?: string[]; confirmLabel?: string; danger?: boolean }): Promise<boolean> {
   return new Promise((resolve) =>
-    show({ kind: "confirm", confirmLabel: opts.confirmLabel ?? "OK", danger: opts.danger ?? false, title: opts.title, message: opts.message, resolve }),
+    show({
+      kind: "confirm",
+      confirmLabel: opts.confirmLabel ?? "OK",
+      danger: opts.danger ?? false,
+      title: opts.title,
+      message: opts.message,
+      details: opts.details,
+      resolve,
+    }),
   );
 }
 

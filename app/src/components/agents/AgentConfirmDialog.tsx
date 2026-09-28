@@ -91,7 +91,9 @@ function Question({ request, more }: { request: AgentConfirm; more: number }) {
               ? "They go to the trash; the run history of a load test is deleted."
               : request.kind === "server"
                 ? "Other devices on your network will be able to reach it."
-                : "This reaches systems outside this computer and your private network."}
+                : request.kind === "program"
+                  ? "The program runs on your computer with your permissions: it can read your files and reach the network."
+                  : "This reaches systems outside this computer and your private network."}
           </div>
         )}
       </div>

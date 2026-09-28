@@ -19,6 +19,9 @@ use crate::net::{self, Target};
 use crate::tls::{Alpn, TlsInfo};
 use crate::ws::Direction;
 
+/// How long one write may wait for a peer that stopped reading before the session ends.
+pub(crate) const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// How a TCP/UDP connection frames and sends messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SocketConfig {
@@ -243,6 +246,9 @@ impl Client {
     pub async fn tcp(&self, address: &str, opts: &RequestOptions, config: SocketConfig) -> Result<SocketConnected> {
         let started = Instant::now();
         let (url, host, port) = parse_socket_url(address, "tcp", &["tcp", "tls", "ssl"])?;
+        if let Some(guard) = &opts.host_guard {
+            guard.check_host(&host)?;
+        }
         let secure = url.scheme() != "tcp";
         let proxy = opts.proxy.for_target(&host, true);
         let conn = net::connect(

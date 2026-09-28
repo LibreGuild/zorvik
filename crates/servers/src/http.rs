@@ -127,17 +127,23 @@ pub(crate) async fn serve(
     mut on_control: impl FnMut(Control),
 ) -> Result<(), String> {
     let acceptor = ctx.tls.clone().map(tokio_rustls::TlsAcceptor::from);
+    let slots = crate::connections_limit::Slots::new();
     loop {
         tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok((stream, addr)) => {
+                    let Some(slot) = slots.take(&ctx.reporter) else { continue };
                     let _ = stream.set_nodelay(true);
                     let peer = Peer {
                         addr,
                         conn: number_connections.then(|| ctx.reporter.next_conn()),
                         closed: ctx.cancel.child_token(),
                     };
-                    tokio::spawn(connection(stream, peer, acceptor.clone(), handler.clone(), ctx.reporter.clone()));
+                    let task = connection(stream, peer, acceptor.clone(), handler.clone(), ctx.reporter.clone());
+                    tokio::spawn(async move {
+                        task.await;
+                        drop(slot);
+                    });
                 }
                 Err(e) => {
                     ctx.reporter.error(None, None, format!("Accept failed: {e}"));

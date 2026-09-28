@@ -575,6 +575,9 @@ impl Client {
     pub async fn mqtt(&self, address: &str, opts: &RequestOptions, config: &MqttConfig) -> Result<SocketConnected> {
         let started = Instant::now();
         let (host, port, secure) = parse_address(address)?;
+        if let Some(guard) = &opts.host_guard {
+            guard.check_host(&host)?;
+        }
         let protocol = config.protocol;
         let client_id = match config.client_id.trim() {
             "" => random_client_id(),
@@ -1009,8 +1012,16 @@ async fn run(
                 writer.write_all(&bytes).await?;
                 writer.flush().await
             };
-            if let Err(e) = written.await {
-                session.emit(closed(format!("Send failed: {e}"), false));
+            // A broker that stopped reading can't hold the session (and this task) forever.
+            let result = match tokio::time::timeout(crate::socket::WRITE_TIMEOUT, written).await {
+                Ok(result) => result.map_err(|e| format!("Send failed: {e}")),
+                Err(_) => Err(format!(
+                    "Send failed: the broker stopped reading (nothing went out for {} s)",
+                    crate::socket::WRITE_TIMEOUT.as_secs()
+                )),
+            };
+            if let Err(reason) = result {
+                session.emit(closed(reason, false));
                 return;
             }
             last_sent = tokio::time::Instant::now();

@@ -224,8 +224,9 @@ impl Settings {
         std::fs::read(path).ok().and_then(|d| serde_json::from_slice(&d).ok()).unwrap_or_default()
     }
 
+    /// Owner-only: a manual proxy URL can hold a user name and password.
     pub fn save(&self, path: &Path) -> Result<()> {
-        crate::store::save_json(path, self)
+        crate::store::save_json_private(path, self)
     }
 
     /// Time limit of one script (100 ms to 60 s).

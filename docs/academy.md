@@ -115,7 +115,7 @@ lab:
   servers:                    # started for the lab; `{{api}}` holds the address
     api:                      # id: a variable name (letters, digits, _)
       name: Shop API          # saved as "Lab · Shop API" (the learner can open it and see its traffic)
-      kind: http              # http, websocket, sse, tcp, udp, dns, tcpProxy
+      kind: http              # http, mcp, websocket, socketio, sse, tcp, udp, dns, tcpProxy
       http:
         routes:
           - { method: GET, path: /products/:id, status: 200, body: '{"id": "{{request.params.id}}"}' }
@@ -146,7 +146,7 @@ Patterns are plain YAML values ([`matcher.rs`](../crates/academy/src/matcher.rs)
 | `saved: {request \| folder \| environment \| server \| loadTest \| workspace: …}` | something saved in the workspace (the file's fields, plus `path`, `id`, `running` for servers) | e.g. `{request: {name: Login, auth: {type: bearer}}}` |
 | `run: {…}` | a collection run that finished during the lab | its summary: `passed`, `requests`, `failed`, `testsPassed`, `testsFailed`, `iterations`, `name` |
 | `load: {…}` | a load test run that finished during the lab | `passed`, `requests`, `rps`, `p95`, `errorRate`, `stoppedEarly`, `name` |
-| `probe: {kind, name?, method?, path?, headers?, body?, expect}` | the lab calls a server the learner runs (`http`, `tcp`, `udp`; not the lab's own) | `expect` on `{status, headers, body, json}` or `{text}` |
+| `probe: {kind, name?, method?, path?, headers?, body?, expect}` | the lab calls a server the learner runs (`http`, `tcp`, `udp`, `mcp`; not the lab's own) | `expect` on `{status, headers, body, json}`, `{text}`, or for `mcp` (which connects over Streamable HTTP and asks `method`, default `tools/list`, with `body` as the JSON parameters) `{result}` or `{error}` |
 | `answer: "…"` or `answer: [a, b]` | what the learner types in the Lab Guide | e.g. `answer: "{{secret.word}}"` |
 | `all: [...]`, `any: [...]` | every / one of the checks | |
 

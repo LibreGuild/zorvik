@@ -31,6 +31,9 @@ impl Client {
     pub async fn udp(&self, address: &str, opts: &RequestOptions, config: SocketConfig) -> Result<SocketConnected> {
         let started = Instant::now();
         let (_, host, port) = parse_socket_url(address, "udp", &["udp"])?;
+        if let Some(guard) = &opts.host_guard {
+            guard.check_host(&host)?;
+        }
         let addrs = net::resolve(&host, port, opts.connect_timeout).await?;
         let dns = started.elapsed();
         let target = addrs.iter().copied().find(SocketAddr::is_ipv4).unwrap_or(addrs[0]);

@@ -48,6 +48,7 @@ export default defineConfig({
       sidebar: [
         { label: "Overview", link: "/docs/" },
         group("Getting started", "getting-started"),
+        group("MCP: test AI tools", "mcp"),
         group("Requests", "requests"),
         group("Protocols", "protocols"),
         group("Variables & environments", "variables"),

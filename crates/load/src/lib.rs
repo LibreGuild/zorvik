@@ -14,6 +14,7 @@ pub mod report;
 mod runner;
 mod schedule;
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -117,41 +118,104 @@ impl Plan {
 /// Every host the plan sends to (lowercase, IPv6 without brackets), for the
 /// checks before a run. A request whose host comes from the data file is
 /// rendered with every row. A host that would come from a captured value can't
-/// be known before the run: the run refuses requests to hosts not listed here.
+/// be known before the run: the run refuses requests that don't go where the
+/// plan's requests go (the same scheme, host, port and `Host` header).
 pub fn hosts(plan: &Plan) -> Vec<String> {
     let mut hosts: Vec<String> = Vec::new();
-    let mut add = |url: &str| {
-        let Ok(url) = zorvik_engine::http::normalize_url(url) else { return };
-        let Some(host) = url.host_str() else { return };
-        let host = host.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
-        if !hosts.contains(&host) {
-            hosts.push(host);
+    each_request(plan, |req| {
+        if let Some(to) = Destination::of(req)
+            && !hosts.contains(&to.host)
+        {
+            hosts.push(to.host);
         }
-    };
+    });
+    hosts
+}
+
+/// Where a request goes: the scheme, host and port it connects to, and the
+/// `Host` header it sends instead of the URL's host (the virtual host, and
+/// `:authority` on HTTP/2).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct Destination {
+    https: bool,
+    /// Lowercase, IPv6 without brackets.
+    host: String,
+    port: u16,
+    /// Every `Host` header the request sets (lowercase), in order.
+    virtual_hosts: Vec<String>,
+}
+
+impl Destination {
+    /// `None` when the URL is not an http(s) URL with a host (it can't be sent).
+    pub(crate) fn of(req: &HttpRequest) -> Option<Self> {
+        let url = zorvik_engine::http::normalize_url(&req.url).ok()?;
+        let host = url.host_str()?.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
+        let virtual_hosts = req
+            .headers
+            .iter()
+            .filter(|h| h.name.trim().eq_ignore_ascii_case("host"))
+            .map(|h| h.value.trim().to_ascii_lowercase())
+            .collect();
+        Some(Self { https: url.scheme() == "https", host, port: url.port_or_known_default()?, virtual_hosts })
+    }
+
+    fn mentions(&self, text: &str) -> bool {
+        self.host.contains(text) || self.virtual_hosts.iter().any(|h| h.contains(text))
+    }
+}
+
+impl std::fmt::Display for Destination {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let scheme = if self.https { "https" } else { "http" };
+        if self.host.contains(':') {
+            write!(f, "{scheme}://[{}]:{}", self.host, self.port)?;
+        } else {
+            write!(f, "{scheme}://{}:{}", self.host, self.port)?;
+        }
+        if !self.virtual_hosts.is_empty() {
+            write!(f, " with Host {}", self.virtual_hosts.join(", "))?;
+        }
+        Ok(())
+    }
+}
+
+/// Everywhere the plan sends to, known before the run: a rendered request
+/// must go to one of these, so a captured value can't move the load to another
+/// host, port, scheme or virtual host.
+pub(crate) fn destinations(plan: &Plan) -> HashSet<Destination> {
+    let mut all = HashSet::new();
+    each_request(plan, |req| {
+        all.extend(Destination::of(req));
+    });
+    all
+}
+
+/// Every request of the plan as the checks before a run see it. A request
+/// whose destination (scheme, host, port or `Host` header) comes from the data
+/// file is rendered with every row; others once, with the first row.
+fn each_request(plan: &Plan, mut visit: impl FnMut(&HttpRequest)) {
     let names = plan.user_variables();
     let first = UserVars::new(plan.rows.first().cloned());
     for target in plan.targets.iter().filter(|t| t.weight > 0) {
         match &target.source {
-            RequestSource::Fixed(r) => add(&r.url),
+            RequestSource::Fixed(r) => visit(r),
             RequestSource::Dynamic(render) => {
+                // A probe value in a port or scheme leaves no valid URL.
                 let varies = !plan.rows.is_empty()
-                    && render(&UserVars::probe(&names)).is_ok_and(|r| {
-                        zorvik_engine::http::normalize_url(&r.url)
-                            .is_ok_and(|u| u.host_str().is_some_and(|h| h.contains(capture::PROBE)))
-                    });
+                    && render(&UserVars::probe(&names))
+                        .is_ok_and(|r| Destination::of(&r).is_none_or(|to| to.mentions(capture::PROBE)));
                 if varies {
                     for row in &plan.rows {
                         if let Ok(r) = render(&UserVars::new(Some(row.clone()))) {
-                            add(&r.url);
+                            visit(&r);
                         }
                     }
                 } else if let Ok(r) = render(&first) {
-                    add(&r.url);
+                    visit(&r);
                 }
             }
         }
     }
-    hosts
 }
 
 /// Check a plan before running it; the message is shown to the user.

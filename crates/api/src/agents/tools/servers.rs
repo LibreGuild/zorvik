@@ -9,6 +9,7 @@ use zorvik_workspace::formats::{Server, ServerKind};
 
 use super::{Call, Def, Done, Fail, Outcome, cut, host_of, human_size, merge_patch, obj, plural, strict, string};
 use crate::Api;
+use crate::agents::redact::is_sensitive_header;
 use crate::agents::{AgentTarget, Ask, ConfirmKind};
 
 /// Traffic entries returned by default, and at most.
@@ -56,7 +57,7 @@ pub(super) fn server_schema() -> Value {
     obj(
         json!({
             "name": string("Display name (also its file name). Renames the server when it differs from the one being saved."),
-            "kind": { "type": "string", "enum": ["http", "websocket", "socketio", "sse", "tcp", "udp", "dns", "tcpProxy"], "description": "http = mock API (default). Only the section of the kind is used." },
+            "kind": { "type": "string", "enum": ["http", "websocket", "socketio", "sse", "tcp", "udp", "dns", "tcpProxy", "mcp"], "description": "http = mock API (default). mcp = a mock MCP server with tools, resources and prompts. Only the section of the kind is used." },
             "host": string("127.0.0.1 (default, this computer only) or 0.0.0.0 (other devices too)."),
             "port": { "type": "integer", "description": "Port to listen on; 0 = any free port when it starts." },
             "tls": obj(json!({
@@ -112,6 +113,51 @@ pub(super) fn server_schema() -> Value {
                 },
                 "path": string("Where the server answers (default /socket.io/)."),
                 "cors": { "type": "boolean", "description": "Allow browsers on other origins (long-polling)." },
+            }), &[]),
+            "mcp": obj(json!({
+                "serverName": string("The name clients see (default: the server's name)."),
+                "version": string("The version clients see."),
+                "instructions": string("Sent to clients when they connect: how to use the server."),
+                "tools": {
+                    "type": "array",
+                    "description": "Results can use {{args}} (all arguments as JSON), {{args.name}}, dynamic variables and environment variables.",
+                    "items": obj(json!({
+                        "name": { "type": "string" },
+                        "title": { "type": "string" },
+                        "description": string("What the tool does (AI apps read it to decide when to call it)."),
+                        "inputSchema": string("JSON Schema of the arguments as JSON text (empty: any object). Missing required arguments answer as a failed call."),
+                        "outputSchema": string("JSON Schema of a structured result as JSON text: the result must then be JSON and is also sent as structuredContent."),
+                        "result": string("The result's text."),
+                        "isError": { "type": "boolean", "description": "Answer as a failed tool call." },
+                        "delayMs": { "type": "integer" },
+                        "enabled": { "type": "boolean" },
+                    }), &["name"]),
+                },
+                "resources": {
+                    "type": "array",
+                    "items": obj(json!({
+                        "uri": string("e.g. file:///docs/readme.md; {name} parts make a template (users://{id}) whose text can use {{params.id}}."),
+                        "name": { "type": "string" },
+                        "title": { "type": "string" },
+                        "description": { "type": "string" },
+                        "mimeType": string("Default text/plain."),
+                        "text": { "type": "string" },
+                        "enabled": { "type": "boolean" },
+                    }), &["uri"]),
+                },
+                "prompts": {
+                    "type": "array",
+                    "items": obj(json!({
+                        "name": { "type": "string" },
+                        "title": { "type": "string" },
+                        "description": { "type": "string" },
+                        "arguments": { "type": "array", "items": obj(json!({ "name": { "type": "string" }, "description": { "type": "string" }, "required": { "type": "boolean" } }), &["name"]) },
+                        "messages": { "type": "array", "items": obj(json!({ "role": { "type": "string", "enum": ["user", "assistant"] }, "text": string("May use {{args.name}}.") }), &["text"]) },
+                        "enabled": { "type": "boolean" },
+                    }), &["name"]),
+                },
+                "path": string("The Streamable HTTP endpoint (default /mcp); clients of the older HTTP+SSE transport use /sse."),
+                "cors": { "type": "boolean", "description": "Allow browser-based clients on other origins." },
             }), &[]),
             "sse": obj(json!({
                 "events": {
@@ -283,6 +329,11 @@ fn check_server(server: &Server) -> Result<(), String> {
     if server.kind == ServerKind::TcpProxy && server.proxy.target.trim().is_empty() {
         return Err("proxy.target is empty (host:port to relay to)".into());
     }
+    if server.kind == ServerKind::Mcp
+        && let Some(problem) = server.mcp.problems().into_iter().next()
+    {
+        return Err(format!("mcp: {problem}"));
+    }
     Ok(())
 }
 
@@ -292,8 +343,14 @@ fn traffic_for_agent(entry: &TrafficEntry, redact: &impl Fn(&str) -> String) -> 
         let (text, cut) = cut(&redact(s), TRAFFIC_BODY_CHARS);
         if cut { format!("{text}… (cut)") } else { text }
     };
+    // Credential headers (a client's Authorization, cookies) are hidden whatever their value.
     let headers = |list: &[zorvik_engine::Header]| -> Value {
-        list.iter().map(|h| json!({ "name": h.name, "value": redact(&h.value) })).collect()
+        list.iter()
+            .map(|h| {
+                let value = if is_sensitive_header(&h.name) { crate::MASK.to_string() } else { redact(&h.value) };
+                json!({ "name": h.name, "value": value })
+            })
+            .collect()
     };
     let time = time::OffsetDateTime::from_unix_timestamp_nanos((entry.timestamp * 1_000_000.0) as i128)
         .ok()
@@ -408,7 +465,7 @@ impl Api {
                 let kind: ServerKind = match patch.get("kind") {
                     Some(k) => serde_json::from_value(k.clone()).map_err(|_| {
                         Fail::Invalid(format!(
-                            "server.kind: unknown kind {k} (http, websocket, socketio, sse, tcp, udp, dns, tcpProxy)"
+                            "server.kind: unknown kind {k} (http, websocket, socketio, sse, tcp, udp, dns, tcpProxy, mcp)"
                         ))
                     })?,
                     None => ServerKind::Http,
@@ -557,6 +614,13 @@ impl Api {
         let open = matches!(server.host.trim(), "0.0.0.0" | "::" | "[::]");
         let port_label = if server.port == 0 { "any free port".to_string() } else { format!("port {}", server.port) };
         let mut items = vec![format!("{:?} on {}, {port_label}", server.kind, server.host)];
+        // Where it passes traffic on to: the user sees that host too.
+        if server.kind == ServerKind::TcpProxy {
+            items.push(format!("Relays every connection to {}", server.proxy.target.trim()));
+        }
+        if server.kind == ServerKind::Http && server.http.fallback == zorvik_workspace::formats::MockFallback::Proxy {
+            items.push(format!("Forwards requests no route matches to {}", server.http.proxy_url.trim()));
+        }
         if open {
             items.push("Other devices on the network can reach it.".into());
         }
@@ -702,6 +766,12 @@ mod tests {
             "socket": { "mode": "echo", "greeting": "", "rules": [], "encoding": "hex", "framing": "lengthPrefixed", "lengthBytes": 4, "lineEnding": "crLf" },
             "dns": { "records": [{ "name": "a", "type": "A", "value": "1.2.3.4", "ttl": 60, "enabled": true }], "upstream": "" },
             "proxy": { "target": "a:1", "upstreamTls": true },
+            "mcp": {
+                "serverName": "x", "version": "1", "instructions": "", "path": "/mcp", "cors": true,
+                "tools": [{ "name": "t", "title": "", "description": "", "inputSchema": "{}", "outputSchema": "", "result": "", "isError": false, "delayMs": 0, "enabled": true }],
+                "resources": [{ "uri": "a://b", "name": "", "title": "", "description": "", "mimeType": "", "text": "", "enabled": true }],
+                "prompts": [{ "name": "p", "title": "", "description": "", "arguments": [{ "name": "a", "description": "", "required": true }], "messages": [{ "role": "user", "text": "" }], "enabled": true }],
+            },
         });
         strict::<Server>(full.clone(), "server", &server_schema()).unwrap();
         let mut given = std::collections::BTreeSet::new();

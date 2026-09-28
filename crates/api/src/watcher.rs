@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use notify::RecursiveMode;
-use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
+use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer_opt};
 
 use crate::{EventSink, StreamEvent};
 
@@ -29,7 +29,7 @@ impl Watcher {
         let roots = [root.to_path_buf(), std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())];
         let active = Arc::new(AtomicBool::new(true));
         let still_active = active.clone();
-        let mut debouncer = new_debouncer(Duration::from_millis(300), None, move |result: DebounceEventResult| {
+        let handler = move |result: DebounceEventResult| {
             let Ok(events) = result else { return };
             let mut paths: Vec<String> = events
                 .iter()
@@ -49,7 +49,17 @@ impl Watcher {
             if !paths.is_empty() && still_active.load(Ordering::Acquire) {
                 sink.emit(StreamEvent::WorkspaceChanged { paths });
             }
-        })?;
+        };
+        // Workspaces come from Git: a symlink in one (say, to /) must not make the watcher walk
+        // the whole disk.
+        let config = notify::Config::default().with_follow_symlinks(false);
+        let mut debouncer = new_debouncer_opt::<_, notify::RecommendedWatcher, _>(
+            Duration::from_millis(300),
+            None,
+            handler,
+            RecommendedCache::new(),
+            config,
+        )?;
         debouncer.watch(root, RecursiveMode::Recursive)?;
         Ok(Self { _debouncer: debouncer, active })
     }

@@ -3,6 +3,7 @@
 //! or a start schedule (open model), the aggregator that sends snapshots, stop
 //! handling, and the final summary.
 
+use std::collections::HashSet;
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -19,7 +20,9 @@ use zorvik_formats::LoadModel;
 use crate::capture::{CAPTURE_BODY, Capture, DataRow, UserVars, server_timing_ms};
 use crate::metrics::{Outcome, Phases, Recorder, Sample, SummaryInfo};
 use crate::schedule::{Picker, Profile};
-use crate::{EventFn, LoadEvent, MAX_USERS, MetricsSummary, Plan, Render, RequestSource, RunPhase, Summary};
+use crate::{
+    Destination, EventFn, LoadEvent, MAX_USERS, MetricsSummary, Plan, Render, RequestSource, RunPhase, Summary,
+};
 
 const SNAPSHOT_EVERY: Duration = Duration::from_millis(250);
 /// Samples waiting for the aggregator; when it is full, senders record directly.
@@ -45,8 +48,8 @@ pub(crate) struct Prepared {
     sources: Vec<Option<Source>>,
     /// Per target.
     captures: Vec<Vec<Capture>>,
-    /// Where rendered requests may go (see [`crate::hosts`]).
-    hosts: Vec<String>,
+    /// Where rendered requests may go (see [`crate::destinations`]).
+    destinations: HashSet<Destination>,
 }
 
 /// Build the client and each target's request, so a broken URL, header,
@@ -77,8 +80,8 @@ pub(crate) fn prepare(plan: Plan) -> Result<Prepared, String> {
         sources.push(Some(source));
         captures.push(list);
     }
-    let hosts = crate::hosts(&plan);
-    Ok(Prepared { plan, client, sources, captures, hosts })
+    let destinations = crate::destinations(&plan);
+    Ok(Prepared { plan, client, sources, captures, destinations })
 }
 
 /// Start the run on its own thread. [`LoadEvent::Finished`] is sent exactly
@@ -144,7 +147,7 @@ fn run_thread(prepared: Prepared, on_event: EventFn, stop: CancellationToken) {
         Err(e) => return finish.send(failed(started_at, format!("Could not start the load generator: {e}"))),
     };
 
-    let Prepared { plan, client, sources, captures, hosts } = prepared;
+    let Prepared { plan, client, sources, captures, destinations } = prepared;
     let profile = Profile::new(&plan.stages);
     let names = plan.targets.iter().map(|t| (t.name.clone(), t.request.clone())).collect();
     let recorder = Arc::new(Mutex::new(Recorder::new(
@@ -159,7 +162,7 @@ fn run_thread(prepared: Prepared, on_event: EventFn, stop: CancellationToken) {
         client,
         sources,
         captures,
-        hosts,
+        destinations,
         in_order: plan.has_captures(),
         next_row: AtomicUsize::new(0),
         rows: plan.rows,
@@ -253,7 +256,7 @@ struct Shared {
     client: PooledClient,
     sources: Vec<Option<Source>>,
     captures: Vec<Vec<Capture>>,
-    hosts: Vec<String>,
+    destinations: HashSet<Destination>,
     /// Each user goes through the targets in order (the plan has captures);
     /// else every pick takes the next target of one shared order.
     in_order: bool,
@@ -339,16 +342,20 @@ impl Shared {
         outcome(exchange, misses)
     }
 
-    /// Render a request for this user; it must go to a host the run was started for.
+    /// Render a request for this user; it must go where the run was started
+    /// to send: the same scheme, host, port and `Host` header.
     fn build(&self, render: &Render, vars: &UserVars, keep: bool) -> Result<PooledRequest, EngineError> {
-        let req = self.client.prepare(render(vars).map_err(EngineError::invalid)?)?;
-        if !self.hosts.iter().any(|h| h.eq_ignore_ascii_case(req.host())) {
-            return Err(EngineError::new(
-                ErrorKind::NotAllowed,
-                format!("{} is not a host this run was started for", req.host()),
-            ));
+        let req = render(vars).map_err(EngineError::invalid)?;
+        match Destination::of(&req) {
+            Some(to) if !self.destinations.contains(&to) => {
+                Err(EngineError::new(ErrorKind::NotAllowed, format!("{to} is not where this run was started to send")))
+            }
+            // Without a destination the URL can't be sent: preparing it says why.
+            _ => {
+                let req = self.client.prepare(req)?;
+                Ok(if keep { req.keep_response(CAPTURE_BODY) } else { req })
+            }
         }
-        Ok(if keep { req.keep_response(CAPTURE_BODY) } else { req })
     }
 
     /// Open model: start one request scheduled for `due`, unless `maxInFlight`
@@ -447,8 +454,14 @@ async fn run(
         _ = stop.cancelled() => true,
     };
     // No new requests; the ones in flight get a grace period, then are cut off.
-    // The chart's last second shows the users/requests active until now.
-    lock(&shared.recorder).note_active(shared.t0.elapsed(), shared.active.load(Ordering::Relaxed));
+    // The chart's last second shows the users/requests active until now, and
+    // throughput counts up to here (at most the planned duration).
+    {
+        let now = shared.t0.elapsed();
+        let mut recorder = lock(&shared.recorder);
+        recorder.note_active(now, shared.active.load(Ordering::Relaxed));
+        recorder.end_sending(now.min(shared.profile.duration()));
+    }
     shared.set_phase(RunPhase::Stopping);
     shared.ending.cancel();
     shared.tasks.close();

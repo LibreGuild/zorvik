@@ -5,6 +5,7 @@ import type { DnsOptions } from "./DnsOptions";
 import type { Example } from "./Example";
 import type { GrpcOptions } from "./GrpcOptions";
 import type { KeyValue } from "./KeyValue";
+import type { McpOptions } from "./McpOptions";
 import type { MqttOptions } from "./MqttOptions";
 import type { OpenApiOperation } from "./OpenApiOperation";
 import type { RequestKind } from "./RequestKind";
@@ -41,7 +42,7 @@ paramDescriptions?: Array<KeyValue>, headers?: Array<KeyValue>, body?: Body, aut
 /**
  * TCP/UDP options.
  */
-socket?: SocketOptions, dns?: DnsOptions, mqtt?: MqttOptions, grpc?: GrpcOptions, socketio?: SocketIoOptions, scripts?: Scripts, docs?: string, 
+socket?: SocketOptions, dns?: DnsOptions, mqtt?: MqttOptions, grpc?: GrpcOptions, socketio?: SocketIoOptions, mcp?: McpOptions, scripts?: Scripts, docs?: string, 
 /**
  * The OpenAPI operation this request was imported from (see [`OpenApiSource`]).
  */

@@ -235,11 +235,15 @@ const TrafficRow = memo(function TrafficRow({
           aria-expanded={expandable ? open : undefined}
         >
           {expandable ? <ChevronRight size={11} className={cx("shrink-0 text-faint transition-transform", open && "rotate-90")} /> : <span className="w-[11px] shrink-0" />}
-          {entryIcon(e)}
+          <span className="flex shrink-0">{entryIcon(e)}</span>
           <span className="shrink-0 text-[11px] tabular-nums text-faint">{formatClock(e.timestamp)}</span>
           {e.conn != null && <span className="shrink-0 rounded bg-hover px-1.5 text-[10.5px] font-semibold text-muted">#{e.conn}</span>}
           {e.direction && DIRECTION_LABEL[e.direction] && <span className="shrink-0 text-[10.5px] text-faint">{DIRECTION_LABEL[e.direction]}</span>}
-          {e.kind === "data" && e.summary && <span className="shrink-0 rounded bg-accent-soft px-1.5 text-[10.5px] font-semibold text-accent">{e.summary}</span>}
+          {e.kind === "data" && e.summary && (
+            <span className="max-w-[60%] shrink-0 truncate rounded bg-accent-soft px-1.5 text-[10.5px] font-semibold text-accent" title={e.summary}>
+              {e.summary}
+            </span>
+          )}
           {status != null && status > 0 && (
             <span className={cx("shrink-0 text-[11px] font-semibold", status < 300 ? "text-success" : status < 400 ? "text-info" : status < 500 ? "text-warning" : "text-danger")}>{status}</span>
           )}

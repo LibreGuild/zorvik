@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-`zorvik mcp` offers 37 tools. Agents read their full JSON schemas (every field, unit and placeholder) from `tools/list`; this page is the human overview. The **Asks** column says when you are asked, with the default settings (see [Permissions and safety](../permissions-and-safety/)):
+`zorvik mcp` offers 38 tools. Agents read their full JSON schemas (every field, unit and placeholder) from `tools/list`; this page is the human overview. The **Asks** column says when you are asked, with the default settings (see [Permissions and safety](../permissions-and-safety/)):
 
 - **no**: never asks.
 - **edit**: an edit. Allowed by default; asks when **Edits by agents** is *Ask me*.
@@ -47,7 +47,7 @@ Request fields for `save_requests` and `send_request`:
 
 | Field | Notes |
 |---|---|
-| `kind` | `http` (default), `grpc`, `dns`, `websocket`, `socketio`, `sse`, `tcp`, `udp`, `mqtt`. GraphQL is `http` with a `graphql` body. |
+| `kind` | `http` (default), `grpc`, `dns`, `websocket`, `socketio`, `sse`, `tcp`, `udp`, `mqtt`, `mcp`. GraphQL is `http` with a `graphql` body. For `mcp`, `url` is the MCP server's URL or the command that starts it. |
 | `method` | HTTP method (default GET). gRPC: `package.Service/Method`. DNS: the record type. |
 | `url` | Full URL with `{{variables}}`; `:name` path segments take `pathParams`. gRPC: `grpc://` or `grpcs://`. DNS: the name. |
 | `query` | `[{key, value, enabled, description}]`: enabled ones replace the URL's query string, disabled ones are kept switched off. |
@@ -58,6 +58,7 @@ Request fields for `save_requests` and `send_request`:
 | `scripts` | `preRequest`, `postResponse` (Postman `pm` API). |
 | `settings` | `timeoutMs`, `followRedirects`, `verifyTls`. |
 | `grpc` | `protoFiles` (inside the workspace; empty: server reflection). |
+| `mcp` | `call` (`tool`, `resource` or `prompt`), `name` (the tool or prompt, or the resource URI), `arguments` (a JSON object, or JSON text), `transport` (`auto`, `streamableHttp`, `sse`, `stdio`), and for programs `cwd` and `env` (`[{key, value}]` or an object). See [MCP client](../../mcp/client/#saved-format). |
 | `docs` | Markdown notes. |
 | `examples` | `[{name, status, headers, body}]`: saved responses (bodies up to 1 MB). Mocks built from the request answer with them. Replaces the request's examples. |
 
@@ -84,8 +85,9 @@ Request fields for `save_requests` and `send_request`:
 | `send_request` | Send a saved request (`path`), a saved one with changes (`path` + `request`, nothing is saved), or an unsaved one (`request`, optionally inheriting a `folder`'s auth and headers), with its scripts and tests. Returns status, time, URL, HTTP version, headers, body (up to `maxBodyChars`), redirects, the request as sent, unresolved variables, test results, console and script errors. The response also shows in Zorvik. | `path`, `request`, `folder`, `maxBodyChars` (default 20,000, at most 80,000), `stream`, `filter` | traffic |
 | `graphql_schema` | The schema of a GraphQL endpoint by introspection, as SDL. | `path` or `request`, `maxChars` (default and at most 60,000) | traffic |
 | `grpc_describe` | Services and methods of a gRPC server, from the request's `.proto` files or server reflection. | `path` or `request` | traffic |
+| `mcp_catalog` | What an MCP request's server offers: its name, version, instructions, tools (with input schemas), resources, resource templates and prompts, to call them with `send_request`. | `path` or `request` (kind `mcp`), `maxChars` (default and at most 60,000) | traffic; a program always asks |
 
-`send_request` supports HTTP, GraphQL, gRPC (unary calls), DNS and Server-Sent Events. An SSE request is read until the first event named `stream.untilEvent` (`message` for unnamed events), `stream.maxEvents` events (default 100; 0 for only the time limit), or `stream.timeoutMs` (default 10,000, at most 120,000), and returns the events. A GraphQL subscription is read the same way, each result an event named `next`. WebSocket, Socket.IO, TCP, UDP and MQTT are live sessions that agents can't use yet: the tool says so.
+`send_request` supports HTTP, GraphQL, gRPC (unary calls), DNS, MCP and Server-Sent Events. An MCP request makes its one call (a tool, a resource read or a prompt) in one go, and the response's body is the answer as JSON (status 500 for a JSON-RPC error), so its scripts and tests work as for HTTP. When the request starts a program (a stdio server), the user is asked every time, with the command, folder and environment. An SSE request is read until the first event named `stream.untilEvent` (`message` for unnamed events), `stream.maxEvents` events (default 100; 0 for only the time limit), or `stream.timeoutMs` (default 10,000, at most 120,000), and returns the events. A GraphQL subscription is read the same way, each result an event named `next`. WebSocket, Socket.IO, TCP, UDP and MQTT are live sessions that agents can't use yet: the tool says so.
 
 To keep a large JSON response short, give `send_request` a `filter`: `{language: "jsonPath", expression: "$.items[*].id"}` or `{language: "jq", expression: ".items | map(.id)"}`. It runs on the whole body; the matches replace `body`, with `filtered: {matches, truncated}`, or `filterError` when the expression is wrong.
 
@@ -114,7 +116,7 @@ The `test` object uses the [load test file format](../../reference/workspace-for
 
 | Tool | What it does | Main inputs | Asks |
 |---|---|---|---|
-| `list_servers` | Saved mock APIs and servers (HTTP, WebSocket, Socket.IO, SSE, TCP, UDP, DNS, relay): kind, address, route count, and which are running. | none | no |
+| `list_servers` | Saved mock APIs and servers (HTTP, MCP, WebSocket, Socket.IO, SSE, TCP, UDP, DNS, relay): kind, address, route count, and which are running. | none | no |
 | `read_server` | A server's full definition, in the shape `save_server` takes. | `name` | no |
 | `save_server` | Create a server or change one. Changes merge like a JSON Merge Patch: objects merge, arrays (routes, rules, records) replace the whole list, `null` resets a field; `replace: true` saves exactly what is given. A running server takes the change at once (a new address, port, TLS or kind needs a restart). | `name`, `server` (the [server format](../../reference/workspace-format/#servers-serversyaml)), `replace` | edit |
 | `create_mock` | Build a mock API from a folder (each HTTP request becomes a route answering with its saved example response or a 200) or from an OpenAPI 3 / Swagger 2 document (each operation answers with its first 2xx example). Returns the new server; start it with `start_server`. | `name` (default "Mock API"), one of `folder`, `openapiText`, `openapiUrl`, `openapiFile`; `port` (default: the next free port from 4000) | edit; `openapiUrl` also traffic; `openapiFile` always |

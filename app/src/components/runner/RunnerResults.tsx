@@ -192,7 +192,7 @@ const ResultRow = memo(function ResultRow({ result: r }: { result: RunResult }) 
           </div>
           {r.skipped ? (
             <div className="truncate text-[11px] text-faint" title={r.skipReason}>
-              Skipped: {r.skipReason ?? "the runner sends HTTP, GraphQL and SSE requests"}
+              Skipped: {r.skipReason ?? "the runner sends HTTP, GraphQL, SSE and MCP requests"}
             </div>
           ) : problem ? (
             <div className="truncate text-[11px] text-danger" title={problem}>

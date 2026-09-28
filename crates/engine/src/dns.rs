@@ -303,6 +303,8 @@ impl Client {
         let name = query_name(&query.name, record_type)?;
         let resolver = DnsResolver::parse(&query.server)?;
         if let Some(guard) = &opts.host_guard {
+            // Resolvers pass the name on to its own servers, so the name counts as a host too.
+            guard.check_host(query.name.trim().trim_end_matches('.'))?;
             match &resolver {
                 DnsResolver::Udp { host, .. } | DnsResolver::Tcp { host, .. } | DnsResolver::Tls { host, .. } => {
                     guard.check_host(host)?

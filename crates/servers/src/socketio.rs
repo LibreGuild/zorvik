@@ -206,6 +206,12 @@ impl Server {
         let config = &live.server.socketio;
         let cors = config.cors;
         let origin = req.headers().get(header::ORIGIN).cloned();
+        if req.method() == Method::OPTIONS && !cors {
+            // A browser's preflight: without CORS, other origins get no permission.
+            let mut response = Response::new(Body::empty());
+            *response.status_mut() = StatusCode::NO_CONTENT;
+            return response;
+        }
         let mut response = self.route(req, peer, &config.path).await;
         if cors && response.status() != StatusCode::SWITCHING_PROTOCOLS {
             add_cors(response.headers_mut(), origin.as_ref());
@@ -444,7 +450,10 @@ impl Server {
                     Some(Frame::Binary(bytes)) => {
                         if let Some((p, attachments)) = assembling.as_mut() {
                             attachments.push(bytes);
-                            if attachments.len() >= p.attachments {
+                            if attachments.iter().map(Vec::len).sum::<usize>() > packet::MAX_ATTACHMENT_BYTES {
+                                assembling = None;
+                                session.close("the client sent too many attachment bytes for one event");
+                            } else if attachments.len() >= p.attachments {
                                 let (mut p, attachments) = assembling.take().expect("assembling");
                                 if let Some(data) = p.data.as_mut() {
                                     packet::fill_placeholders(data, &attachments);

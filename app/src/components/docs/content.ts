@@ -47,7 +47,7 @@ export const TOPICS: DocTopic[] = [
     intro:
       "A course built into Zorvik. Each lesson is a short reading with diagrams, a lab you do in the real workbench against practice servers on your own computer, and a quick check. The Lab Guide ticks steps off the moment you get them right.",
     features: [
-      "16 units: networks, DNS, HTTP, sending data, auth and JWT, TLS, environments, testing, GraphQL and gRPC, WebSocket and SSE, TCP and UDP, mocking, load testing, automation, and a capstone",
+      "17 units: networks, DNS, HTTP, sending data, auth and JWT, TLS, environments, testing, GraphQL and gRPC, WebSocket and SSE, TCP and UDP, mocking, load testing, automation, MCP for AI agents, and a capstone",
       "Labs start their own servers and fill in a Lab environment; nothing leaves your machine",
       "Hints from a nudge to the exact clicks, and Do it for me when you're stuck",
       "XP, levels, ranks, streaks and badges; finish the capstone for the Zorvik Bootcamp Graduate certificate",
@@ -81,6 +81,29 @@ export const TOPICS: DocTopic[] = [
       "Click the funnel above a JSON body and type `$..id` to see every id.",
     ],
     tip: "Hover any `{{variable}}` to see its value and where it comes from. Undefined ones turn red before you send.",
+  },
+  {
+    id: "mcp",
+    group: "Build & send",
+    title: "MCP: test AI tools",
+    tagline: "See what AI agents see: call, test and mock MCP servers.",
+    image: "docs-mcp",
+    intro:
+      "AI apps and agents reach tools through the Model Context Protocol. A model picks tools by their descriptions and schemas and acts on the answers, often with nobody watching. An MCP call connects to a server (a URL, or a program Zorvik starts), lists its tools, resources and prompts, and makes the call with your arguments, so you can test what an agent relies on.",
+    features: [
+      "Streamable HTTP, the older HTTP+SSE transport, and stdio programs such as `npx -y @modelcontextprotocol/server-everything`",
+      "Connect, then pick a tool, resource or prompt in the Server tab: its arguments start from the input schema",
+      "Results as an AI app gets them: text, images, structured content, failed calls (isError) and JSON-RPC errors",
+      "Every JSON-RPC message in the Messages tab, with a program's own log",
+      "Tests on the answer (`pm.response.json()`), collection runs and `zorvik run` in CI",
+      "MCP servers of your own (Servers → + → MCP server) for AI apps and MCP clients, over HTTP or `zorvik serve … --stdio`",
+      "A workspace starts a program only after you allowed that exact command, folder and environment",
+    ],
+    tryIt: [
+      "Click + in the tab bar, choose MCP call (AI tools), paste an MCP server's URL and press Connect in the result pane.",
+      "Servers → + → MCP server → Start, then connect to its address from an MCP call.",
+    ],
+    tip: "Tool errors should come back as a result with isError and words the model can act on. Test for that: `pm.expect(pm.response.json().isError).to.eql(true)`.",
   },
   {
     id: "graphql",
@@ -241,11 +264,12 @@ export const TOPICS: DocTopic[] = [
     tagline: "Stand in for backends that don't exist yet.",
     image: "docs-servers",
     intro:
-      "Start a mock API in seconds from a folder, an OpenAPI file or a response. You can also run WebSocket, Socket.IO, SSE, TCP, UDP and DNS servers, or a relay to watch the traffic between two sides.",
+      "Start a mock API in seconds from a folder, an OpenAPI file or a response. You can also run MCP servers for AI apps, WebSocket, Socket.IO, SSE, TCP, UDP and DNS servers, or a relay to watch the traffic between two sides.",
     features: [
       "Mock routes with templates, delays, faults, CORS, and a fallback or forward to the real backend",
       "Live traffic for every server, and replies to one client or all of them",
       "Socket.IO servers that socket.io-client apps connect to: echo, rules with acknowledgements and broadcasts",
+      "MCP servers with tools, resources and prompts that AI apps and MCP clients use, over HTTP or stdio",
       "Servers keep running in the background; the title bar shows what's running",
       "Saved in the workspace, so your team gets the same mocks",
       "A port that's taken says which program holds it",
@@ -317,9 +341,9 @@ export const TOPICS: DocTopic[] = [
     intro:
       "`zorvik` is installed with the app. Run your collection's tests in CI, gate a deployment on load-test thresholds, or start a mock server for integration tests.",
     features: [
-      "`zorvik run <workspace>`: environments, folders, data files, JUnit and JSON reports",
+      "`zorvik run <workspace>`: environments, folders, data files, JUnit and JSON reports (`--allow-programs` for MCP calls that start a program)",
       "`zorvik load <workspace> <test>`: exits with 1 when a threshold fails",
-      "`zorvik serve <workspace> <server>`: runs a saved mock or server",
+      "`zorvik serve <workspace> <server>`: runs a saved mock or server; `--stdio` serves an MCP server to an AI app that starts it",
       "`zorvik mcp`: the connection for AI agents",
     ],
     tryIt: [
@@ -338,8 +362,8 @@ export const TOPICS: DocTopic[] = [
       "Connect your coding agent once, then ask it to map the APIs in your code to a collection, send requests, run tests or start a load test. Every action shows up live in the app, and risky ones wait for your OK.",
     features: [
       "One command to connect (Settings → AI agents shows it for your agent)",
-      "Agents can build and run mock servers, read their traffic, read streams, variables and history, and export code",
-      "Deletes, load tests, servers and requests to outside hosts ask you first",
+      "Agents can build and run mock servers (MCP servers too), call MCP servers, read their traffic, read streams, variables and history, and export code",
+      "Deletes, load tests, servers, programs and requests to outside hosts ask you first",
       "The AI agents panel lists every action; follow mode opens what the agent touches",
       "Secret values are masked in everything the agent sees",
     ],

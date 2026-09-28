@@ -4,7 +4,7 @@ use std::process::Command;
 
 use zorvik_testkit::TestServer;
 use zorvik_workspace::Workspace;
-use zorvik_workspace::formats::{Auth, Environment, Request, RequestKind, Variable};
+use zorvik_workspace::formats::{Auth, Environment, McpToolMock, Request, RequestKind, Server, ServerKind, Variable};
 
 fn request(name: &str, url: &str) -> Request {
     let mut r = Request::new(name, RequestKind::Http);
@@ -242,4 +242,35 @@ async fn secrets_set_by_scripts_stay_hidden_in_reported_urls() {
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("/echo?t={{token}}"), "{out}");
     assert!(!out.contains("tok-from-login"), "{out}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_requests_start_programs_only_when_allowed() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = Workspace::create(dir.path(), "MCP").unwrap();
+    // The program is this very CLI serving the workspace's MCP server over stdio.
+    let mut server = Server::new("Tools", ServerKind::Mcp);
+    server.mcp.tools = vec![McpToolMock {
+        name: "add".into(),
+        input_schema: r#"{"type": "object", "required": ["a", "b"]}"#.into(),
+        result: "{{args.a}}+{{args.b}}".into(),
+        ..Default::default()
+    }];
+    ws.create_server(&server).unwrap();
+    let mut r = Request::new("Add", RequestKind::Mcp);
+    r.url = format!("'{}' serve '{}' Tools --stdio", env!("CARGO_BIN_EXE_zorvik"), dir.path().display());
+    r.mcp.name = "add".into();
+    r.mcp.arguments = r#"{"a": 1, "b": 2}"#.into();
+    r.scripts.post_response =
+        "pm.test('adds', () => pm.expect(pm.response.json().content[0].text).to.eql('1+2'));".into();
+    ws.create_request("", r).unwrap();
+    let path = dir.path().to_str().unwrap();
+
+    let (code, out) = run(&["run", path]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("--allow-programs"), "{out}");
+
+    let (code, out) = run(&["run", path, "--allow-programs"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("adds") && out.contains("MCP"), "{out}");
 }

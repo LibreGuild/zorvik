@@ -207,6 +207,50 @@ describe("start / stop", () => {
     expect(mocked.stopAllServers).toHaveBeenCalledTimes(1);
     expect(useServers.getState().running).toEqual([]);
   });
+
+  it("shows what still runs when stopping all fails", async () => {
+    useServers.setState({ running: [info("r8", "g"), info("r9", "h")] });
+    mocked.stopAllServers.mockRejectedValueOnce(new RpcError({ code: "internal", message: "boom", networkKind: null }));
+    mocked.runningServers.mockResolvedValueOnce([info("r9", "h")]);
+    mocked.serverLog.mockResolvedValueOnce([]);
+    const stopping = stopAllServers();
+    answerDialog(true);
+    await stopping;
+    expect(useServers.getState().running.map((r) => r.runId)).toEqual(["r9"]);
+  });
+});
+
+describe("servers started elsewhere (e.g. by an AI agent)", () => {
+  it("lists a server once its events arrive, with its traffic so far", async () => {
+    const list = deferred<RunningServerInfo[]>();
+    mocked.runningServers.mockReturnValueOnce(list.promise);
+    mocked.serverLog.mockResolvedValueOnce([entry(1)]);
+    emit({ type: "server", runId: "r10", event: { type: "stats", stats: { ...stats, requests: 1 } } });
+    traffic("r10", 1, 2); // a burst: the list is asked for once
+    list.resolve([info("r10", "i")]);
+    await vi.waitFor(() => expect(logIds("i")).toEqual([1]));
+    expect(mocked.runningServers).toHaveBeenCalledTimes(1);
+    traffic("r10", 2);
+    await flush();
+    expect(logIds("i")).toEqual([1, 2]);
+    emit({ type: "server", runId: "r10", event: { type: "stats", stats: { ...stats, requests: 2 } } });
+    expect(useServers.getState().running[0].stats.requests).toBe(2);
+  });
+
+  it("lists a server an agent started, before it has any traffic", async () => {
+    mocked.runningServers.mockResolvedValueOnce([info("r11", "j")]);
+    mocked.serverLog.mockResolvedValueOnce([]);
+    emit({ type: "agent", event: { type: "show", target: { type: "server", id: "j" }, explicit: false } });
+    await vi.waitFor(() => expect(useServers.getState().running.map((r) => r.runId)).toEqual(["r11"]));
+  });
+
+  it("shows the server as running when Start finds it already running", async () => {
+    mocked.startServer.mockRejectedValueOnce(new RpcError({ code: "invalid", message: "'Echo' is already running", networkKind: null }));
+    mocked.runningServers.mockResolvedValueOnce([info("r12", "k")]);
+    mocked.serverLog.mockResolvedValueOnce([]);
+    expect(await startServer("k", server)).toBe(false);
+    await vi.waitFor(() => expect(useServers.getState().running.map((r) => r.runId)).toEqual(["r12"]));
+  });
 });
 
 describe("server tabs", () => {

@@ -28,6 +28,9 @@ import type { LoadRunRecord } from "../bindings/LoadRunRecord";
 import type { LocalValue } from "../bindings/LocalValue";
 import type { LoadStarted } from "../bindings/LoadStarted";
 import type { LoadTest } from "../bindings/LoadTest";
+import type { McpCatalog } from "../bindings/McpCatalog";
+import type { McpOpened } from "../bindings/McpOpened";
+import type { McpProgram } from "../bindings/McpProgram";
 import type { LoadTestNode } from "../bindings/LoadTestNode";
 import type { MockCreated } from "../bindings/MockCreated";
 import type { MockRoute } from "../bindings/MockRoute";
@@ -171,6 +174,17 @@ export const api = {
   grpcSend: (sessionId: string, message: string) => call<null>("grpc.send", { sessionId, message }),
   grpcEnd: (sessionId: string) => call<null>("grpc.end", { sessionId }),
   grpcCancel: (sessionId: string) => call<null>("grpc.cancel", { sessionId }),
+
+  /** Open a tab's MCP session (`connId` = the tab id: its sends reuse the session); events `mcp {connId}`. */
+  mcpConnect: (connId: string, request: Request, path: string | null) =>
+    call<McpOpened>("mcp.connect", { connId, request, path }),
+  /** The tools, resources and prompts an open session's server offers. */
+  mcpCatalog: (connId: string) => call<McpCatalog>("mcp.catalog", { connId }),
+  mcpClose: (connId: string) => call<null>("mcp.close", { connId }),
+  /** The program an MCP request starts (command, folder, environment), and whether it is trusted. */
+  mcpProgram: (request: Request, path: string | null) => call<McpProgram>("mcp.program", { request, path }),
+  /** Let this workspace start the request's program (this command, folder and environment). */
+  mcpTrust: (request: Request, path: string | null) => call<null>("mcp.trust", { request, path }),
 
   servers: () => call<ServerNode[]>("server.list"),
   readServer: (id: string) => call<Server>("server.read", { id }),

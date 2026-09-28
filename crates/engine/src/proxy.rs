@@ -44,8 +44,16 @@ pub struct ProxyEndpoint {
 impl ProxyEndpoint {
     pub fn parse(raw: &str) -> Result<Self> {
         let raw = raw.trim();
+        // Errors show the URL without its user name and password.
+        let shown = match raw.rsplit_once('@') {
+            Some((before, after)) => match before.split_once("://") {
+                Some((scheme, _)) => format!("{scheme}://…@{after}"),
+                None => format!("…@{after}"),
+            },
+            None => raw.to_string(),
+        };
         let with_scheme = if raw.contains("://") { raw.to_string() } else { format!("http://{raw}") };
-        let url = url::Url::parse(&with_scheme).map_err(|e| proxy_err(format!("Invalid proxy URL '{raw}': {e}")))?;
+        let url = url::Url::parse(&with_scheme).map_err(|e| proxy_err(format!("Invalid proxy URL '{shown}': {e}")))?;
         match url.scheme() {
             "http" => {}
             other => {
@@ -54,7 +62,7 @@ impl ProxyEndpoint {
         }
         let host = url
             .host_str()
-            .ok_or_else(|| proxy_err(format!("Proxy URL '{raw}' has no host")))?
+            .ok_or_else(|| proxy_err(format!("Proxy URL '{shown}' has no host")))?
             .trim_start_matches('[')
             .trim_end_matches(']')
             .to_string();
@@ -350,6 +358,14 @@ fn os_proxy() -> Option<ProxySettings> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn errors_hide_the_password() {
+        let e = ProxyEndpoint::parse("http://ada:s3cret@proxy.local:99999").unwrap_err();
+        assert!(!e.message.contains("s3cret") && e.message.contains("proxy.local"), "{}", e.message);
+        let e = ProxyEndpoint::parse("ada:s3cret@:8080").unwrap_err();
+        assert!(!e.message.contains("s3cret"), "{}", e.message);
+    }
 
     #[test]
     fn parses_endpoint_with_credentials() {

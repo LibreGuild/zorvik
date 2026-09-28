@@ -136,6 +136,7 @@ fn app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wr
 }
 
 pub fn run() {
+    zorvik_engine::raise_open_file_limit();
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder.menu(app_menu);

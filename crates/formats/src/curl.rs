@@ -6,6 +6,7 @@
 
 use std::fmt::Write as _;
 
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use zorvik_engine::{HttpRequest, HttpVersionPref};
@@ -67,7 +68,8 @@ pub fn noted(command: String, flavor: CurlFlavor, notes: &[String]) -> String {
     format!("{block}{command}")
 }
 
-/// Render a fully resolved request as a cURL command line.
+/// Render a fully resolved request as a cURL command line. A binary body is decoded from
+/// base64 first, by the command or by a few lines before it.
 pub fn to_curl(req: &HttpRequest, flavor: CurlFlavor) -> String {
     let quote = |s: &str| match flavor {
         CurlFlavor::Bash => quote_bash(s),
@@ -89,25 +91,46 @@ pub fn to_curl(req: &HttpRequest, flavor: CurlFlavor) -> String {
             if h.value.trim().is_empty() { format!("{};", h.name) } else { format!("{}: {}", h.name, h.value) };
         args.push(format!("-H {}", quote(&header)));
     }
-    if !req.body.is_empty() {
-        args.push(match (std::str::from_utf8(&req.body), flavor) {
-            (Ok(text), _) => format!("--data-raw {}", quote(text)),
-            // --data-binary would read a file for a leading `@`.
-            (Err(_), CurlFlavor::Bash) if req.body.starts_with(b"@") => {
-                format!("--data-raw {}", ansi_c_quote(&req.body))
-            }
-            (Err(_), CurlFlavor::Bash) => format!("--data-binary {}", ansi_c_quote(&req.body)),
-            // cmd and PowerShell cannot pass arbitrary bytes on a command line.
-            (Err(_), _) => format!("--data-raw {}", quote(&String::from_utf8_lossy(&req.body))),
-        });
+    // A command line can't hold a NUL byte (bash cuts the argument short there), and cmd and
+    // PowerShell can't pass bytes that aren't text: such a body goes to curl through a pipe
+    // or a temporary file, as base64.
+    let text = std::str::from_utf8(&req.body).ok().filter(|text| !text.contains('\0'));
+    let binary = text.is_none().then(|| base64::engine::general_purpose::STANDARD.encode(&req.body));
+    match (text, flavor) {
+        (Some(""), _) => {}
+        (Some(text), _) => args.push(format!("--data-raw {}", quote(text))),
+        (None, CurlFlavor::Bash) => args.push("--data-binary @-".into()),
+        (None, CurlFlavor::Cmd) => args.push(format!("--data-binary \"@{CMD_BODY}\"")),
+        (None, CurlFlavor::PowerShell) => args.push("--data-binary \"@$body\"".into()),
     }
     let (program, separator) = match flavor {
         CurlFlavor::Bash => ("curl", " \\\n  "),
         CurlFlavor::Cmd => ("curl", " ^\n  "),
         CurlFlavor::PowerShell => ("curl.exe", " `\n  "),
     };
-    format!("{program} {}", args.join(separator))
+    let command = format!("{program} {}", args.join(separator));
+    let Some(base64) = binary else { return command };
+    match flavor {
+        CurlFlavor::Bash => format!("printf '%s' {} | base64 -d | {command}", quote_bash(&base64)),
+        // In short `echo` lines: a cmd line holds at most 8191 characters.
+        CurlFlavor::Cmd => {
+            let lines: String =
+                base64.as_bytes().chunks(76).map(|line| format!("echo {}\n", String::from_utf8_lossy(line))).collect();
+            format!(
+                "(\n{lines}) > \"{CMD_BODY}.b64\"\ncertutil -f -decode \"{CMD_BODY}.b64\" \"{CMD_BODY}\" > nul\n\
+                 {command}\ndel \"{CMD_BODY}.b64\" \"{CMD_BODY}\""
+            )
+        }
+        CurlFlavor::PowerShell => format!(
+            "$body = [IO.Path]::GetTempFileName()\n[IO.File]::WriteAllBytes($body, [Convert]::FromBase64String({}))\n\
+             {command}\nRemove-Item $body",
+            quote_powershell(&base64)
+        ),
+    }
 }
+
+/// Where a cmd command keeps a binary body for curl to read.
+const CMD_BODY: &str = "%TEMP%\\zorvik-body";
 
 // ---------------------------------------------------------------------------
 // Tokenizing
@@ -524,7 +547,7 @@ const VALUE_OPTIONS: &[&str] = &[
 /// Boolean options that do not change the request (output, verbosity, ...).
 #[rustfmt::skip]
 const SILENT_FLAGS: &[&str] = &[
-    "anyauth", "basic", "ca-native", "compressed", "create-dirs", "disable", "fail", "fail-early",
+    "anyauth", "ca-native", "compressed", "create-dirs", "disable", "fail", "fail-early",
     "fail-with-body", "help", "include", "ipv4", "ipv6", "junk-session-cookies", "manual", "parallel",
     "parallel-immediate", "path-as-is", "post301", "post302", "post303", "progress-bar", "proxy-insecure",
     "proxytunnel", "raw", "remote-header-name", "remote-name", "remote-name-all", "remote-time",
@@ -622,8 +645,18 @@ struct Command {
     globoff: bool,
     url_query: Vec<String>,
     auth: Auth,
+    /// How `-u` credentials are sent: `--basic`, `--digest` or `--ntlm` (the last one wins).
+    user_auth: UserAuth,
     settings: RequestSettings,
     warnings: Vec<String>,
+}
+
+#[derive(Default, Clone, Copy)]
+enum UserAuth {
+    #[default]
+    Basic,
+    Digest,
+    Ntlm,
 }
 
 impl Command {
@@ -690,6 +723,9 @@ impl Command {
             "http2" | "http2-prior-knowledge" => self.settings.http_version = Some(HttpVersionPref::Http2),
             "http3" | "http3-only" => self.settings.http_version = Some(HttpVersionPref::Http3),
             "globoff" => self.globoff = true,
+            "basic" => self.user_auth = UserAuth::Basic,
+            "digest" => self.user_auth = UserAuth::Digest,
+            "ntlm" => self.user_auth = UserAuth::Ntlm,
             _ if SILENT_FLAGS.contains(&name) || name.starts_with("no-") => {}
             _ => self.warnings.push(format!("Ignored unsupported option {display}")),
         }
@@ -896,13 +932,20 @@ impl Command {
             self.headers.push(KeyValue::new("Accept", "application/json"));
         }
 
+        let auth = match (self.auth, self.user_auth) {
+            (Auth::Basic { username, password }, UserAuth::Digest) => Auth::Digest { username, password },
+            (Auth::Basic { username, password }, UserAuth::Ntlm) => {
+                Auth::Ntlm { username, password, domain: String::new(), workstation: String::new() }
+            }
+            (auth, _) => auth,
+        };
         let name = request_name(&method, &url);
         let request = Request {
             method,
             url,
             headers: self.headers,
             body,
-            auth: self.auth,
+            auth,
             settings: self.settings,
             ..Request::new(name, RequestKind::Http)
         };
@@ -1050,13 +1093,16 @@ fn urlencode(s: &str) -> String {
     out
 }
 
-/// `content`, `=content`, `name=content`, `@file` or `name@file`.
+/// `content`, `=content`, `name=content`, `@file` or `name@file`. As in curl, an `=` anywhere
+/// makes it `name=content` (`a@b=c` is the name `a@b`); only without one does `@` name a file.
 fn data_urlencode(arg: &str) -> Data {
-    match arg.find(['=', '@']) {
-        Some(i) if arg[i..].starts_with('@') => Data::EncodedFile(arg[i + 1..].to_string()),
+    match arg.find('=') {
         Some(0) => Data::Text(urlencode(&arg[1..])),
         Some(i) => Data::Text(format!("{}={}", &arg[..i], urlencode(&arg[i + 1..]))),
-        None => Data::Text(urlencode(arg)),
+        None => match arg.find('@') {
+            Some(i) => Data::EncodedFile(arg[i + 1..].to_string()),
+            None => Data::Text(urlencode(arg)),
+        },
     }
 }
 
@@ -1497,6 +1543,28 @@ line2^!^\\^\"^}^\"";
     }
 
     #[test]
+    fn digest_and_ntlm_auth() {
+        let import = parse("curl --digest -u alice:pw https://x.test");
+        assert!(import.warnings.is_empty(), "{:?}", import.warnings);
+        assert_eq!(import.request.auth, Auth::Digest { username: "alice".into(), password: "pw".into() });
+        let ntlm = |username: &str| Auth::Ntlm {
+            username: username.into(),
+            password: "pw".into(),
+            domain: String::new(),
+            workstation: String::new(),
+        };
+        assert_eq!(parse(r"curl -u 'CORP\bob:pw' --ntlm https://x.test").request.auth, ntlm(r"CORP\bob"));
+        // The last of --basic, --digest and --ntlm wins.
+        assert_eq!(
+            parse("curl --ntlm --basic -u carol:pw https://x.test").request.auth,
+            Auth::Basic { username: "carol".into(), password: "pw".into() }
+        );
+        assert_eq!(parse("curl --digest --ntlm -u bob:pw https://x.test").request.auth, ntlm("bob"));
+        // Without -u there are no credentials to send.
+        assert_eq!(parse("curl --digest https://x.test").request.auth, Auth::Inherit);
+    }
+
+    #[test]
     fn multipart_form() {
         let input = "curl https://x.test/upload -F 'name=John Doe' -F 'avatar=@/tmp/me.png;type=image/png' \
                      -F 'doc=@\"my;file.txt\";filename=x.txt' --form-string 'raw=@literal;type=x' -F 'bio=<bio.txt'";
@@ -1552,6 +1620,12 @@ line2^!^\\^\"^}^\"";
         let import = parse("curl https://x.test --data-urlencode msg@notes.txt");
         assert_eq!((import.request.method.as_str(), &import.request.body), ("POST", &Body::default()));
         assert_eq!(import.warnings, ["Could not read body file `notes.txt`; add its content manually"]);
+        // An `=` anywhere makes it `name=content`, even after an `@` (as in curl).
+        let import = parse("curl https://x.test --data-urlencode 'a@b=c d' --data-urlencode 'to=me@x.test'");
+        assert!(import.warnings.is_empty(), "{:?}", import.warnings);
+        assert_eq!(import.request.body.text, "a@b=c+d&to=me%40x.test");
+        let r = parse("curl -G https://x.test --url-query 'mail@home=a@b'").request;
+        assert_eq!(r.url, "https://x.test?mail@home=a%40b");
     }
 
     #[test]
@@ -1835,11 +1909,53 @@ line2^!^\\^\"^}^\"";
             to_curl(&http("HEAD", "https://x.test/", &[], ""), CurlFlavor::Bash),
             "curl 'https://x.test/' \\\n  -I"
         );
+        // Bytes go through base64: bash would cut an argument short at the NUL byte.
         let binary =
             HttpRequest { body: vec![0xff, 0, b'a', b'\'', b'\n'].into(), ..http("PUT", "https://x.test", &[], "") };
         assert_eq!(
             to_curl(&binary, CurlFlavor::Bash),
-            "curl 'https://x.test' \\\n  -X PUT \\\n  --data-binary $'\\xff\\x00a\\'\\n'"
+            "printf '%s' '/wBhJwo=' | base64 -d | curl 'https://x.test' \\\n  -X PUT \\\n  --data-binary @-"
+        );
+        // So does text with a NUL byte.
+        assert_eq!(
+            to_curl(&http("POST", "https://x.test", &[], "a\0b"), CurlFlavor::Bash),
+            "printf '%s' 'YQBi' | base64 -d | curl 'https://x.test' \\\n  -X POST \\\n  --data-binary @-"
+        );
+    }
+
+    #[test]
+    fn binary_bodies_keep_every_byte() {
+        let body: Vec<u8> = (0..=255).chain(0..=255).collect();
+        let req = HttpRequest { body: body.clone().into(), ..http("PUT", "https://x.test/up", &[], "") };
+        let base64 = base64::engine::general_purpose::STANDARD.encode(&body);
+
+        let bash = to_curl(&req, CurlFlavor::Bash);
+        let piped = bash.strip_prefix("printf '%s' '").and_then(|rest| rest.split_once("' | base64 -d | curl "));
+        assert_eq!(piped.map(|(sent, _)| sent), Some(base64.as_str()), "{bash}");
+
+        // cmd writes the base64 to a file with `echo` (a line holds at most 8191 characters).
+        let cmd = to_curl(&req, CurlFlavor::Cmd);
+        let lines: Vec<&str> = cmd.lines().collect();
+        assert_eq!(lines[0], "(");
+        let echoed: String = lines.iter().filter_map(|l| l.strip_prefix("echo ")).collect();
+        assert_eq!(echoed, base64);
+        assert!(lines.iter().all(|l| l.len() < 100), "{cmd}");
+        assert!(
+            cmd.ends_with(
+                ") > \"%TEMP%\\zorvik-body.b64\"\n\
+                 certutil -f -decode \"%TEMP%\\zorvik-body.b64\" \"%TEMP%\\zorvik-body\" > nul\n\
+                 curl ^\"https://x.test/up^\" ^\n  -X PUT ^\n  --data-binary \"@%TEMP%\\zorvik-body\"\n\
+                 del \"%TEMP%\\zorvik-body.b64\" \"%TEMP%\\zorvik-body\""
+            ),
+            "{cmd}"
+        );
+
+        let small = HttpRequest { body: vec![0xff, 0].into(), ..http("PUT", "https://x.test/up", &[], "") };
+        assert_eq!(
+            to_curl(&small, CurlFlavor::PowerShell),
+            "$body = [IO.Path]::GetTempFileName()\n\
+             [IO.File]::WriteAllBytes($body, [Convert]::FromBase64String('/wA='))\n\
+             curl.exe 'https://x.test/up' `\n  -X PUT `\n  --data-binary \"@$body\"\nRemove-Item $body"
         );
     }
 

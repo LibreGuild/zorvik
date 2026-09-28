@@ -171,6 +171,7 @@ export const REQUEST_KIND_NAMES: Record<NewRequestType, string> = {
   mqtt: "New MQTT client",
   grpc: "New gRPC request",
   socketio: "New Socket.IO client",
+  mcp: "New MCP call",
 };
 
 export function newRequestDraft(type: NewRequestType = "http"): Request {
@@ -179,6 +180,9 @@ export function newRequestDraft(type: NewRequestType = "http"): Request {
   }
   if (type === "grpc") {
     return { name: REQUEST_KIND_NAMES.grpc, kind: "grpc", seq: 0, method: "", url: "", body: { type: "json", text: "{}" } };
+  }
+  if (type === "mcp") {
+    return { name: REQUEST_KIND_NAMES.mcp, kind: "mcp", seq: 0, method: "", url: "", mcp: { call: "tool", arguments: "{}" } };
   }
   const composer = type === "websocket" || type === "tcp" || type === "udp" || type === "mqtt";
   return {
@@ -203,7 +207,15 @@ function makeTab(draft: Request, path: string | null, saved: Request | null): Ta
     stream: emptyStream(),
     // GraphQL requests open on their query.
     requestTab:
-      draft.kind === "socketio" ? "connection" : draft.kind && draft.kind !== "http" && draft.kind !== "sse" ? "options" : draft.body?.type === "graphql" ? "body" : "params",
+      draft.kind === "socketio"
+        ? "connection"
+        : draft.kind === "mcp"
+          ? "call"
+          : draft.kind && draft.kind !== "http" && draft.kind !== "sse"
+            ? "options"
+            : draft.body?.type === "graphql"
+              ? "body"
+              : "params",
     responseTab: "body",
   };
 }
@@ -462,7 +474,7 @@ export async function closeTab(id: string, force = false): Promise<boolean> {
   }
   const tab = any;
   // Unsaved drafts only ask when something was entered (a body or headers count, not just a URL).
-  if (!force && isDirty(tab) && (tab.saved || !sameRequest(tab.draft, newRequestDraft(tab.draft.kind ?? "http")))) {
+  if (!force && isDirty(tab) && (tab.saved || !sameRequest(tab.draft, newRequestDraft(draftType(tab.draft))))) {
     const ok = await confirm({
       title: "Discard unsaved changes?",
       message: `"${tab.draft.name}" has changes that are not saved.`,
@@ -474,6 +486,12 @@ export async function closeTab(id: string, force = false): Promise<boolean> {
   stopTabActivity(tab);
   removeTab(id);
   return true;
+}
+
+/** What "New …" made a draft from: GraphQL requests are HTTP requests with a GraphQL body. */
+function draftType(draft: Request): NewRequestType {
+  const kind = draft.kind ?? "http";
+  return kind === "http" && draft.body?.type === "graphql" ? "graphql" : kind;
 }
 
 function removeTab(id: string) {
@@ -610,7 +628,16 @@ export function registerOneShot(kind: RequestKind, run: (tab: Tab) => Promise<{ 
   oneShot[kind] = run;
 }
 
-export async function send(id: string) {
+/** Ways out of a failed send, by error code (e.g. trusting the program an MCP request starts):
+ *  registered by their modules; resolving true sends again. */
+const recoveries: Record<string, (tab: Tab, message: string) => Promise<boolean>> = {};
+
+export function registerRecovery(code: string, recover: (tab: Tab, message: string) => Promise<boolean>) {
+  recoveries[code] = recover;
+}
+
+/** `recovered`: this send follows a recovery (see `registerRecovery`), so it won't try another. */
+export async function send(id: string, recovered = false) {
   const tab = reqTab(id);
   if (!tab) return;
   const kind = tab.draft.kind ?? "http";
@@ -643,6 +670,11 @@ export async function send(id: string) {
   } catch (e) {
     const err = e instanceof RpcError ? e : new RpcError({ code: "internal", message: errorMessage(e), networkKind: null });
     if (err.code === "script") void refreshVariables();
+    const recover = recovered ? undefined : recoveries[err.code];
+    if (recover && (await recover(tab, err.message).catch(() => false))) {
+      settle({ status: "idle" });
+      return send(id, true);
+    }
     settle({ status: "error", message: err.message, code: err.code, kind: err.networkKind, at: Date.now(), durationMs: Date.now() - startedAt });
   }
 }
@@ -698,13 +730,16 @@ export async function connect(id: string) {
 export async function disconnect(id: string) {
   const tab = reqTab(id);
   if (!tab) return;
-  const which = sessionApi(tab.draft);
-  if (which === "ws") await api.wsClose(tab.stream.connId).catch(() => {});
-  else if (which === "sse") await api.sseClose(tab.stream.connId).catch(() => {});
-  else await api.socketClose(tab.stream.connId).catch(() => {});
+  const { connId } = tab.stream;
+  // Still connecting: the tab moves on before the close, so the cancelled connect's error is not
+  // shown. An open connection is marked closed by its Closed event.
   if (tab.stream.status === "connecting") {
     updateTab(id, (t) => ({ stream: { ...t.stream, status: "closed", connId: newId() } }));
   }
+  const which = sessionApi(tab.draft);
+  if (which === "ws") await api.wsClose(connId).catch(() => {});
+  else if (which === "sse") await api.sseClose(connId).catch(() => {});
+  else await api.socketClose(connId).catch(() => {});
 }
 
 /** Send a composed message on an open WebSocket/TCP/UDP connection (text with variables, or hex). */

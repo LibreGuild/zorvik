@@ -44,6 +44,10 @@ pub const MAX_STREAMS: usize = 100;
 /// Idle HTTP/1.1 connections older than this are closed instead of reused.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 
+/// Most body bytes set aside up front for a kept response. `Content-Length`
+/// is only the server's word: larger bodies grow the buffer as they arrive.
+const KEEP_RESERVE: usize = 64 * 1024;
+
 /// What happened to one request.
 #[derive(Debug, Clone)]
 pub struct Exchange {
@@ -644,14 +648,7 @@ async fn read_response(
     let (parts, mut body) = response.into_parts();
     progress.bytes_in += response_head_size(&parts);
     progress.server_timing = server_timing(&parts.headers);
-    let mut kept = keep.map(|limit| {
-        let expected = parts
-            .headers
-            .get(http::header::CONTENT_LENGTH)
-            .and_then(|v| v.to_str().ok()?.parse::<usize>().ok())
-            .unwrap_or(0);
-        (Vec::with_capacity(expected.min(limit)), limit)
-    });
+    let mut kept = keep.map(|limit| (Vec::with_capacity(keep_reserve(&parts.headers, limit)), limit));
     while let Some(frame) = body.frame().await {
         let frame = frame.map_err(EngineError::from_hyper)?;
         if let Some(data) = frame.data_ref() {
@@ -676,6 +673,14 @@ async fn read_response(
     Ok(())
 }
 
+/// Room for a kept body before it arrives: its `Content-Length`, at most
+/// `limit` and [`KEEP_RESERVE`].
+fn keep_reserve(headers: &http::HeaderMap, limit: usize) -> usize {
+    let expected =
+        headers.get(http::header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()?.parse::<usize>().ok()).unwrap_or(0);
+    expected.min(limit).min(KEEP_RESERVE)
+}
+
 /// Every `Server-Timing` header value, joined (a list split over several
 /// headers means the same as one comma-separated header).
 fn server_timing(headers: &http::HeaderMap) -> Option<String> {
@@ -698,4 +703,25 @@ fn response_head_size(parts: &http::response::Parts) -> u64 {
         .unwrap_or(0);
     let headers: usize = parts.headers.iter().map(|(n, v)| n.as_str().len() + v.len() + 4).sum();
     (15 + reason + headers + 2) as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_kept_body_does_not_reserve_what_content_length_claims() {
+        let reserve = |length: &str, limit: usize| {
+            let mut headers = http::HeaderMap::new();
+            headers.insert(http::header::CONTENT_LENGTH, length.parse().unwrap());
+            keep_reserve(&headers, limit)
+        };
+        assert_eq!(reserve("512", 1024 * 1024), 512);
+        assert_eq!(reserve("512", 100), 100);
+        // A server claiming a huge body gets a small buffer that grows as bytes arrive.
+        assert_eq!(reserve("1048576", 1024 * 1024), KEEP_RESERVE);
+        assert_eq!(reserve("999999999", 1024 * 1024), KEEP_RESERVE);
+        assert_eq!(reserve("lots", 1024 * 1024), 0);
+        assert_eq!(keep_reserve(&http::HeaderMap::new(), 1024 * 1024), 0);
+    }
 }

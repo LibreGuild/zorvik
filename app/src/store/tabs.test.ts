@@ -17,7 +17,7 @@ type Tab = import("./tabs").Tab;
 type ServerTab = import("./tabs").ServerTab;
 type Server = import("../bindings/Server").Server;
 const { useDialogs } = await import("./dialogs");
-const { closeTab, connect, disconnect, isDirty, openDraft, openRequest, resetTabs, restoreTabs, sameRequest, saveTab, send, updateDraft, useTabs, wsSend } =
+const { closeTab, connect, disconnect, isDirty, newRequest, openDraft, openRequest, resetTabs, restoreTabs, sameRequest, saveTab, send, updateDraft, useTabs, wsSend } =
   await import("./tabs");
 
 const mocked = api as unknown as Record<keyof typeof api, ReturnType<typeof vi.fn>>;
@@ -99,6 +99,18 @@ describe("tab lifecycle", () => {
     if (dialog?.kind === "confirm") dialog.resolve(false);
     expect(await closing).toBe(false);
   });
+
+  it("closes a new GraphQL request without asking until a query is typed", async () => {
+    expect(await closeTab(newRequest("graphql"))).toBe(true);
+    expect(useDialogs.getState().current).toBeNull();
+    const typed = newRequest("graphql");
+    updateDraft(typed, (r) => ({ ...r, body: { type: "graphql", graphql: { query: "{ me }" } } }));
+    const closing = closeTab(typed);
+    const dialog = useDialogs.getState().current;
+    expect(dialog?.kind).toBe("confirm");
+    if (dialog?.kind === "confirm") dialog.resolve(false);
+    expect(await closing).toBe(false);
+  });
 });
 
 describe("sending", () => {
@@ -138,6 +150,26 @@ describe("sending", () => {
     await connecting;
     expect(mocked.wsClose).toHaveBeenLastCalledWith(connId);
     expect(tabById(id).stream.status).toBe("closed");
+  });
+
+  it("shows no error for a connect that was cancelled by Disconnect", async () => {
+    const id = openDraft({ ...request("ws://h/s"), kind: "websocket" });
+    const opened = deferred<unknown>();
+    mocked.wsConnect.mockReturnValueOnce(opened.promise);
+    // The backend fails the pending connect before it answers the close.
+    mocked.wsClose.mockImplementationOnce(() => {
+      opened.reject(new RpcError({ code: "network", message: "cancelled", networkKind: "cancelled" }));
+      return new Promise((r) => setTimeout(() => r(null), 5));
+    });
+    const connecting = connect(id);
+    const connId = tabById(id).stream.connId;
+    await Promise.all([disconnect(id), connecting]);
+    await new Promise((r) => setTimeout(r, 60)); // messages are batched
+    const { stream } = tabById(id);
+    expect(mocked.wsClose).toHaveBeenCalledWith(connId);
+    expect(stream.status).toBe("closed");
+    expect(stream.error).toBeNull();
+    expect(stream.messages.filter((m) => m.direction === "error")).toEqual([]);
   });
 
   it("publishes MQTT bytes (hex) to the topic", async () => {

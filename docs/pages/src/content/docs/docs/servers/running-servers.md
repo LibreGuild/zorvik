@@ -12,6 +12,7 @@ This page covers what all servers have in common: starting and stopping, the add
 | Kind | In the file (`kind`) | New servers listen on | TLS | Address shown |
 |---|---|---|---|---|
 | [Mock API (HTTP)](../mock-api/) | `http` | 3000 | Yes | `http://…` / `https://…` |
+| [MCP server](../../mcp/servers/) | `mcp` | 3004 | Yes | `http://…/mcp` / `https://…/mcp` |
 | [WebSocket server](../websocket-and-sse-servers/#websocket-server) | `websocket` | 3001 | Yes | `ws://…` / `wss://…` |
 | [Socket.IO server](../socketio-server/) | `socketio` | 3003 | Yes | `http://…` / `https://…` |
 | [Event stream (SSE) server](../websocket-and-sse-servers/#event-stream-sse-server) | `sse` | 3002 | Yes | `http://…` / `https://…` |
@@ -191,6 +192,7 @@ http:
 | `http` | | [Mock API settings](../mock-api/#saved-format). |
 | `websocket`, `sse` | | [WebSocket and event stream settings](../websocket-and-sse-servers/#saved-format). |
 | `socketio` | | [Socket.IO settings](../socketio-server/#saved-format). |
+| `mcp` | | [MCP server settings](../../mcp/servers/#saved-format). |
 | `socket` | | [TCP and UDP settings](../tcp-udp-dns-servers/#saved-format). |
 | `dns` | | [DNS settings](../tcp-udp-dns-servers/#saved-format). |
 | `proxy` | | [Relay settings](../relay/#saved-format). |

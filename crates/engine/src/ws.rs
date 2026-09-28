@@ -138,6 +138,9 @@ impl Client {
         let secure = url.scheme() == "wss";
         let host = url.host_str().unwrap_or_default();
         let bare_host = host.trim_start_matches('[').trim_end_matches(']');
+        if let Some(guard) = &opts.host_guard {
+            guard.check_host(bare_host)?;
+        }
         let port = url.port_or_known_default().unwrap_or(if secure { 443 } else { 80 });
         let http_url = {
             let mut u = url.clone();
@@ -346,8 +349,16 @@ async fn run_session<S>(
                     }
                 };
                 let event = message_event(Direction::Sent, &msg);
-                if let Err(e) = sink.send(msg).await {
-                    let _ = events.send(WsEvent::Error { message: format!("Send failed: {e}") });
+                // A server that stopped reading can't hold the session (and this task) forever.
+                let sent = match tokio::time::timeout(crate::socket::WRITE_TIMEOUT, sink.send(msg)).await {
+                    Ok(result) => result.map_err(|e| format!("Send failed: {e}")),
+                    Err(_) => Err(format!(
+                        "Send failed: the server stopped reading (nothing went out for {} s)",
+                        crate::socket::WRITE_TIMEOUT.as_secs()
+                    )),
+                };
+                if let Err(message) = sent {
+                    let _ = events.send(WsEvent::Error { message });
                     let _ = events.send(WsEvent::Closed { code: None, reason: "Connection lost".into(), by_client: false });
                     return;
                 }

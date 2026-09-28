@@ -78,14 +78,16 @@ pub(crate) async fn run(listener: TcpListener, mut ctx: Ctx) -> Result<(), Strin
         return Err(self_error(&target));
     }
     let conns: Arc<Connections<Vec<u8>>> = Arc::default();
+    let slots = crate::connections_limit::Slots::new();
     loop {
         tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok((stream, peer)) => {
+                    let Some(slot) = slots.take(&ctx.reporter) else { continue };
                     let _ = stream.set_nodelay(true);
                     // The target as configured now: edits apply to the next connection.
                     let config = ctx.live.borrow().server.proxy.clone();
-                    tokio::spawn(connection(
+                    let task = connection(
                         stream,
                         ctx.reporter.next_conn(),
                         peer,
@@ -95,7 +97,11 @@ pub(crate) async fn run(listener: TcpListener, mut ctx: Ctx) -> Result<(), Strin
                         ctx.reporter.clone(),
                         conns.clone(),
                         ctx.cancel.child_token(),
-                    ));
+                    );
+                    tokio::spawn(async move {
+                        task.await;
+                        drop(slot);
+                    });
                 }
                 Err(e) => {
                     ctx.reporter.error(None, None, format!("Accept failed: {e}"));

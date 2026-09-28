@@ -6,11 +6,12 @@ tableOfContents: false
 
 import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-Zorvik is an open-source desktop app to **build, test, mock and load test APIs**, and to see what really happens on the network. It runs on Windows, macOS and Linux, and every download also has the `zorvik` command line for CI.
+Zorvik is an open-source desktop app to **build, test, mock and load test APIs**, **test and mock the MCP servers AI agents use**, and see what really happens on the network. It runs on Windows, macOS and Linux, and every download also has the `zorvik` command line for CI.
 
 These pages explain every feature in detail. New to APIs? The [Training Bootcamp](bootcamp/training-bootcamp/) inside the app teaches you hands-on.
 
 <CardGrid>
+  <LinkCard title="MCP: test AI tools" href="mcp/overview/" description="Call and test MCP servers over HTTP or stdio, and mock MCP servers for AI apps and agents." />
   <LinkCard title="Install Zorvik" href="getting-started/install/" description="Windows, macOS and Linux, and the zorvik command line." />
   <LinkCard title="Your first request" href="getting-started/first-request/" description="Send, save and organize requests in a workspace." />
   <LinkCard title="Scripts & tests" href="scripting/overview/" description="Pre-request and post-response JavaScript, the full pm API." />

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { cloneElement, isValidElement, useId, useState } from "react";
 import { Info } from "lucide-react";
 import type { KeyValue } from "../../bindings/KeyValue";
 import type { Request } from "../../bindings/Request";
@@ -56,7 +56,16 @@ export function RequestEditor({ tab, toolbar }: { tab: Tab; toolbar?: React.Reac
 
   const kindTabs = KIND_EDITOR_TABS[kind];
   const authItem = { id: "auth", label: "Auth", badge: req.auth && req.auth.type !== "inherit" ? AUTH_LABEL[req.auth.type] : undefined };
-  const items = kindTabs && !WITH_HTTP_TABS.includes(kind)
+  const items = kind === "mcp"
+    ? [
+        ...(kindTabs ?? []).map((t) => ({ id: t.id, label: t.label })),
+        { id: "headers", label: "Headers", badge: count(req.headers) },
+        authItem,
+        { id: "settings", label: "Settings" },
+        { id: "scripts", label: <ScriptsTabLabel scripts={req.scripts} /> },
+        { id: "docs", label: "Docs" },
+      ]
+    : kindTabs && !WITH_HTTP_TABS.includes(kind)
     ? [
         ...kindTabs.map((t) => ({ id: t.id, label: t.label })),
         ...(kind === "mqtt" || kind === "grpc" ? [authItem] : []),
@@ -123,7 +132,7 @@ export function RequestEditor({ tab, toolbar }: { tab: Tab; toolbar?: React.Reac
             subscription={isSubscription(req)}
           />
         )}
-        {current === "scripts" && kind === "http" && (
+        {current === "scripts" && (kind === "http" || kind === "mcp") && (
           <ScriptsEditor where="request" scripts={req.scripts ?? {}} onChange={(scripts) => update((r) => ({ ...r, scripts }))} />
         )}
         {current === "examples" && kind === "http" && <ExamplesTab tab={tab} />}
@@ -320,7 +329,13 @@ function RepeatSettings({ settings, set }: { settings: RequestSettings; set: (p:
         <Switch
           checked={!!repeat}
           onChange={(on) => (on ? change({}) : set({ repeat: undefined }))}
-          label={repeat ? "On" : "Off"}
+          // The switch takes no id: its own label names it.
+          label={
+            <>
+              <span className="sr-only">Repeat in collection runs: </span>
+              {repeat ? "On" : "Off"}
+            </>
+          }
         />
       </SettingRow>
       {repeat && (
@@ -346,9 +361,10 @@ function RepeatSettings({ settings, set }: { settings: RequestSettings; set: (p:
   );
 }
 
-function TriSelect({ value, onPick }: { value: boolean | undefined; onPick: (v: boolean | undefined) => void }) {
+/** Labelled by its SettingRow (which passes `id`). */
+function TriSelect({ value, onPick, ...field }: { value: boolean | undefined; onPick: (v: boolean | undefined) => void; id?: string; "aria-describedby"?: string }) {
   return (
-    <Select value={tri(value)} onChange={(e) => onPick(fromTri(e.target.value as Tri))} className="w-44">
+    <Select {...field} value={tri(value)} onChange={(e) => onPick(fromTri(e.target.value as Tri))} className="w-44">
       <option value="default">App default</option>
       <option value="on">On</option>
       <option value="off">Off</option>
@@ -356,14 +372,22 @@ function TriSelect({ value, onPick }: { value: boolean | undefined; onPick: (v: 
   );
 }
 
+/** A setting: its label names the control (the only child, given an `id`) and its hint describes it. */
 function SettingRow({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  const id = useId();
+  const hintId = hint ? `${id}-hint` : undefined;
+  const control = isValidElement<{ id?: string; "aria-describedby"?: string }>(children) ? cloneElement(children, { id, "aria-describedby": hintId }) : children;
   return (
     <div className="grid grid-cols-[200px_1fr] items-start gap-3">
       <div className="pt-1.5 text-[12.5px] text-fg">
-        {label}
-        {hint && <div className="mt-0.5 text-[11.5px] text-faint">{hint}</div>}
+        <label htmlFor={id}>{label}</label>
+        {hint && (
+          <div id={hintId} className="mt-0.5 text-[11.5px] text-faint">
+            {hint}
+          </div>
+        )}
       </div>
-      <div>{children}</div>
+      <div>{control}</div>
     </div>
   );
 }

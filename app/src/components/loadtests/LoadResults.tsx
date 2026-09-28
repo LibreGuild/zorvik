@@ -421,8 +421,14 @@ function Stats({ data, model, share }: { data: ViewData; model: LoadModel; share
       <Stat
         label="Error rate"
         value={t ? formatPercent(t.errorRate) : "–"}
-        sub={t ? `${formatCount(t.errors)} of ${formatCount(t.requests)}` : undefined}
-        tone={t && t.errors > 0 ? "danger" : undefined}
+        sub={
+          t
+            ? t.dropped > 0
+              ? `${formatCount(t.errors)} failed + ${formatCount(t.dropped)} dropped of ${formatCount(t.requests + t.dropped)}`
+              : `${formatCount(t.errors)} of ${formatCount(t.requests)}`
+            : undefined
+        }
+        tone={t && t.errors + t.dropped > 0 ? "danger" : undefined}
         testId="stat-errors"
         raw={t?.errorRate}
       />
@@ -745,7 +751,7 @@ function Errors({ totals, model }: { totals: MetricsSummary; model: LoadModel })
         <div className="mt-2 flex items-start gap-1.5 text-[11.5px] text-warning" data-testid="load-capture-misses">
           <CircleAlert size={13} className="mt-px shrink-0" />
           <span>
-            {formatCount(totals.captureMisses)} capture {totals.captureMisses === 1 ? "miss" : "misses"}: a capture found nothing in a response, so the user's next
+            {formatCount(totals.captureMisses)} capture {totals.captureMisses === 1 ? "miss" : "misses"}: a capture found nothing in a response (or a value over 64 KB), so the user's next
             requests used the value it had before. These are not counted as errors.
           </span>
         </div>
