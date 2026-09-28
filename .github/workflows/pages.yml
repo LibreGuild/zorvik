@@ -81,6 +81,13 @@ jobs:
               if [ -z "$site" ]; then
                 echo "::warning::$tag has no website yet: the main site is built from $GITHUB_REF_NAME."
               else
+                # Only code that was merged into main is built here, with main's permissions: the
+                # tag's commit must be in main's history (compare says main is ahead or identical).
+                status=$(api "repos/$GH_REPO/compare/$tag...main" --jq .status)
+                if [ "$status" != ahead ] && [ "$status" != identical ]; then
+                  echo "::error::$tag is not a commit of main ($status): the main site isn't built from it."
+                  exit 1
+                fi
                 echo "The main site shows $tag."
                 ref=$tag
               fi
