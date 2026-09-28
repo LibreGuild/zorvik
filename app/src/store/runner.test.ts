@@ -63,6 +63,7 @@ const tree: TreeNode[] = [
   folder("users", "Users", [
     req("users/list.yaml", "List"),
     req("users/socket.yaml", "Socket", { requestKind: "websocket" }),
+    req("users/events.yaml", "Events", { requestKind: "sse" }),
     folder("users/admin", "Admin", [req("users/admin/ban.yaml", "Ban", { method: "POST" })]),
     req("users/broken.yaml", "Broken", { error: "bad yaml" }),
   ]),
@@ -121,23 +122,24 @@ beforeEach(() => {
 });
 
 describe("requests of a run", () => {
-  it("lists a folder's HTTP requests in sidebar order, with their folder trail", () => {
+  it("lists a folder's HTTP and event-stream requests in sidebar order, with their folder trail", () => {
     const users = runnableRequests(tree, "users")!;
     expect(users.map((r) => [r.path, r.trail])).toEqual([
       ["users/list.yaml", "Users"],
+      ["users/events.yaml", "Users"],
       ["users/admin/ban.yaml", "Users / Admin"],
     ]);
     expect(runnableRequests(tree, "users/admin")!.map((r) => r.name)).toEqual(["Ban"]);
-    expect(runnableRequests(tree, "")!.map((r) => r.name)).toEqual(["List", "Ban", "Health"]);
+    expect(runnableRequests(tree, "")!.map((r) => r.name)).toEqual(["List", "Events", "Ban", "Health"]);
     expect(runnableRequests(tree, "gone")).toBeNull();
   });
 
   it("orders, selects and moves requests", () => {
     const entries = runnableRequests(tree, "")!;
     const order = orderRequests(entries, ["health.yaml", "missing.yaml", "users/list.yaml"]).map((e) => e.name);
-    expect(order).toEqual(["Health", "List", "Ban"]);
+    expect(order).toEqual(["Health", "List", "Events", "Ban"]);
     const settings = { ...DEFAULT_SETTINGS, order: ["health.yaml"], excluded: ["users/list.yaml"] };
-    expect(selectedPaths(entries, settings)).toEqual(["health.yaml", "users/admin/ban.yaml"]);
+    expect(selectedPaths(entries, settings)).toEqual(["health.yaml", "users/events.yaml", "users/admin/ban.yaml"]);
     expect(moveInOrder(["a", "b", "c"], 0, 2)).toEqual(["b", "c", "a"]);
     expect(moveInOrder(["a", "b", "c"], 2, 0)).toEqual(["c", "a", "b"]);
     expect(moveInOrder(["a", "b", "c"], 0, -1)).toEqual(["a", "b", "c"]);
@@ -214,7 +216,7 @@ describe("runs", () => {
     const starting = startRun(runnerTab(id), runnableRequests(tree, "users")!);
     expect(mocked.startRun).toHaveBeenCalledWith({
       folder: "users",
-      requests: ["users/admin/ban.yaml", "users/list.yaml"],
+      requests: ["users/admin/ban.yaml", "users/list.yaml", "users/events.yaml"],
       iterations: 2,
       delayMs: 50,
       dataFile: undefined,
@@ -251,7 +253,7 @@ describe("runs", () => {
     const id = openRunner("", "Shop");
     mocked.startRun.mockResolvedValueOnce({ runId: "r2", name: "Shop", total: 3, iterations: 1, environment: null });
     expect(await toggleRun(runnerTab(id))).toBe(true);
-    expect(mocked.startRun.mock.calls[0][0]).toMatchObject({ folder: "", requests: ["users/list.yaml", "users/admin/ban.yaml", "health.yaml"] });
+    expect(mocked.startRun.mock.calls[0][0]).toMatchObject({ folder: "", requests: ["users/list.yaml", "users/events.yaml", "users/admin/ban.yaml", "health.yaml"] });
     await toggleRun(runnerTab(id));
     expect(mocked.stopRun).toHaveBeenCalledWith("r2");
     expect(useRunner.getState().runs[id].stopping).toBe(true);
@@ -265,7 +267,7 @@ describe("runs", () => {
     expect(useToasts.getState().toasts.at(-1)).toMatchObject({ tone: "error", detail: "Iterations must be between 1 and 100000" });
 
     // Nothing selected: not even asked.
-    updateSettings(id, (s) => ({ ...s, excluded: ["users/list.yaml", "users/admin/ban.yaml", "health.yaml"] }));
+    updateSettings(id, (s) => ({ ...s, excluded: ["users/list.yaml", "users/events.yaml", "users/admin/ban.yaml", "health.yaml"] }));
     expect(await toggleRun(runnerTab(id))).toBe(false);
     expect(mocked.startRun).toHaveBeenCalledTimes(2);
   });
