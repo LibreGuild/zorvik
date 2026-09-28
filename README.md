@@ -94,6 +94,11 @@
 - **Plain words and diagrams:** short readings with sequence, flow and layer diagrams, and a quick check after each lesson.
 - **Rewards:** XP, levels and ranks, daily streaks, 24 badges, and a *Zorvik Bootcamp Graduate* certificate. Open it from **Training Bootcamp**, pinned at the top of the workspace menu and on the welcome screen; inside it, a *Workbench | Academy* switch moves between the lessons and the labs. Its workspace is always there and resets in one click.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/academy-dark.webp">
+  <img alt="The Academy: level and XP, streak and badges, the lesson to continue, and the course map" src=".github/assets/academy-light.webp">
+</picture>
+
 ### Inspect the network
 TLS inspector (chain, expiry, protocol versions, cipher suites), DNS lookup, port check, ping, network interfaces, HTTP/3 check, and encoders for Base64, URL, hex, JWT, hashes and timestamps.
 
