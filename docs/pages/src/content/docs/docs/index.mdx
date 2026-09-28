@@ -1,0 +1,37 @@
+---
+title: Zorvik documentation
+description: Everything Zorvik can do, and how to use it.
+tableOfContents: false
+---
+
+import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+Zorvik is an open-source desktop app to **build, test, mock and load test APIs**, and to see what really happens on the network. It runs on Windows, macOS and Linux, and every download also has the `zorvik` command line for CI.
+
+These pages explain every feature in detail. New to APIs? The [Training Bootcamp](bootcamp/training-bootcamp/) inside the app teaches you hands-on.
+
+<CardGrid>
+  <LinkCard title="Install Zorvik" href="getting-started/install/" description="Windows, macOS and Linux, and the zorvik command line." />
+  <LinkCard title="Your first request" href="getting-started/first-request/" description="Send, save and organize requests in a workspace." />
+  <LinkCard title="Scripts & tests" href="scripting/overview/" description="Pre-request and post-response JavaScript, the full pm API." />
+  <LinkCard title="Mock servers" href="servers/mock-api/" description="Routes, templates, delays, faults, CORS and forwarding." />
+  <LinkCard title="Load testing" href="load-testing/overview/" description="Virtual users or arrival rate, stages, thresholds and reports." />
+  <LinkCard title="Command line" href="cli/overview/" description="zorvik run, load, serve and mcp for pipelines and agents." />
+</CardGrid>
+
+## How Zorvik is organized
+
+<CardGrid>
+  <Card title="Workspaces are files" icon="document">
+    A workspace is a folder of readable YAML: requests, folders, environments, servers and load tests. Keep it in Git and review it in pull requests.
+  </Card>
+  <Card title="Secrets stay local" icon="seti:lock">
+    Secret values, cookies and OAuth tokens live in the app's data folder, never in the workspace files.
+  </Card>
+  <Card title="One engine" icon="rocket">
+    The app, the command line and AI agents all use the same Rust engine, so a request behaves the same everywhere.
+  </Card>
+  <Card title="Local first" icon="laptop">
+    No account, no cloud, no tracking. Zorvik works offline and behind corporate proxies.
+  </Card>
+</CardGrid>

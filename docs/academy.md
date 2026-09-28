@@ -20,7 +20,7 @@ app/src/components/academy/  Academy view (course map, lessons, rewards), Lab Gu
 | Earned for | XP |
 |---|---|
 | A lab step (not "Do it for me") | 10 |
-| A lesson complete (lab done, quiz ≥ 60 %, or "Mark as done" for reading-only lessons) | 50 |
+| A lesson complete (its lab done and its quiz ≥ 60 %, whichever it has; "Mark as done" for reading-only lessons) | 50 |
 | A quiz answer right on the first try | 5 each, +20 when all are right (3+ questions) |
 | A unit complete, or its test-out quiz passed (≥ 80 %) | 100 and the unit's badge |
 | Graduating (the capstone unit) | 250 and the certificate |

@@ -287,7 +287,7 @@ export const TOPICS: DocTopic[] = [
       "Searchable history of every send, and a cookie jar per workspace",
       "Tabs come back as you left them",
     ],
-    tryIt: ["Press [mod+K] to find any request, folder, load test or command."],
+    tryIt: ["Press [mod+K] to find any request, server, load test or tool."],
   },
   {
     id: "cli",

@@ -50,6 +50,9 @@ jobs:
           # Reads the latest release (version, sizes, downloads) without the anonymous rate limit.
           GITHUB_TOKEN: ${{ github.token }}
         run: npm run build
+      - name: Check links
+        working-directory: docs/pages
+        run: npm run check
       - uses: actions/upload-pages-artifact@v5
         if: github.event_name != 'pull_request'
         with:
