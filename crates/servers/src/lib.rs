@@ -239,14 +239,20 @@ pub async fn start(
     };
     let (addr, run): (SocketAddr, BoxFuture<'static, Result<(), String>>) = match kind {
         ServerKind::Udp | ServerKind::Dns => {
-            let socket = match tokio::net::UdpSocket::bind((host.as_str(), port)).await {
-                Ok(socket) => socket,
+            // DNS on any free port: one free for TCP too (DNS over TCP uses the same number).
+            let bound = if kind == ServerKind::Dns && port == 0 {
+                dns::bind_both(&host).await.map(|(udp, tcp)| (udp, Some(tcp)))
+            } else {
+                tokio::net::UdpSocket::bind((host.as_str(), port)).await.map(|udp| (udp, None))
+            };
+            let (socket, tcp) = match bound {
+                Ok(bound) => bound,
                 Err(e) => return Err(bind_error(e, &host, port, Protocol::Udp).await),
             };
             let addr = socket.local_addr().map_err(|e| ServerError::new(e.to_string()))?;
             let run = match kind {
                 ServerKind::Udp => Box::pin(udp::run(socket, ctx)) as BoxFuture<'static, _>,
-                _ => Box::pin(dns::run(socket, ctx)),
+                _ => Box::pin(dns::run(socket, tcp, ctx)),
             };
             (addr, run)
         }

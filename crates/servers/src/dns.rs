@@ -406,13 +406,33 @@ struct Shared {
     reporter: Reporter,
 }
 
-pub(crate) async fn run(socket: UdpSocket, mut ctx: Ctx) -> Result<(), String> {
+/// A UDP socket and a TCP listener on the same free port, for a DNS server asked for any
+/// port: the port the system picks for UDP can be taken for TCP (by another program, or a
+/// server started at the same time), which would leave DNS over TCP off.
+pub(crate) async fn bind_both(host: &str) -> std::io::Result<(UdpSocket, TcpListener)> {
+    let mut last = None;
+    for _ in 0..20 {
+        let tcp = TcpListener::bind((host, 0)).await?;
+        match UdpSocket::bind(tcp.local_addr()?).await {
+            Ok(udp) => return Ok((udp, tcp)),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("no port is free for both UDP and TCP")))
+}
+
+/// Serves DNS on `socket`, and over TCP on `tcp` (bound to the same port here when not given).
+pub(crate) async fn run(socket: UdpSocket, tcp: Option<TcpListener>, mut ctx: Ctx) -> Result<(), String> {
     let local = socket.local_addr().map_err(|e| e.to_string())?;
     let socket = Arc::new(socket);
     let reporter = ctx.reporter.clone();
     let shared =
         Arc::new(Shared { zones: Zones::new(ctx.live.clone(), local, reporter.clone()), reporter: reporter.clone() });
-    let tcp = match TcpListener::bind(local).await {
+    let bound = match tcp {
+        Some(listener) => Ok(listener),
+        None => TcpListener::bind(local).await,
+    };
+    let tcp = match bound {
         Ok(listener) => Some(listener),
         Err(e) => {
             reporter
