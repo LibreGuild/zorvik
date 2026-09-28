@@ -19,6 +19,8 @@
 
 <p align="center">
   <a href="https://github.com/LibreGuild/zorvik/releases/latest"><b>Download</b></a> ·
+  <a href="https://libreguild.github.io/zorvik/">Website</a> ·
+  <a href="https://libreguild.github.io/zorvik/docs/">Docs</a> ·
   <a href="#features">Features</a> ·
   <a href="#command-line">Command line</a> ·
   <a href="#ai-agents">AI agents</a> ·
@@ -180,11 +182,12 @@ npm run package            # build installers for your system
 You need Rust (stable) and Node.js 22+; [CONTRIBUTING.md](CONTRIBUTING.md) lists the system packages for each OS.
 
 ## Documentation
+- **[Zorvik docs](https://libreguild.github.io/zorvik/docs/)**: every feature in detail, the scripting and command-line references, and the workspace file format.
 - In the app: the **Docs** section covers every feature.
 - [Architecture](docs/architecture.md): how the pieces fit together.
 - [Training Bootcamp](docs/academy.md): how the Academy works, and how to write a lesson.
 - [Testing](docs/testing.md): the test suites and how to run them.
-- [CI and releases](docs/ci-release.md): how builds and releases are made.
+- [CI and releases](docs/ci-release.md): how builds, releases and the website are made.
 
 ## Community
 - Questions and ideas: [Discussions](https://github.com/LibreGuild/zorvik/discussions)

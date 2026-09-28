@@ -101,17 +101,19 @@ jobs:
           retention-days: 7
 
   # ---- releases ------------------------------------------------------------------------------------
-  # A `v*` tag publishes that version (it must match the version in the code). Every push to `main`
-  # replaces the "nightly" pre-release. The builds upload to a draft of this run; `publish` makes it
-  # public only when all of them succeeded, so a failed build never replaces a release. A run only
-  # ever touches its own draft: a tag and `main` can build at the same time.
+  # A `v*` tag publishes that version (it must match the version in the code). A run started by hand
+  # (or by `nightly.yml`, once a day when `main` changed) replaces the "nightly" pre-release; a
+  # plain push to `main` only runs the checks. The builds upload to a draft of this run; `publish`
+  # makes it public only when all of them succeeded, so a failed build never replaces a release. A
+  # run only ever touches its own draft: a tag and a nightly can build at the same time.
 
   release-draft:
     name: Start the release
     needs: [rust-linux, rust-windows, ui, e2e]
     if: >-
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' &&
+        (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -291,6 +293,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
     concurrency:
       group: release-${{ needs.release-draft.outputs.channel }}
       cancel-in-progress: false
@@ -362,6 +365,11 @@ jobs:
             sleep $((attempt * 5))
           done
           exit 1
+      - name: Refresh the website
+        # The website shows the latest version: rebuild it. (A release published with this
+        # workflow's token triggers no other workflow by itself.)
+        if: env.CHANNEL == 'stable'
+        run: gh workflow run pages.yml --ref main || echo "::warning::Could not start the website build"
 
   discard-draft:
     name: Discard the draft
