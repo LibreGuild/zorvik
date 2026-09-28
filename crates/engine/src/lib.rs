@@ -29,8 +29,8 @@ pub use dns::{DnsFlags, DnsQuery, DnsQuestion, DnsResolver, DnsResult, DnsResult
 pub use error::{EngineError, ErrorKind, Result};
 pub use grpc::{GrpcDescriptors, GrpcEvent, GrpcResponse, GrpcSession, GrpcStatus, GrpcTarget};
 pub use http::{
-    BodyStream, Client, Header, HostGuard, HttpRequest, HttpResponse, HttpVersionPref, RedirectHop, RequestOptions,
-    ResponseMeta, SentRequest, StreamingResponse, Timing,
+    BodyStream, ChallengeAuth, ChallengeAuthRef, Client, Header, HostGuard, HttpRequest, HttpResponse, HttpVersionPref,
+    RedirectHop, RequestOptions, ResponseMeta, SentRequest, StreamingResponse, Timing,
 };
 pub use mqtt::{MqttConfig, MqttProtocol};
 pub use proxy::{ProxyMode, ProxySettings};

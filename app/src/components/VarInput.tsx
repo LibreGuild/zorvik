@@ -1,8 +1,9 @@
 // Single-line input that highlights {{variables}} and autocompletes them.
 // The input text is transparent; a backdrop with identical metrics draws the colors.
+import type { DynamicVarInfo } from "../bindings/DynamicVarInfo";
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { segments } from "../lib/vars";
-import { useVariableNames, useWorkspace } from "../store/workspace";
+import { useDynamicCatalog, useVariableNames, useWorkspace } from "../store/workspace";
 import { cx } from "./ui";
 
 export interface VarInputProps {
@@ -29,6 +30,7 @@ export const VarInput = forwardRef<HTMLInputElement, VarInputProps>(function Var
   const list = useRef<HTMLDivElement>(null);
   useImperativeHandle(ref, () => input.current as HTMLInputElement);
   const { names, known } = useVariableNames();
+  const catalog = useDynamicCatalog();
   const [menu, setMenu] = useState<{ items: string[]; index: number; from: number; kind: "var" | "plain" } | null>(null);
   const [hover, setHover] = useState<{ name: string; left: number } | null>(null);
   const variables = useWorkspace((s) => s.variables);
@@ -182,7 +184,9 @@ export const VarInput = forwardRef<HTMLInputElement, VarInputProps>(function Var
           mono ? "font-mono text-[12.5px]" : "text-[13px]",
         )}
       />
-      {hover && !menu && <VariableHint name={hover.name} left={hover.left} info={variables.find((v) => v.key === hover.name)} />}
+      {hover && !menu && (
+        <VariableHint name={hover.name} left={hover.left} info={variables.find((v) => v.key === hover.name)} dynamic={catalog.get(hover.name.replace(/\(.*$/, "").trim())} />
+      )}
       {menu && (
         <div ref={list} className="zv-pop absolute left-0 top-full z-50 mt-1 max-h-60 min-w-[220px] overflow-auto rounded-lg border border-line bg-elev p-1 shadow-pop">
           {menu.items.map((item, i) => (
@@ -199,6 +203,7 @@ export const VarInput = forwardRef<HTMLInputElement, VarInputProps>(function Var
             >
               {menu.kind === "var" && <span className="text-accent">{"{}"}</span>}
               {item}
+              {catalog.get(item) && <span className="ml-auto truncate pl-3 font-sans text-[11px] text-faint">{catalog.get(item)!.example}</span>}
             </button>
           ))}
         </div>
@@ -209,7 +214,17 @@ export const VarInput = forwardRef<HTMLInputElement, VarInputProps>(function Var
 
 const SOURCE_LABEL: Record<string, string> = { environment: "the active environment", workspace: "workspace variables", globals: "globals" };
 
-function VariableHint({ name, left, info }: { name: string; left: number; info?: { value: string; source: string; secret: boolean; local?: boolean } }) {
+function VariableHint({
+  name,
+  left,
+  info,
+  dynamic: about,
+}: {
+  name: string;
+  left: number;
+  info?: { value: string; source: string; secret: boolean; local?: boolean };
+  dynamic?: DynamicVarInfo;
+}) {
   const dynamic = name.startsWith("$");
   return (
     <div
@@ -218,7 +233,15 @@ function VariableHint({ name, left, info }: { name: string; left: number; info?:
     >
       <div className="font-mono text-fg">{`{{${name}}}`}</div>
       {dynamic ? (
-        <div className="text-muted">Dynamic value, generated on every send</div>
+        about ? (
+          <>
+            <div className="text-muted">{about.description}</div>
+            <div className="font-mono text-faint">e.g. {about.example}</div>
+            {about.args && <div className="font-mono text-faint">{`{{${about.name}${about.args}}}`}</div>}
+          </>
+        ) : (
+          <div className="text-muted">Dynamic value, generated on every send</div>
+        )
       ) : info ? (
         <>
           <div className="break-all font-mono text-accent">{info.value === "" ? <i className="text-faint">empty</i> : info.value}</div>

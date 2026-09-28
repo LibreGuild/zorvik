@@ -8,7 +8,7 @@ Three workflows:
 ## Checks (every pull request and every push)
 | Job | What it does |
 |---|---|
-| Rust (Linux) | `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, and that the generated TypeScript bindings are committed |
+| Rust (Linux) | `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, and that the generated files (TypeScript bindings, the dynamic variables reference) are committed |
 | Rust (Windows) | `cargo test` on real Windows networking, paths and trash |
 | UI | TypeScript typecheck, Vitest unit tests, production build |
 | E2E | Playwright drives the real UI against the real Rust API and local test servers |
@@ -38,7 +38,7 @@ After the checks pass, `release-draft` creates a draft release for the run and c
    git tag -a v0.2.0 -m "Highlights of this release, in a few lines."
    git push origin v0.2.0
    ```
-4. CI builds and publishes "Zorvik 0.2.0". Below the tag message, the notes list the downloads and the merged pull requests, grouped by label ([`.github/release.yml`](../.github/release.yml)).
+4. CI builds and publishes "Zorvik 0.2.0", then rebuilds the [website](#website), whose main site now shows this version's docs. Below the tag message, the notes list the downloads and the merged pull requests, grouped by label ([`.github/release.yml`](../.github/release.yml)).
 
 Only maintainers can push `v*` tags. Versions follow [SemVer](https://semver.org): while Zorvik is `0.x`, a minor bump may change behaviour; patch releases only fix.
 
@@ -100,12 +100,26 @@ Updates only install from release builds: debug builds check but never install.
 The builds are not code-signed yet. Windows SmartScreen asks once (**More info → Run anyway**). On macOS the first open is blocked; allow it in System Settings → Privacy & Security → **Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/Zorvik.app`. The macOS app is ad-hoc signed so it runs on Apple silicon.
 
 ## Website
-The website lives in [`docs/pages`](pages/README.md): an Astro site with the home page and the developer docs (Starlight) under `/docs`. It is published to GitHub Pages at <https://libreguild.github.io/zorvik/> by `pages.yml`:
-- on pushes to `main` that change the site, its pictures or the course;
-- after every release (the release job starts it, so the version and sizes on the page update);
-- once a day, so the release details on the page stay fresh.
+The website lives in [`docs/pages`](pages/README.md): an Astro site with the home page and the developer docs (Starlight) under `/docs`. `pages.yml` publishes it to GitHub Pages in two parts, built in one run and published together:
 
-Pull requests that touch the site build it without publishing. Page views are counted by GoatCounter, without cookies.
+| Part | Address | Built from | Shows |
+|---|---|---|---|
+| **Main site** | <https://libreguild.github.io/zorvik/> | the latest release's tag | the docs of the version people download |
+| **Preview** | <https://libreguild.github.io/zorvik/next/> | `main` | the docs of the next version, with a banner on every page that links to the same page on the main site (or its docs home when the page is new). Search engines are asked not to list it, and it has no sitemap |
+
+The latest release is GitHub's "latest" release (`releases/latest`): the newest published release that isn't a pre-release, the same one the download buttons and the app's update check use. A `v*` tag whose release is still a draft doesn't count. Without a release that has the website, the main site is built from `main`. Both parts' download buttons point at the latest release; the preview's home page adds that nightly builds are on the releases page.
+
+The workflow runs:
+- on pushes to `main` that change the site, its pictures or the course (the preview changes; the main site is rebuilt as it was);
+- after every release (the release job starts it), so the main site shows the new release's docs, version and sizes;
+- once a day, so the release details stay fresh;
+- by hand: **Actions → Website → Run workflow** on `main`.
+
+Pull requests that touch the site build their own version both ways (as the main site and as the preview) and check the links, without publishing. Page views are counted by GoatCounter on both parts, without cookies.
+
+**Docs changes go live with the next release.** Docs describe the code on the same branch, so a docs change belongs in the pull request of the change it describes. To correct the docs of the current release, fix them on `main` too: the fix shows in the preview as soon as it merges, and on the main site with the next release.
+
+The build reads `SITE_BASE` (the base path, `/zorvik` by default) and `SITE_CHANNEL=next` (the banner and `noindex`); the workflow also sets `SITE_RELEASE_DIST` to the built main site, so the banner only links to pages that exist there. The main site is built with the release's own sources, config and link check; releases whose config doesn't read `SITE_BASE` are built for `/zorvik` anyway. After both builds, the workflow checks the links once more across the combined site (the main site with the preview in `next/`).
 
 ## Repository automation
 - **Dependabot** opens grouped weekly updates for Cargo, npm (the app and the website) and GitHub Actions ([`.github/dependabot.yml`](../.github/dependabot.yml)), plus immediate security updates.

@@ -3,7 +3,7 @@ import type { CourseView } from "../../bindings/CourseView";
 import type { ProgressView } from "../../bindings/ProgressView";
 import { parseFlow, parseSequence } from "./Diagrams";
 import { parseMarkdown } from "./Markdown";
-import { levelFraction, nextLesson } from "./parts";
+import { isNew, levelFraction, nextLesson } from "./parts";
 
 describe("lesson markdown", () => {
   it("reads headings, lists, tables, callouts and code", () => {
@@ -76,12 +76,22 @@ describe("course helpers", () => {
     bestStreak: 0,
     activeToday: false,
     badges: [],
-    lessons: done.map((id) => ({ id, completed: true, stepsDone: 0, labDone: false, quizBest: null })),
+    lessons: done.map((id) => ({ id, completed: true, new: false, stepsDone: 0, labDone: false, quizBest: null })),
     units: [],
     lastLesson: last,
     graduatedAt: null,
     completedLessons: done.length,
     totalLessons: 3,
+    newLessons: 0,
+  });
+
+  it("marks lessons an update added", () => {
+    const p = progress(["a", "b"], "b");
+    p.lessons.push({ id: "c", completed: false, new: true, stepsDone: 0, labDone: false, quizBest: null });
+    p.newLessons = 1;
+    expect(isNew(p, "c")).toBe(true);
+    expect(isNew(p, "a")).toBe(false);
+    expect(nextLesson(course, p)?.lesson.id).toBe("c");
   });
 
   it("continues the last lesson, else the next unfinished one", () => {

@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { create } from "zustand";
+import type { DynamicVarInfo } from "../bindings/DynamicVarInfo";
 import type { AppInfo } from "../bindings/AppInfo";
 import type { RecentWorkspace } from "../bindings/RecentWorkspace";
 import type { TreeNode } from "../bindings/TreeNode";
@@ -130,6 +131,12 @@ export function findNode(nodes: TreeNode[], path: string): TreeNode | null {
     if (inner) return inner;
   }
   return null;
+}
+
+/** Dynamic variables (`$randomEmail` …) by name: description, example and the `(args)` form. */
+export function useDynamicCatalog(): Map<string, DynamicVarInfo> {
+  const catalog = useWorkspace((s) => s.appInfo?.dynamicCatalog);
+  return useMemo(() => new Map((catalog ?? []).map((v) => [v.name, v])), [catalog]);
 }
 
 /** Variable names for highlighting/autocomplete, including dynamic ones. */

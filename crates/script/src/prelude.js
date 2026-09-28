@@ -15,6 +15,7 @@
   var MAX_TEXT = 10 * 1024;
   var MAX_TESTS = 10000;
   var MAX_RENDER = 16 * 1024 * 1024;
+  var MAX_VISUALIZATION = 5 * 1024 * 1024;
 
   // ---- helpers ----------------------------------------------------------------
 
@@ -151,7 +152,10 @@
     return s;
   }
 
-  /** Postman dynamic variables, like the request renderer's. */
+  /** The app's dynamic variables (`host.dynamic`, the same as requests use); set by `setup`. */
+  var hostDynamic = null;
+
+  /** Postman dynamic variables without the app (the script engine's own tests). */
   function dynamic(name) {
     switch (name) {
       case 'guid':
@@ -185,7 +189,10 @@
       out = out.replace(/\{\{([^{}\n]+)\}\}/g, function (m, raw) {
         var name = raw.trim();
         var v = lookup(name);
-        if (v === undefined && name.charAt(0) === '$') v = dynamic(name.slice(1));
+        if (v === undefined && name.charAt(0) === '$') {
+          v = hostDynamic ? hostDynamic(name) : undefined;
+          if (v === undefined || v === null) v = dynamic(name.slice(1));
+        }
         if (v === undefined) return m;
         changed = true;
         return stored(v);
@@ -1013,7 +1020,25 @@
     }
     return this;
   });
-  method(ResponseAssertion.prototype, 'jsonSchema', unsupported('pm.response.to.have.jsonSchema'));
+  /** The run's libraries (`setup` sets them): `jsonSchema` validates with the bundled Ajv. */
+  var runLibraries = null;
+
+  method(ResponseAssertion.prototype, 'jsonSchema', function (schema, options) {
+    var parsed = responseBodyJson(flag(this, 'object'));
+    if (!parsed.ok) {
+      this.assert(false, 'expected response body to be a valid json but got error ' + errorText(parsed.error), '');
+      return this;
+    }
+    var Ajv = runLibraries.require('ajv');
+    var ajv = new Ajv(Object.assign({ allErrors: true }, options || {}));
+    var valid = ajv.validate(schema, parsed.value);
+    this.assert(
+      valid,
+      'expected response body to match the JSON Schema: ' + ajv.errorsText(ajv.errors, { dataVar: 'body' }),
+      'expected response body to not match the JSON Schema'
+    );
+    return this;
+  });
 
   function expect(value, message) {
     if (responses.has(value)) {
@@ -1337,7 +1362,10 @@
     define(response, 'to', function () {
       return new ResponseAssertion(response);
     });
-    define(response, 'cookies', unsupported('pm.response.cookies'));
+    var cookies = cookieList(res.cookies || []);
+    define(response, 'cookies', function () {
+      return cookies;
+    });
     // Event streams (collection runs): the events read, as {event, data, id}.
     if (res.events) {
       var events = res.events.map(function (e) {
@@ -1349,6 +1377,236 @@
     }
     responses.add(response);
     return response;
+  }
+
+  // ---- cookies ---------------------------------------------------------------------
+
+  /** `pm.cookies` and `pm.response.cookies`: a read-only list of `{name, value, domain, …}`. */
+  function cookieList(cookies) {
+    var list = cookies.map(function (c) {
+      return {
+        name: c.name,
+        key: c.name,
+        value: c.value,
+        domain: c.domain || '',
+        path: c.path || '/',
+        expires: c.expires || null,
+        secure: !!c.secure,
+        httpOnly: !!c.httpOnly,
+      };
+    });
+    function one(name) {
+      for (var i = 0; i < list.length; i++) if (list[i].name === String(name)) return list[i];
+      return undefined;
+    }
+    return {
+      get: function (name) {
+        var c = one(name);
+        return c ? c.value : undefined;
+      },
+      has: function (name, value) {
+        var c = one(name);
+        return !!c && (value === undefined || c.value === String(value));
+      },
+      one: one,
+      all: function () {
+        return list.slice();
+      },
+      count: function () {
+        return list.length;
+      },
+      each: function (fn) {
+        list.forEach(fn);
+      },
+      filter: function (fn) {
+        return list.filter(fn);
+      },
+      map: function (fn) {
+        return list.map(fn);
+      },
+      toObject: function () {
+        var o = {};
+        list.forEach(function (c) {
+          o[c.name] = c.value;
+        });
+        return o;
+      },
+      toString: function () {
+        return list
+          .map(function (c) {
+            return c.name + '=' + c.value;
+          })
+          .join('; ');
+      },
+    };
+  }
+
+  /**
+   * Hands a host reply (`{ok, …}` JSON) to a Node-style callback, on a later tick like
+   * Postman's, or as a promise when there is no callback.
+   */
+  function settle(replyJson, pick, callback) {
+    var reply = jsonParse(replyJson);
+    var error = reply.ok ? null : new Error(reply.error);
+    var value = reply.ok ? pick(reply) : undefined;
+    if (typeof callback === 'function') {
+      Promise.resolve().then(function () {
+        callback(error, value);
+      });
+      return undefined;
+    }
+    return error ? Promise.reject(error) : Promise.resolve(value);
+  }
+
+  /** `pm.cookies.jar()`: the workspace's cookie jar (only for the request's own site). */
+  function cookieJar(host) {
+    var none = function () {
+      return undefined;
+    };
+    return {
+      get: function (url, name, callback) {
+        return settle(
+          host.cookies(String(url)),
+          function (r) {
+            var c = r.cookies.filter(function (x) {
+              return x.name === String(name);
+            })[0];
+            return c ? c.value : undefined;
+          },
+          callback
+        );
+      },
+      getAll: function (url, options, callback) {
+        if (typeof options === 'function') callback = options;
+        return settle(
+          host.cookies(String(url)),
+          function (r) {
+            return cookieList(r.cookies).all();
+          },
+          callback
+        );
+      },
+      set: function (url, name, value, callback) {
+        if (name && typeof name === 'object') {
+          callback = value;
+          value = name.value;
+          name = name.name || name.key;
+        } else if (typeof value === 'function') {
+          callback = value;
+          value = '';
+        }
+        return settle(host.cookie('set', String(url), String(name), value == null ? '' : String(value)), none, callback);
+      },
+      unset: function (url, name, callback) {
+        return settle(host.cookie('unset', String(url), String(name)), none, callback);
+      },
+      clear: function (url, callback) {
+        return settle(host.cookie('clear', String(url)), none, callback);
+      },
+    };
+  }
+
+  // ---- pm.sendRequest ------------------------------------------------------------
+
+  /** Header entries of any Postman shape: `[{key, value, disabled}]`, `{name: value}` or "k: v" lines. */
+  function requestHeaders(h) {
+    var out = [];
+    if (!h) return out;
+    if (typeof h === 'string') {
+      h.split(/\r?\n/).forEach(function (line) {
+        var i = line.indexOf(':');
+        if (i > 0) out.push({ key: line.slice(0, i).trim(), value: line.slice(i + 1).trim() });
+      });
+    } else if (Array.isArray(h)) {
+      h.forEach(function (x) {
+        if (x && !x.disabled && x.key !== undefined) out.push({ key: String(x.key), value: x.value == null ? '' : String(x.value) });
+      });
+    } else if (typeof h === 'object') {
+      if (typeof h.toObject === 'function') h = h.toObject();
+      for (var k in h) if (own(h, k)) out.push({ key: k, value: h[k] == null ? '' : String(h[k]) });
+    }
+    return out;
+  }
+
+  function hasHeader(headers, name) {
+    for (var i = 0; i < headers.length; i++) if (headers[i].key.toLowerCase() === name) return true;
+    return false;
+  }
+
+  function formEncode(s) {
+    return encodeURIComponent(s).replace(/%20/g, '+');
+  }
+
+  /** What `pm.sendRequest` sends: a URL string or a Postman request object. */
+  function outgoing(req) {
+    if (typeof req === 'string') return { method: 'GET', url: req, headers: [], body: '' };
+    if (!req || typeof req !== 'object') throw new TypeError('pm.sendRequest: give a URL or a request object');
+    var url = req.url;
+    if (url && typeof url === 'object') url = url.raw !== undefined ? url.raw : String(url);
+    var headers = requestHeaders(req.header || req.headers);
+    var body = '';
+    var b = req.body;
+    var type = function (value) {
+      if (!hasHeader(headers, 'content-type')) headers.push({ key: 'Content-Type', value: value });
+    };
+    if (typeof b === 'string') {
+      body = b;
+    } else if (b && typeof b === 'object') {
+      var fields = function (list) {
+        return (list || []).filter(function (f) {
+          return f && !f.disabled && f.key !== undefined;
+        });
+      };
+      switch (b.mode) {
+        case 'raw':
+          body = typeof b.raw === 'string' ? b.raw : b.raw === undefined ? '' : jsonStringify(b.raw);
+          if (b.options && b.options.raw && b.options.raw.language === 'json') type('application/json');
+          break;
+        case 'urlencoded':
+          body = fields(b.urlencoded)
+            .map(function (f) {
+              return formEncode(String(f.key)) + '=' + formEncode(f.value == null ? '' : String(f.value));
+            })
+            .join('&');
+          type('application/x-www-form-urlencoded');
+          break;
+        case 'formdata':
+          var boundary = '----zorvik' + Math.random().toString(16).slice(2);
+          fields(b.formdata).forEach(function (f) {
+            if (f.type === 'file' || f.src !== undefined) throw new Error('pm.sendRequest: form-data files are not supported; send text fields');
+            body += '--' + boundary + '\r\nContent-Disposition: form-data; name="' + String(f.key).replace(/"/g, '%22') + '"\r\n\r\n';
+            body += (f.value == null ? '' : String(f.value)) + '\r\n';
+          });
+          body += '--' + boundary + '--\r\n';
+          type('multipart/form-data; boundary=' + boundary);
+          break;
+        case 'graphql':
+          var g = b.graphql || {};
+          var variables = g.variables;
+          if (typeof variables === 'string') variables = variables.trim() ? jsonParse(variables) : undefined;
+          body = jsonStringify({ query: g.query || '', variables: variables });
+          type('application/json');
+          break;
+        case 'file':
+          throw new Error('pm.sendRequest: file bodies are not supported');
+      }
+    }
+    return { method: String(req.method || 'GET').toUpperCase(), url: stored(url), headers: headers, body: stored(body) };
+  }
+
+  function sendRequest(host, req, callback) {
+    var r = outgoing(req);
+    var reply = host.send(jsonStringify(r));
+    var parsed = jsonParse(reply);
+    var line = 'pm.sendRequest ' + r.method + ' ' + r.url + ' → ' + (parsed.ok ? parsed.response.code + ' ' + parsed.response.status : parsed.error);
+    if (logs.length < MAX_CONSOLE) logs.push({ level: 'info', message: clip(line) });
+    return settle(
+      reply,
+      function (x) {
+        return responseObject(x.response, x.response.body);
+      },
+      callback
+    );
   }
 
   // ---- base64 (atob / btoa, if the engine has none) --------------------------------
@@ -1390,9 +1648,124 @@
     return out;
   }
 
+  // ---- require: the built-in libraries -------------------------------------------
+
+  // Postman's `xml2Json` options (explicitArray off: single children aren't arrays).
+  var XML2JSON = { explicitArray: false, async: false, trim: true, mergeAttrs: false };
+
+  /**
+   * `require` for the libraries Zorvik ships (crates/script/src/libs.rs), and the
+   * globals Postman's sandbox has for them. `host.library(name)` returns a library
+   * as a CommonJS factory (undefined for a name Zorvik doesn't have), `host.random(n)`
+   * secure random bytes, `host.names` every name. A library loads on first use and
+   * is kept for the rest of the run.
+   */
+  function libraries(host) {
+    var modules = new Map();
+
+    function require(id) {
+      if (typeof id !== 'string') throw new TypeError('require: the module name must be a string');
+      var name = id.indexOf('node:') === 0 ? id.slice(5) : id;
+      var module = modules.get(name);
+      if (module) return module.exports;
+      var factory = host.library(name);
+      if (typeof factory !== 'function') {
+        throw new Error(
+          "Cannot find module '" + id + "'. Scripts can require only these built-in libraries: " + host.names.join(', ')
+        );
+      }
+      module = { id: name, exports: {}, loaded: false };
+      // Kept before it runs, so libraries that require each other get the exports so far (as in Node).
+      modules.set(name, module);
+      try {
+        factory.call(module.exports, module.exports, require, module, name + '.js', '');
+      } catch (e) {
+        modules.delete(name);
+        // Out of memory (QuickJS throws null or a bare InternalError then): as it is, for the engine to report.
+        if (!(e instanceof Error) || e.name === 'InternalError') throw e;
+        throw new Error('The built-in library "' + name + '" failed to load: ' + errorText(e));
+      }
+      module.loaded = true;
+      return module.exports;
+    }
+
+    /** Postman's `pm.require('npm:name@version')`; the version is ignored (Zorvik has one of each). */
+    function pmRequire(spec) {
+      var s = String(spec);
+      var npm = /^npm:((?:@[^\/@]+\/)?[^\/@]+)(?:@[^\/]*)?(\/.*)?$/.exec(s);
+      if (npm) return require(npm[1] + (npm[2] || ''));
+      if (/^@[^\/]+\/[^\/]+$/.test(s)) {
+        throw new Error(
+          "pm.require: '" + s + "' is from a Postman package library, which Zorvik can't reach. Copy its code into the script."
+        );
+      }
+      return require(s);
+    }
+
+    function getRandomValues(array) {
+      if (!ArrayBuffer.isView(array) || array instanceof DataView || /^float/.test(typeOf(array))) {
+        throw new TypeError('crypto.getRandomValues: the argument must be an integer typed array');
+      }
+      new Uint8Array(array.buffer, array.byteOffset, array.byteLength).set(host.random(array.byteLength));
+      return array;
+    }
+
+    function randomUUID() {
+      var b = getRandomValues(new Uint8Array(16));
+      b[6] = (b[6] & 0x0f) | 0x40;
+      b[8] = (b[8] & 0x3f) | 0x80;
+      var hex = '';
+      for (var i = 0; i < 16; i++) {
+        hex += (b[i] + 0x100).toString(16).slice(1);
+        if (i === 3 || i === 5 || i === 7 || i === 9) hex += '-';
+      }
+      return hex;
+    }
+
+    /** A global that loads its library on first use; assigning to it replaces it. */
+    function lazy(name, library) {
+      function replace(value) {
+        Object.defineProperty(G, name, { value: value, writable: true, configurable: true });
+      }
+      Object.defineProperty(G, name, {
+        get: function () {
+          // Read by the library itself while it loads (lodash keeps the old `_` for noConflict).
+          var loading = modules.get(library);
+          if (loading && !loading.loaded) return undefined;
+          var value = require(library);
+          replace(value);
+          return value;
+        },
+        set: replace,
+        configurable: true,
+      });
+    }
+
+    function install() {
+      // Web Crypto's random part: uuid and crypto-js need it; scripts can use it too.
+      G.crypto = { getRandomValues: getRandomValues, randomUUID: randomUUID };
+      lazy('CryptoJS', 'crypto-js');
+      lazy('_', 'lodash');
+      lazy('tv4', 'tv4');
+      lazy('cheerio', 'cheerio');
+      G.xml2Json = function xml2Json(xml) {
+        var json;
+        var failed = null;
+        require('xml2js').parseString(String(xml), XML2JSON, function (e, result) {
+          failed = e;
+          json = result;
+        });
+        if (failed) throw new Error('xml2Json: the text is not valid XML (' + String(failed.message || failed).split('\n')[0] + ')');
+        return json;
+      };
+    }
+
+    return { require: require, pmRequire: pmRequire, install: install };
+  }
+
   // ---- setup ---------------------------------------------------------------------
 
-  return function setup(inputJson, responseBody) {
+  return function setup(inputJson, responseBody, host) {
     var input = jsonParse(inputJson);
     var vars = input.variables || {};
     var overrides = copy(vars.overrides);
@@ -1404,6 +1777,40 @@
     var chain = [overrides, local, data, environment, collection, globals];
     var changes = new Map();
     var tests = [];
+    var skip = false;
+    var visualization = null;
+    hostDynamic = host && typeof host.dynamic === 'function' ? host.dynamic : null;
+
+    // Timers: run after the script, in time order, waiting for the ones in the future.
+    var timers = [];
+    var timerSeq = 0;
+    function addTimer(fn, ms, args, repeat) {
+      if (typeof fn !== 'function') throw new TypeError('setTimeout and setInterval need a function');
+      var delay = Math.max(0, Number(ms) || 0);
+      timerSeq++;
+      timers.push({ id: timerSeq, at: Date.now() + delay, fn: fn, args: args, every: repeat ? Math.max(1, delay) : 0 });
+      return timerSeq;
+    }
+    function clearTimer(id) {
+      for (var i = 0; i < timers.length; i++) {
+        if (timers[i].id === id) {
+          timers.splice(i, 1);
+          return;
+        }
+      }
+    }
+    /** Runs the next timer (waiting for it); false when there is none. */
+    function tick() {
+      if (!timers.length) return false;
+      var next = timers[0];
+      for (var i = 1; i < timers.length; i++) if (timers[i].at < next.at) next = timers[i];
+      var wait = next.at - Date.now();
+      if (wait > 0) host.sleep(wait);
+      if (next.every) next.at = Math.max(next.at, Date.now()) + next.every;
+      else clearTimer(next.id);
+      next.fn.apply(undefined, next.args);
+      return true;
+    }
     // `pm.execution.setNextRequest`: `{name}` (null stops the iteration); the runner acts on it.
     var nextRequest = null;
 
@@ -1524,6 +1931,8 @@
       if (tests.length < MAX_TESTS) tests.push({ name: String(name), passed: false, skipped: true, error: null });
     };
 
+    var libs = libraries(host);
+    runLibraries = libs;
     var pm = {
       info: {
         eventName: input.event,
@@ -1541,26 +1950,53 @@
       response: input.response ? responseObject(input.response, typeof responseBody === 'string' ? responseBody : '') : undefined,
       test: test,
       expect: expect,
-      sendRequest: unsupported('pm.sendRequest'),
-      require: unsupported('pm.require'),
+      sendRequest: function (req, callback) {
+        return sendRequest(host, req, callback);
+      },
+      require: libs.pmRequire,
       execution: {
         setNextRequest: setNextRequest,
-        skipRequest: unsupported('pm.execution.skipRequest'),
+        // Only a pre-request script can skip: the request isn't sent (a run goes on).
+        skipRequest: function () {
+          if (input.event === 'prerequest') skip = true;
+        },
+      },
+      visualizer: {
+        /** Renders a Handlebars `template` with `data`: the response's Visualize tab shows it. */
+        set: function (template, data) {
+          var html = libs.require('handlebars').compile(String(template))(data === undefined ? {} : data);
+          if (html.length > MAX_VISUALIZATION) throw new Error('pm.visualizer: the result is larger than 5 MB');
+          visualization = html;
+        },
+        clear: function () {
+          visualization = null;
+        },
       },
     };
-    define(pm, 'cookies', unsupported('pm.cookies'));
-    define(pm, 'visualizer', unsupported('pm.visualizer'));
+    var cookies = cookieList(input.cookies || []);
+    cookies.jar = function () {
+      return cookieJar(host);
+    };
+    define(pm, 'cookies', function () {
+      return cookies;
+    });
     define(pm, 'vault', unsupported('pm.vault'));
 
     G.pm = pm;
     G.console = consoleApi;
-    G.require = unsupported('require');
-    ['setTimeout', 'setInterval', 'setImmediate', 'clearTimeout', 'clearInterval', 'clearImmediate'].forEach(function (n) {
-      G[n] = unsupported(n);
-    });
-    // Postman's sandbox libraries.
-    define(G, 'CryptoJS', unsupported('CryptoJS'));
-    G.xml2Json = unsupported('xml2Json');
+    G.require = libs.require;
+    G.setTimeout = function (fn, ms) {
+      return addTimer(fn, ms, Array.prototype.slice.call(arguments, 2), false);
+    };
+    G.setInterval = function (fn, ms) {
+      return addTimer(fn, ms, Array.prototype.slice.call(arguments, 2), true);
+    };
+    G.setImmediate = function (fn) {
+      return addTimer(fn, 0, Array.prototype.slice.call(arguments, 1), false);
+    };
+    G.clearTimeout = G.clearInterval = G.clearImmediate = clearTimer;
+    // Postman's sandbox libraries (`CryptoJS`, `_`, `tv4`, `cheerio`, `xml2Json`) and `crypto`.
+    libs.install();
     if (typeof G.atob !== 'function') G.atob = atob;
     if (typeof G.btoa !== 'function') G.btoa = btoa;
 
@@ -1591,7 +2027,7 @@
       G.responseTime = pm.response.responseTime;
     }
 
-    return function finish() {
+    function finish() {
       var i;
       for (i = 0; i < tests.length; i++) {
         if (tests[i].pending) {
@@ -1607,7 +2043,15 @@
           }
         }
       }
-      var out = { request: null, variables: [], tests: [], console: logs.slice(), nextRequest: nextRequest };
+      var out = {
+        request: null,
+        variables: [],
+        tests: [],
+        console: logs.slice(),
+        nextRequest: nextRequest,
+        skipRequest: skip,
+        visualization: visualization,
+      };
       if (dropped) {
         out.console.push({ level: 'warn', message: dropped + ' more console messages were not kept (limit ' + MAX_CONSOLE + ').' });
       }
@@ -1624,6 +2068,8 @@
         out.tests.push({ name: t.name, passed: t.passed, skipped: t.skipped, error: t.error });
       }
       return jsonStringify(out);
-    };
+    }
+    finish.tick = tick;
+    return finish;
   };
 })()

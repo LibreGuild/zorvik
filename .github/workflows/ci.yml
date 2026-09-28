@@ -38,11 +38,12 @@ jobs:
         env:
           ZORVIK_TEST_TRASH: ""
         run: cargo test --no-fail-fast
-      - name: TypeScript bindings are up to date
+      - name: Generated files are up to date
+        # The TypeScript bindings and the dynamic variables reference are written by the tests.
         # `add -N` makes newly generated (untracked) binding files show up in the diff too.
         run: |
           git add -N app/src/bindings
-          git diff --exit-code -- app/src/bindings
+          git diff --exit-code -- app/src/bindings docs/pages/src/content/docs/docs/variables/dynamic-variables.md
 
   rust-windows:
     name: Rust (Windows) — tests
@@ -454,8 +455,9 @@ jobs:
           done
           exit 1
       - name: Refresh the website
-        # The website shows the latest version: rebuild it. (A release published with this
-        # workflow's token triggers no other workflow by itself.)
+        # The main website is built from the latest release: rebuild it, so it shows this
+        # release's docs and version. (A release published with this workflow's token triggers
+        # no other workflow by itself.)
         if: env.CHANNEL == 'stable'
         run: gh workflow run pages.yml --ref main || echo "::warning::Could not start the website build"
 

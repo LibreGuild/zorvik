@@ -8,11 +8,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 - **Automatic updates** from GitHub Releases. Zorvik checks a little after it starts and every six hours, downloads a new version in the background, and installs it when you quit, or when you choose **Restart now** (it first tells you what a restart would stop). Settings → Updates: automatic, notify only, or off; stable or nightly channel. The check only reads this project's release list on GitHub and sends nothing about you. The Windows installer, the macOS app and the AppImage update themselves; the portable zip, `.deb` and `.rpm` tell you when a new version is out. If an update can't install itself, Zorvik links to its release page instead of showing an error.
+- **More auth types**, each with its own form and imported from Postman: OAuth 1.0 (HMAC-SHA1/256/512, RSA-SHA1/256/512, PLAINTEXT), JWT that Zorvik signs from your claims (HS, RS, PS and ES algorithms), AWS Signature v4 (headers or a presigned URL), Hawk, Akamai EdgeGrid and Atlassian ASAP, all signed fresh for every send; Digest (MD5 and SHA-256, qop auth and auth-int) and NTLMv2, which answer the server's challenge; and the OAuth 2.0 implicit grant. Load tests sign every request separately.
+- **Filter responses** with JSONPath, jq or XPath (the funnel icon above the body). JSONPath and jq run on the whole body; AI agents can pass a `filter` to `send_request`.
+- **Save responses as examples:** kept in the request (its Examples tab), imported from Postman's saved responses, and answered by mocks built from the request (examples saved with query parameters answer only those).
+- **170 dynamic variables**: every one of Postman's (`{{$randomFirstName}}`, `{{$randomCity}}`, …) plus modern IDs (`$uuidv7`, `$ulid`, `$nanoid`), valid test card numbers, IBANs, ISBNs and EANs, dates relative to now, and arguments: `{{$randomInt(1, 100)}}`, `{{$timestamp(+1h)}}`, `{{$randomFrom(a, b, c)}}`. They work in requests, scripts and mock servers; typing `{{$` shows each with an example.
+- **Scripts:** `pm.sendRequest` (with a callback or `await`, which now works at the top level), `pm.cookies`, `pm.cookies.jar()` and `pm.response.cookies`, timers (`setTimeout`, `setInterval`), `pm.visualizer` (a Visualize tab next to the response), `pm.execution.skipRequest()`, and `pm.response.to.have.jsonSchema`.
+- **Training Bootcamp:** lessons an update adds show as **New**, and everything you finished stays finished.
+- **Script libraries, as in Postman:** `require('lodash')`, `crypto-js` (and the `CryptoJS` global), `moment`, `ajv` (JSON Schema draft-07, 2019-09 and 2020-12), `uuid`, `tv4`, `chai`, `csv-parse/lib/sync`, `xml2js` (and `xml2Json`), `cheerio`, `handlebars`, and Node's `buffer`, `events`, `path`, `querystring`, `url` and `util`. They are built into Zorvik and work offline; `pm.require('npm:name@version')` gives the built-in copy. Scripts also get `crypto.getRandomValues` and `crypto.randomUUID`.
 - **The command line on its own** for CI machines and servers: `zorvik-cli-windows-x64.zip`, `zorvik-cli-macos-universal.tar.gz` and `zorvik-cli-linux-x86_64.tar.gz` in every release.
 - `PROJECT.md` holds the project's rules for contributors and AI coding agents; `CLAUDE.md`, `AGENTS.md` and `GEMINI.md` point to it.
 
 ### Changed
+- The website shows the docs of the latest release; the docs for the next version (what nightly builds have) are at `/zorvik/next/`.
+- `{{$isoTimestamp}}` has millisecond precision, like Postman, and `{{$randomEmail}}` gives name-based addresses at `example.com`, `example.net` and `example.org`.
+- Errors thrown in promise callbacks and timers now fail the script instead of being lost.
 - The website and README lead with what coding agents can do through MCP, and that every feature is free (no paid plans, no account, no cloud sync). The website no longer shows a download count.
+
+### Fixed
+- Load test HTML reports: pointing at a chart (or tapping it, or focusing it and using the arrow keys) shows a guide line and a tooltip with the time and every value, like in the app. The report is still a single file with no external resources.
 
 ## [0.1.2] - 2026-09-28
 

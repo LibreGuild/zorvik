@@ -1142,6 +1142,11 @@ impl<'a> Importer<'a> {
                     self.var("bearerToken", true);
                     Some(Auth::Bearer { token: "{{bearerToken}}".to_string(), prefix: "Bearer".to_string() })
                 }
+                "digest" => {
+                    self.var("username", false);
+                    self.var("password", true);
+                    Some(Auth::Digest { username: "{{username}}".to_string(), password: "{{password}}".to_string() })
+                }
                 other => {
                     self.warn(unsupported(&format!("HTTP {other}")));
                     None
@@ -1180,6 +1185,7 @@ impl<'a> Importer<'a> {
                 "application" => Some(GrantType::ClientCredentials),
                 "accessCode" => Some(GrantType::AuthorizationCode),
                 "password" => Some(GrantType::Password),
+                "implicit" => Some(GrantType::Implicit),
                 _ => None,
             };
             grant.map(|g| (g, s))
@@ -1189,14 +1195,13 @@ impl<'a> Importer<'a> {
                 ("clientCredentials", GrantType::ClientCredentials),
                 ("authorizationCode", GrantType::AuthorizationCode),
                 ("password", GrantType::Password),
+                ("implicit", GrantType::Implicit),
             ]
             .into_iter()
             .find_map(|(key, grant)| Some((grant, flows?.get(key)?)))
         };
         let Some((grant_type, flow)) = flow else {
-            self.warn(format!(
-                "OAuth2 scheme \"{name}\" has no supported flow (implicit is not supported); set up auth manually"
-            ));
+            self.warn(format!("OAuth2 scheme \"{name}\" has no flow; set up auth manually"));
             return None;
         };
         let scope = flow
@@ -1215,7 +1220,9 @@ impl<'a> Importer<'a> {
             ..OAuth2Config::default()
         };
         match grant_type {
-            GrantType::AuthorizationCode => config.auth_url = str_of(flow, "authorizationUrl").to_string(),
+            GrantType::AuthorizationCode | GrantType::Implicit => {
+                config.auth_url = str_of(flow, "authorizationUrl").to_string()
+            }
             GrantType::Password => {
                 self.var("username", false);
                 self.var("password", true);
@@ -2412,19 +2419,24 @@ paths:
             (GrantType::Password, "{{username}}", "{{password}}")
         );
 
-        assert_eq!(auth("g"), Auth::Inherit);
+        let Auth::OAuth2(imp) = auth("g") else { panic!() };
+        assert_eq!((imp.grant_type, imp.auth_url.as_str()), (GrantType::Implicit, "https://a.test/imp"));
         assert_eq!(auth("h"), Auth::Inherit);
         assert_eq!(auth("i"), Auth::Inherit, "same as the collection auth");
         assert_eq!(auth("j"), Auth::None);
         assert_eq!(auth("k"), Auth::Inherit);
         assert_eq!(auth("l"), Auth::None);
-        assert_eq!(auth("m"), basic, "first mappable requirement");
+        assert_eq!(
+            auth("m"),
+            Auth::Digest { username: "{{username}}".into(), password: "{{password}}".into() },
+            "first mappable requirement"
+        );
         assert_eq!(auth("n"), Auth::Inherit);
 
-        for needle in ["key_c", "oauth_imp", "oidc", "digest", "\"missing\" is not defined"] {
+        for needle in ["key_c", "oidc", "\"missing\" is not defined"] {
             assert!(c.warnings.iter().any(|w| w.contains(needle)), "no warning for {needle}: {:?}", c.warnings);
         }
-        assert_eq!(c.warnings.len(), 5, "{:?}", c.warnings);
+        assert_eq!(c.warnings.len(), 3, "{:?}", c.warnings);
         for (key, secret) in [
             ("bearerToken", true),
             ("username", false),

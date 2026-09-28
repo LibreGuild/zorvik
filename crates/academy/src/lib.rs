@@ -70,6 +70,7 @@ fn load(files: &[(&str, &str)]) -> Result<Course, String> {
                     title: meta.title,
                     summary: meta.summary,
                     minutes: meta.minutes,
+                    added: meta.added,
                     body: body.to_string(),
                     lab: meta.lab,
                     quiz: meta.quiz,

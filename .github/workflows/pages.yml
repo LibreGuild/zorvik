@@ -1,8 +1,13 @@
 name: Website
 
-# The website (docs/pages): the home page and the docs at /docs, on GitHub Pages. Rebuilt when
-# its sources change on main, after every release (ci.yml starts it) and once a day, so the
-# release details stay fresh. Pull requests only check that it builds.
+# The website (docs/pages) on GitHub Pages: the home page and the docs at /docs.
+# - The main site (/zorvik/) is built from the latest release, so it describes what people download.
+# - A preview of the next version (/zorvik/next/) is built from main: a banner on every page links
+#   back to the main site, and search engines are asked not to list it.
+# Every run builds both into one Pages artifact. It runs when the site's sources change on main
+# (in practice only the preview changes), after every release (ci.yml starts it), once a day (so
+# the release details stay fresh) and by hand. Pull requests build their own site both ways and
+# check the links, without publishing.
 on:
   push:
     branches: [main]
@@ -33,30 +38,104 @@ jobs:
     name: Build the website
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out this branch
+        uses: actions/checkout@v7
         with:
+          path: next
+          persist-credentials: false
+      - name: Find the latest release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          # The main site describes GitHub's "latest" release: the newest published release that
+          # isn't a pre-release, the one the download buttons (releases/latest/download/...) and
+          # the app's update check serve. Not simply the newest v* tag: a tag is pushed before its
+          # release is built and published (which can fail), and "nightly" is a pre-release.
+          # api prints nothing when GitHub answers 404 and fails on any other error, so a hiccup
+          # never puts main's docs on the main site.
+          api() {
+            local out
+            if out=$(gh api "$@" 2>&1); then
+              printf '%s' "$out"
+            elif [[ $out != *"HTTP 404"* ]]; then
+              echo "$out" >&2
+              return 1
+            fi
+          }
+          ref=$GITHUB_SHA
+          if [ "$EVENT" = pull_request ]; then
+            echo "A pull request: its own site is built both as the main site and as the preview."
+          else
+            tag=$(api "repos/$GH_REPO/releases/latest" --jq .tag_name)
+            if [ -z "$tag" ]; then
+              echo "::warning::No release yet: the main site is built from $GITHUB_REF_NAME."
+            elif [[ ! $tag =~ ^v[0-9A-Za-z.+-]+$ ]]; then
+              echo "::error::The latest release has an unexpected tag: $tag"
+              exit 1
+            else
+              site=$(api "repos/$GH_REPO/contents/docs/pages/package.json?ref=$tag" --jq .path)
+              if [ -z "$site" ]; then
+                echo "::warning::$tag has no website yet: the main site is built from $GITHUB_REF_NAME."
+              else
+                echo "The main site shows $tag."
+                ref=$tag
+              fi
+            fi
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      - name: Check out the main site's version
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.release.outputs.ref }}
+          path: release
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: docs/pages/package-lock.json
-      - name: Install
-        working-directory: docs/pages
-        run: npm ci
-      - name: Build
-        working-directory: docs/pages
+          cache-dependency-path: "*/docs/pages/package-lock.json"
+      - name: Build the main site
+        working-directory: release/docs/pages
         env:
           # Reads the latest release (version, sizes, downloads) without the anonymous rate limit.
           GITHUB_TOKEN: ${{ github.token }}
-        run: npm run build
-      - name: Check links
-        working-directory: docs/pages
-        run: npm run check
+          # The default; releases whose config doesn't read it are built for /zorvik already.
+          SITE_BASE: /zorvik
+        run: |
+          npm ci
+          npm run build
+          npm run check
+      - name: Build the preview of the next version
+        working-directory: next/docs/pages
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SITE_BASE: /zorvik/next
+          SITE_CHANNEL: next
+          # The banner links to the same page on the main site when the main site has it.
+          SITE_RELEASE_DIST: ${{ github.workspace }}/release/docs/pages/dist
+        run: |
+          npm ci
+          npm run build
+          npm run check
+      - name: Put both together
+        run: |
+          set -euo pipefail
+          if [ -e release/docs/pages/dist/next ]; then
+            echo "::error::The main site has a next/ folder of its own, where the preview goes."
+            exit 1
+          fi
+          cp -R release/docs/pages/dist site
+          cp -R next/docs/pages/dist site/next
+          # Every link as published, including the preview's links into the main site.
+          SITE_BASE=/zorvik node next/docs/pages/scripts/check-links.mjs site
       - uses: actions/upload-pages-artifact@v5
         if: github.event_name != 'pull_request'
         with:
-          path: docs/pages/dist
+          path: site
 
   deploy:
     name: Publish the website

@@ -22,7 +22,7 @@ The Academy's own menu (**…** at the top right) has **Badges and certificate**
 
 ## The course
 
-The course has 16 units and 65 lessons; 60 lessons have a lab.
+The course has 16 units and 71 lessons; 66 lessons have a lab.
 
 | # | Unit | Lessons | Badge |
 |---|---|---|---|
@@ -30,15 +30,15 @@ The course has 16 units and 65 lessons; 60 lessons have a lab.
 | 1 | How networks talk | 4 | Packet Pioneer |
 | 2 | DNS: the internet's address book | 4 | DNS Detective |
 | 3 | HTTP basics | 5 | Status Sage |
-| 4 | Sending data | 5 | Payload Pro |
-| 5 | Identity & auth | 5 | Token Tamer |
+| 4 | Sending data | 6 | Payload Pro |
+| 5 | Identity & auth | 7 | Token Tamer |
 | 6 | Secure transport | 4 | TLS Guardian |
 | 7 | Organized like a pro | 4 | Workspace Architect |
-| 8 | Testing APIs | 5 | Test Pilot |
+| 8 | Testing APIs | 7 | Test Pilot |
 | 9 | Beyond REST: GraphQL & gRPC | 4 | Query Crafter |
 | 10 | Real-time: WebSocket, SSE, MQTT | 4 | Stream Surfer |
 | 11 | Raw sockets: TCP & UDP | 4 | Socket Smith |
-| 12 | Mocking APIs | 5 | Mock Master |
+| 12 | Mocking APIs | 6 | Mock Master |
 | 13 | Performance & load testing | 4 | Load Legend |
 | 14 | Automate: CLI, CI and AI agents | 3 | Automation Ace |
 | 15 | Capstone: Ship it | 2 | Graduate |
@@ -146,6 +146,10 @@ The certificate, on the **Badges and certificate** page, states that you complet
 The Bootcamp has its own workspace, kept in the app data folder (`bootcamp/`, see [Data locations](../../reference/data-locations/)). It is always listed first, it can't be removed, and it never mixes with your own workspaces.
 
 **Reset Bootcamp workspace…** in the Academy menu empties it: its requests, environments and servers are removed and a running lab stops. **Your progress, XP and badges stay**: they are kept separately, in `academy-progress.json` in the app data folder.
+
+## New lessons in updates
+
+Updates can add lessons. Everything you finished stays finished: units you completed stay **Done**, and your badges, XP and certificate stay yours. The new lessons are marked **New** on the course map (with "1 new lesson" on their unit), and the card at the top offers the first one, even after you graduated. The mark goes away when you open the lesson.
 
 ## Good to know
 

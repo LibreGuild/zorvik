@@ -296,9 +296,9 @@ async fn run(args: RunArgs) -> ExitCode {
         settings.request.verify_tls = false;
     }
     settings.files_outside_workspace = args.allow_outside_files;
-    let client = Client::new();
+    let client = std::sync::Arc::new(Client::new());
     let tokens = TokenCache::in_memory();
-    let jar = zorvik_engine::CookieJar::new();
+    let jar = std::sync::Arc::new(zorvik_engine::CookieJar::new());
     let specs = zorvik_api::specs::SpecCache::default();
     let cx = SendContext {
         ws: &ws,
@@ -572,6 +572,13 @@ async fn load_plan(
         let probe = user_context(&above, &UserVars::probe(&names), &base);
         let mut resolved = resolve(&request, &inherit, &probe).map_err(|e| problem(e.message))?;
         check_url_variables(&resolved).map_err(|e| problem(e.message))?;
+        if resolved.challenge.is_some() {
+            return Err(problem(zorvik_workspace::signing::LOAD_TEST_CHALLENGE.into()));
+        }
+        let signed = zorvik_workspace::signing::signs_each_send(zorvik_workspace::resolve::effective_auth(
+            &request.auth,
+            &inherit,
+        ));
         if !resolved.unresolved.is_empty() {
             warnings.push(format!("{}: undefined variables: {}", request.name, resolved.unresolved.join(", ")));
         }
@@ -586,7 +593,7 @@ async fn load_plan(
             }
             None => None,
         };
-        let dynamic = serde_json::to_string(&request).is_ok_and(|json| json.contains("{{$"));
+        let dynamic = signed || serde_json::to_string(&request).is_ok_and(|json| json.contains("{{$"));
         let name = request.name.clone();
         let (meta, base_dir) = (ws.meta().clone(), ws.root().to_path_buf());
         let (above, base) = (above.clone(), base.clone());

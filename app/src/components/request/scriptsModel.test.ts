@@ -28,7 +28,7 @@ describe("script helpers", () => {
     const before = "x = pm.environment.se";
     expect(completeMembers(before)?.from).toBe(before.length - 2);
     expect(completeMembers("pm")?.from).toBe(0);
-    expect(labels("pm")).toEqual(["pm", "console"]);
+    expect(labels("pm")).toEqual(["pm", "require", "setTimeout", "setInterval", "clearTimeout", "clearInterval", "console"]);
     expect(completeMembers("")).toBeNull();
   });
 

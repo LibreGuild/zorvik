@@ -1,7 +1,16 @@
 // Auth configuration form, shared by requests, folders and the workspace.
 import { useEffect, useState } from "react";
 import { KeyRound, LogIn, RefreshCw, Trash2 } from "lucide-react";
+import type { ApiKeyLocation } from "../../bindings/ApiKeyLocation";
+import type { AsapConfig } from "../../bindings/AsapConfig";
 import type { Auth } from "../../bindings/Auth";
+import type { AwsSigV4Config } from "../../bindings/AwsSigV4Config";
+import type { EdgeGridConfig } from "../../bindings/EdgeGridConfig";
+import type { HawkConfig } from "../../bindings/HawkConfig";
+import type { JwtAlgorithm } from "../../bindings/JwtAlgorithm";
+import type { JwtConfig } from "../../bindings/JwtConfig";
+import type { OAuth1Config } from "../../bindings/OAuth1Config";
+import type { OAuth1Method } from "../../bindings/OAuth1Method";
 import type { OAuth2Config } from "../../bindings/OAuth2Config";
 import type { TokenStatus } from "../../bindings/TokenStatus";
 import { formatRelative } from "../../lib/format";
@@ -19,7 +28,20 @@ const LABELS: Record<AuthType, string> = {
   bearer: "Bearer token",
   apiKey: "API key",
   oauth2: "OAuth 2.0",
+  oauth1: "OAuth 1.0",
+  jwt: "JWT (signed by Zorvik)",
+  digest: "Digest auth",
+  ntlm: "NTLM (Windows)",
+  awsSigV4: "AWS Signature v4",
+  hawk: "Hawk",
+  akamaiEdgeGrid: "Akamai EdgeGrid",
+  asap: "Atlassian ASAP",
 };
+
+const JWT_ALGORITHMS: JwtAlgorithm[] = ["HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384"];
+const OAUTH1_METHODS: OAuth1Method[] = ["HMAC-SHA1", "HMAC-SHA256", "HMAC-SHA512", "RSA-SHA1", "RSA-SHA256", "RSA-SHA512", "PLAINTEXT"];
+const PEM_PLACEHOLDER = "-----BEGIN PRIVATE KEY-----\n…\n-----END PRIVATE KEY-----";
+const usesSecret = (a: JwtAlgorithm) => a.startsWith("HS");
 
 const DEFAULT_OAUTH: OAuth2Config = {
   grantType: "clientCredentials",
@@ -41,6 +63,22 @@ function defaultAuth(type: AuthType): Auth {
       return { type, key: "X-API-Key", value: "", location: "header" };
     case "oauth2":
       return { type, ...DEFAULT_OAUTH };
+    case "digest":
+      return { type, username: "", password: "" };
+    case "ntlm":
+      return { type, username: "", password: "" };
+    case "awsSigV4":
+      return { type, accessKey: "", secretKey: "", region: "us-east-1", service: "execute-api" };
+    case "oauth1":
+      return { type, consumerKey: "" };
+    case "jwt":
+      return { type, algorithm: "HS256", secret: "", payload: '{\n  "sub": "1234567890"\n}', prefix: "Bearer", queryParam: "token" };
+    case "hawk":
+      return { type, id: "", key: "" };
+    case "akamaiEdgeGrid":
+      return { type, clientToken: "", clientSecret: "", accessToken: "", maxBody: 131072 };
+    case "asap":
+      return { type, issuer: "", audience: "", keyId: "", privateKey: "", algorithm: "RS256", expiresIn: 3600 };
     default:
       return { type } as Auth;
   }
@@ -60,6 +98,67 @@ function Row({ label, children, hint }: { label: string; children: React.ReactNo
 
 function Boxed({ children }: { children: React.ReactNode }) {
   return <div className="rounded-md border border-line bg-input focus-within:border-accent">{children}</div>;
+}
+
+type FieldProps = { label: string; value: string | undefined; onChange: (v: string) => void; placeholder?: string; hint?: string };
+
+/** A one-line field that takes {{variables}}. */
+function Field({ label, value, onChange, placeholder, hint, secret }: FieldProps & { secret?: boolean }) {
+  return (
+    <Row label={label} hint={hint}>
+      <Boxed>
+        <VarInput value={value ?? ""} onChange={onChange} placeholder={placeholder} secret={secret} />
+      </Boxed>
+    </Row>
+  );
+}
+
+/** Several lines: PEM keys and JSON (variables allowed, substituted when sending). */
+function TextBlock({ label, value, onChange, placeholder, hint, rows = 4 }: FieldProps & { rows?: number }) {
+  return (
+    <Row label={label} hint={hint}>
+      <textarea
+        value={value ?? ""}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        rows={rows}
+        spellCheck={false}
+        aria-label={label}
+        className="w-full resize-y rounded-md border border-line bg-input px-2.5 py-1.5 font-mono text-[12px] text-fg outline-none placeholder:text-faint focus:border-accent"
+      />
+    </Row>
+  );
+}
+
+function NumberField({ label, value, onChange, min, max, hint }: { label: string; value: number; onChange: (v: number) => void; min: number; max?: number; hint?: string }) {
+  return (
+    <Row label={label} hint={hint}>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        value={value}
+        onChange={(e) => onChange(Math.min(max ?? Infinity, Math.max(min, Number(e.target.value) || min)))}
+        aria-label={label}
+        className="w-40 rounded-md border border-line bg-input px-2.5 py-1 font-mono text-[12.5px] text-fg outline-none focus:border-accent"
+      />
+    </Row>
+  );
+}
+
+function Placement({ value, onChange, query }: { value: ApiKeyLocation | undefined; onChange: (v: ApiKeyLocation) => void; query: string }) {
+  return (
+    <Row label="Add to">
+      <Select value={value ?? "header"} onChange={(e) => onChange(e.target.value as ApiKeyLocation)} className="w-60">
+        <option value="header">Authorization header</option>
+        <option value="query">{query}</option>
+      </Select>
+    </Row>
+  );
+}
+
+function Note({ children }: { children: React.ReactNode }) {
+  return <p className="text-[12.5px] text-muted">{children}</p>;
 }
 
 export function AuthEditor({
@@ -139,7 +238,186 @@ export function AuthEditor({
         </>
       )}
       {auth.type === "oauth2" && <OAuthForm auth={auth} onChange={onChange} path={path ?? null} />}
+      {auth.type === "digest" && (
+        <>
+          <Note>Zorvik sends the request, answers the server's Digest challenge (MD5 or SHA-256, qop auth or auth-int) and sends it again.</Note>
+          <Field label="Username" value={auth.username} onChange={(username) => onChange({ ...auth, username })} placeholder="username" />
+          <Field label="Password" value={auth.password} onChange={(password) => onChange({ ...auth, password })} placeholder="password" secret />
+        </>
+      )}
+      {auth.type === "ntlm" && (
+        <>
+          <Note>Windows authentication (NTLMv2), for IIS and other Windows servers. The handshake runs over HTTP/1.1 on one connection.</Note>
+          <Field label="Username" value={auth.username} onChange={(username) => onChange({ ...auth, username })} placeholder="user, DOMAIN\user or user@domain" />
+          <Field label="Password" value={auth.password} onChange={(password) => onChange({ ...auth, password })} placeholder="password" secret />
+          <Field label="Domain" value={auth.domain} onChange={(domain) => onChange({ ...auth, domain })} placeholder="optional" />
+          <Field label="Workstation" value={auth.workstation} onChange={(workstation) => onChange({ ...auth, workstation })} placeholder="optional" />
+        </>
+      )}
+      {auth.type === "awsSigV4" && <AwsForm auth={auth} onChange={onChange} />}
+      {auth.type === "oauth1" && <OAuth1Form auth={auth} onChange={onChange} />}
+      {auth.type === "jwt" && <JwtForm auth={auth} onChange={onChange} />}
+      {auth.type === "hawk" && <HawkForm auth={auth} onChange={onChange} />}
+      {auth.type === "akamaiEdgeGrid" && <EdgeGridForm auth={auth} onChange={onChange} />}
+      {auth.type === "asap" && <AsapForm auth={auth} onChange={onChange} />}
     </div>
+  );
+}
+
+function AwsForm({ auth, onChange }: { auth: Extract<Auth, { type: "awsSigV4" }>; onChange: (a: Auth) => void }) {
+  const set = (patch: Partial<AwsSigV4Config>) => onChange({ ...auth, ...patch });
+  return (
+    <>
+      <Note>Signs each request with AWS Signature Version 4: API Gateway, S3, Lambda function URLs and other AWS services.</Note>
+      <Field label="Access key" value={auth.accessKey} onChange={(accessKey) => set({ accessKey })} placeholder="{{awsAccessKeyId}}" />
+      <Field label="Secret key" value={auth.secretKey} onChange={(secretKey) => set({ secretKey })} placeholder="{{awsSecretAccessKey}}" secret />
+      <Field label="Session token" value={auth.sessionToken} onChange={(sessionToken) => set({ sessionToken })} placeholder="optional, for temporary credentials" secret />
+      <Field label="Region" value={auth.region} onChange={(region) => set({ region })} placeholder="us-east-1" />
+      <Field label="Service" value={auth.service} onChange={(service) => set({ service })} placeholder="execute-api, s3, lambda…" />
+      <Placement value={auth.location} onChange={(location) => set({ location })} query="Query string (presigned URL)" />
+    </>
+  );
+}
+
+function OAuth1Form({ auth, onChange }: { auth: Extract<Auth, { type: "oauth1" }>; onChange: (a: Auth) => void }) {
+  const set = (patch: Partial<OAuth1Config>) => onChange({ ...auth, ...patch });
+  const method = auth.signatureMethod ?? "HMAC-SHA1";
+  const rsa = method.startsWith("RSA");
+  return (
+    <>
+      <Row label="Signature method">
+        <Select value={method} onChange={(e) => set({ signatureMethod: e.target.value as OAuth1Method })} className="w-60">
+          {OAUTH1_METHODS.map((m) => (
+            <option key={m} value={m}>
+              {m}
+            </option>
+          ))}
+        </Select>
+      </Row>
+      <Field label="Consumer key" value={auth.consumerKey} onChange={(consumerKey) => set({ consumerKey })} placeholder="{{consumerKey}}" />
+      {rsa ? (
+        <TextBlock label="Private key" value={auth.privateKey} onChange={(privateKey) => set({ privateKey })} placeholder={PEM_PLACEHOLDER} hint="PEM (PKCS#1 or PKCS#8). Keep it in a secret variable." />
+      ) : (
+        <Field label="Consumer secret" value={auth.consumerSecret} onChange={(consumerSecret) => set({ consumerSecret })} placeholder="{{consumerSecret}}" secret />
+      )}
+      <Field label="Token" value={auth.token} onChange={(token) => set({ token })} placeholder="access token (optional)" />
+      <Field label="Token secret" value={auth.tokenSecret} onChange={(tokenSecret) => set({ tokenSecret })} placeholder="optional" secret />
+      <Field label="Callback URL" value={auth.callback} onChange={(callback) => set({ callback })} placeholder="optional" />
+      <Field label="Verifier" value={auth.verifier} onChange={(verifier) => set({ verifier })} placeholder="optional" />
+      <Field label="Realm" value={auth.realm} onChange={(realm) => set({ realm })} placeholder="optional" />
+      <Row label="Options">
+        <div className="flex flex-col gap-2">
+          <Switch checked={auth.includeVersion ?? true} onChange={(includeVersion) => set({ includeVersion })} label="Send oauth_version=1.0" />
+          <Switch checked={auth.includeBodyHash ?? false} onChange={(includeBodyHash) => set({ includeBodyHash })} label="Sign the body (oauth_body_hash)" />
+        </div>
+      </Row>
+      <Placement value={auth.location} onChange={(location) => set({ location })} query="Query string" />
+    </>
+  );
+}
+
+function JwtForm({ auth, onChange }: { auth: Extract<Auth, { type: "jwt" }>; onChange: (a: Auth) => void }) {
+  const set = (patch: Partial<JwtConfig>) => onChange({ ...auth, ...patch });
+  const secret = usesSecret(auth.algorithm);
+  return (
+    <>
+      <Note>Zorvik builds and signs a fresh token for every request from the claims below.</Note>
+      <Row label="Algorithm">
+        <Select value={auth.algorithm} onChange={(e) => set({ algorithm: e.target.value as JwtAlgorithm })} className="w-60">
+          {JWT_ALGORITHMS.map((a) => (
+            <option key={a} value={a}>
+              {a}
+            </option>
+          ))}
+        </Select>
+      </Row>
+      {secret ? (
+        <>
+          <Field label="Secret" value={auth.secret} onChange={(v) => set({ secret: v })} placeholder="{{jwtSecret}}" secret />
+          <Row label="">
+            <Switch checked={auth.secretBase64 ?? false} onChange={(secretBase64) => set({ secretBase64 })} label="The secret is base64" />
+          </Row>
+        </>
+      ) : (
+        <TextBlock label="Private key" value={auth.secret} onChange={(v) => set({ secret: v })} placeholder={PEM_PLACEHOLDER} hint="PEM private key (RSA or EC). Keep it in a secret variable." />
+      )}
+      <TextBlock
+        label="Payload"
+        value={auth.payload}
+        onChange={(payload) => set({ payload })}
+        rows={5}
+        placeholder='{ "sub": "{{userId}}", "iat": {{$timestamp}}, "exp": {{$timestamp(+1h)}} }'
+        hint="JSON claims. Variables work, e.g. {{$timestamp}} for iat and {{$timestamp(+1h)}} for exp."
+      />
+      <TextBlock label="Header" value={auth.header} onChange={(header) => set({ header })} rows={2} placeholder='{ "kid": "key-1" }' hint="Optional extra header fields (alg and typ are set)." />
+      <Placement value={auth.location} onChange={(location) => set({ location })} query="Query parameter" />
+      {auth.location === "query" ? (
+        <Field label="Parameter" value={auth.queryParam} onChange={(queryParam) => set({ queryParam })} placeholder="token" />
+      ) : (
+        <Field label="Prefix" value={auth.prefix} onChange={(prefix) => set({ prefix })} placeholder="Bearer" hint="Sent as “Authorization: <prefix> <token>”. Leave empty to send the bare token." />
+      )}
+    </>
+  );
+}
+
+function HawkForm({ auth, onChange }: { auth: Extract<Auth, { type: "hawk" }>; onChange: (a: Auth) => void }) {
+  const set = (patch: Partial<HawkConfig>) => onChange({ ...auth, ...patch });
+  return (
+    <>
+      <Field label="Hawk ID" value={auth.id} onChange={(id) => set({ id })} placeholder="{{hawkId}}" />
+      <Field label="Hawk key" value={auth.key} onChange={(key) => set({ key })} placeholder="{{hawkKey}}" secret />
+      <Row label="Algorithm">
+        <Select value={auth.algorithm ?? "sha256"} onChange={(e) => set({ algorithm: e.target.value as HawkConfig["algorithm"] })} className="w-60">
+          <option value="sha256">SHA-256</option>
+          <option value="sha1">SHA-1</option>
+        </Select>
+      </Row>
+      <Field label="Extra data (ext)" value={auth.ext} onChange={(ext) => set({ ext })} placeholder="optional" />
+      <Field label="App ID" value={auth.app} onChange={(app) => set({ app })} placeholder="optional" />
+      <Field label="Delegation (dlg)" value={auth.dlg} onChange={(dlg) => set({ dlg })} placeholder="optional" />
+      <Row label="Options">
+        <Switch checked={auth.includePayloadHash ?? false} onChange={(includePayloadHash) => set({ includePayloadHash })} label="Sign the body (payload hash)" />
+      </Row>
+    </>
+  );
+}
+
+function EdgeGridForm({ auth, onChange }: { auth: Extract<Auth, { type: "akamaiEdgeGrid" }>; onChange: (a: Auth) => void }) {
+  const set = (patch: Partial<EdgeGridConfig>) => onChange({ ...auth, ...patch });
+  return (
+    <>
+      <Note>For Akamai APIs. Use the host from your .edgerc (akab-….luna.akamaiapis.net) in the URL.</Note>
+      <Field label="Client token" value={auth.clientToken} onChange={(clientToken) => set({ clientToken })} placeholder="{{client_token}}" />
+      <Field label="Client secret" value={auth.clientSecret} onChange={(clientSecret) => set({ clientSecret })} placeholder="{{client_secret}}" secret />
+      <Field label="Access token" value={auth.accessToken} onChange={(accessToken) => set({ accessToken })} placeholder="{{access_token}}" />
+      <Field label="Headers to sign" value={auth.headersToSign} onChange={(headersToSign) => set({ headersToSign })} placeholder="optional, comma-separated" />
+      <NumberField label="Max body" value={auth.maxBody} min={0} onChange={(maxBody) => set({ maxBody })} hint="Bytes of a POST body included in the signature (Akamai's default: 131072)." />
+    </>
+  );
+}
+
+function AsapForm({ auth, onChange }: { auth: Extract<Auth, { type: "asap" }>; onChange: (a: Auth) => void }) {
+  const set = (patch: Partial<AsapConfig>) => onChange({ ...auth, ...patch });
+  return (
+    <>
+      <Note>Atlassian service-to-service auth: a short-lived JWT signed with your service's private key, sent as a Bearer token.</Note>
+      <Field label="Issuer" value={auth.issuer} onChange={(issuer) => set({ issuer })} placeholder="my-service" />
+      <Field label="Audience" value={auth.audience} onChange={(audience) => set({ audience })} placeholder="target-service (comma-separated for several)" />
+      <Field label="Key ID" value={auth.keyId} onChange={(keyId) => set({ keyId })} placeholder="my-service/key-1" />
+      <TextBlock label="Private key" value={auth.privateKey} onChange={(privateKey) => set({ privateKey })} placeholder={PEM_PLACEHOLDER} hint="PEM. Keep it in a secret variable." />
+      <Row label="Algorithm">
+        <Select value={auth.algorithm} onChange={(e) => set({ algorithm: e.target.value as JwtAlgorithm })} className="w-60">
+          {JWT_ALGORITHMS.filter((a) => !usesSecret(a)).map((a) => (
+            <option key={a} value={a}>
+              {a}
+            </option>
+          ))}
+        </Select>
+      </Row>
+      <Field label="Subject" value={auth.subject} onChange={(subject) => set({ subject })} placeholder="optional" />
+      <NumberField label="Expires in" value={auth.expiresIn} min={1} max={3600} onChange={(expiresIn) => set({ expiresIn })} hint="Seconds each token is valid (at most 3600)." />
+      <TextBlock label="Extra claims" value={auth.claims} onChange={(claims) => set({ claims })} rows={2} placeholder='{ "scope": "read" }' hint="Optional JSON." />
+    </>
   );
 }
 
@@ -147,7 +425,9 @@ function OAuthForm({ auth, onChange, path }: { auth: Extract<Auth, { type: "oaut
   const set = (patch: Partial<OAuth2Config>) => onChange({ ...auth, ...patch });
   const [status, setStatus] = useState<TokenStatus | null>(null);
   const [busy, setBusy] = useState(false);
-  const code = auth.grantType === "authorizationCode";
+  // Grants that sign in through the browser.
+  const code = auth.grantType === "authorizationCode" || auth.grantType === "implicit";
+  const implicit = auth.grantType === "implicit";
 
   useEffect(() => {
     let alive = true;
@@ -187,12 +467,13 @@ function OAuthForm({ auth, onChange, path }: { auth: Extract<Auth, { type: "oaut
           <option value="clientCredentials">Client credentials</option>
           <option value="authorizationCode">Authorization code</option>
           <option value="password">Password</option>
+          <option value="implicit">Implicit (legacy)</option>
         </Select>
       </Row>
       {code && field("Authorization URL", "authUrl", "https://id.example.com/oauth/authorize")}
-      {field("Token URL", "tokenUrl", "https://id.example.com/oauth/token")}
+      {!implicit && field("Token URL", "tokenUrl", "https://id.example.com/oauth/token")}
       {field("Client ID", "clientId", "{{clientId}}")}
-      {field("Client secret", "clientSecret", "{{clientSecret}}", { secret: true })}
+      {!implicit && field("Client secret", "clientSecret", "{{clientSecret}}", { secret: true })}
       {auth.grantType === "password" && field("Username", "username", "user@example.com")}
       {auth.grantType === "password" && field("Password", "password", "password", { secret: true })}
       {code &&
@@ -201,13 +482,15 @@ function OAuthForm({ auth, onChange, path }: { auth: Extract<Auth, { type: "oaut
         })}
       {field("Scope", "scope", "read write")}
       {field("Audience", "audience", "optional")}
-      <Row label="Client auth">
-        <Select value={auth.clientAuth} onChange={(e) => set({ clientAuth: e.target.value as OAuth2Config["clientAuth"] })} className="w-60">
-          <option value="basicHeader">Basic auth header</option>
-          <option value="body">In request body</option>
-        </Select>
-      </Row>
-      {code && (
+      {!implicit && (
+        <Row label="Client auth">
+          <Select value={auth.clientAuth} onChange={(e) => set({ clientAuth: e.target.value as OAuth2Config["clientAuth"] })} className="w-60">
+            <option value="basicHeader">Basic auth header</option>
+            <option value="body">In request body</option>
+          </Select>
+        </Row>
+      )}
+      {code && !implicit && (
         <Row label="PKCE">
           <Switch checked={auth.pkce} onChange={(pkce) => set({ pkce })} label="Use PKCE (S256)" />
         </Row>

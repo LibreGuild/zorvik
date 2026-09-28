@@ -10,4 +10,8 @@ export type ScriptReport = { tests: Array<TestResult>, console: Array<ConsoleEnt
 /**
  * Scripts that stopped with an error (a pre-request one also stops the send).
  */
-errors: Array<ScriptFailure>, };
+errors: Array<ScriptFailure>, 
+/**
+ * What `pm.visualizer.set` rendered (HTML), shown in the response's Visualize tab.
+ */
+visualization?: string, };

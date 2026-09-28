@@ -49,7 +49,7 @@ Run the same checks as CI:
 ```bash
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
-cargo test                     # also regenerates app/src/bindings (commit them)
+cargo test                     # also regenerates app/src/bindings and the dynamic variables docs (commit them)
 cd app
 npm run typecheck
 npm test

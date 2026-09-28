@@ -1,10 +1,13 @@
-//! The HTML report: one self-contained page (inline CSS and SVG, no scripts,
-//! no external resources) with the verdict, key numbers, thresholds, charts
-//! over time, and per-target, status and error tables. Every text that comes
-//! from files (title, request names) is escaped. Light and dark follow the
-//! viewer's system setting.
+//! The HTML report: one self-contained page (inline CSS, SVG and a small
+//! script for the chart tooltips, no external resources) with the verdict, key
+//! numbers, thresholds, charts over time, and per-target, status and error
+//! tables. Every text that comes from files (title, request names) is escaped;
+//! chart data is JSON that can't close its script block. Light and dark follow
+//! the viewer's system setting. Nothing is animated.
 
 use std::fmt::Write as _;
+
+use serde::Serialize;
 
 use crate::metrics::number;
 use crate::{LatencySummary, MetricsSummary, PhaseSummary, Summary, TimePoint};
@@ -14,8 +17,8 @@ use crate::{LatencySummary, MetricsSummary, PhaseSummary, Summary, TimePoint};
 const MAX_COLUMNS: usize = 600;
 
 const STYLE: &str = r#"<style>
-:root{color-scheme:light;--page:#f9f9f7;--surface:#fcfcfb;--ink:#0b0b0b;--ink-2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--ring:rgba(11,11,11,.10);--hover:rgba(11,11,11,.05);--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--good:#006300;--good-bg:rgba(12,163,12,.10);--bad:#d03b3b;--bad-bg:rgba(208,59,59,.10)}
-@media (prefers-color-scheme:dark){:root{color-scheme:dark;--page:#0d0d0d;--surface:#1a1a19;--ink:#fff;--ink-2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--ring:rgba(255,255,255,.10);--hover:rgba(255,255,255,.06);--s1:#3987e5;--s2:#d95926;--s3:#199e70;--good:#0ca30c;--good-bg:rgba(12,163,12,.16);--bad:#e66767;--bad-bg:rgba(230,103,103,.16)}}
+:root{color-scheme:light;--page:#f9f9f7;--surface:#fcfcfb;--ink:#0b0b0b;--ink-2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--ring:rgba(11,11,11,.10);--hover:rgba(11,11,11,.05);--shadow:0 4px 16px rgba(11,11,11,.12);--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--good:#006300;--good-bg:rgba(12,163,12,.10);--bad:#d03b3b;--bad-bg:rgba(208,59,59,.10)}
+@media (prefers-color-scheme:dark){:root{color-scheme:dark;--page:#0d0d0d;--surface:#1a1a19;--ink:#fff;--ink-2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--ring:rgba(255,255,255,.10);--hover:rgba(255,255,255,.06);--shadow:0 4px 16px rgba(0,0,0,.5);--s1:#3987e5;--s2:#d95926;--s3:#199e70;--good:#0ca30c;--good-bg:rgba(12,163,12,.16);--bad:#e66767;--bad-bg:rgba(230,103,103,.16)}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--page);color:var(--ink);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
 main{max-width:1080px;margin:0 auto;padding:32px 16px 48px}
@@ -37,7 +40,12 @@ section{background:var(--surface);border:1px solid var(--ring);border-radius:12p
 svg text{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
 svg .grid{stroke:var(--grid);stroke-width:1}svg .base{stroke:var(--axis);stroke-width:1}
 svg .line{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
-svg .hit{fill:transparent}svg .hit:hover{fill:var(--hover)}
+svg .hit{fill:transparent}svg .hit:hover{fill:var(--hover)}svg.live .hit:hover{fill:transparent}
+svg .cursor line{stroke:var(--muted);stroke-width:1}svg .cursor circle{fill:var(--surface);stroke-width:2}
+.chart svg:focus-visible{outline:2px solid var(--s1);outline-offset:-2px;border-radius:6px}.chart svg:focus:not(:focus-visible){outline:none}
+.tip{position:fixed;z-index:10;pointer-events:none;min-width:140px;max-width:calc(100vw - 16px);padding:6px 10px;background:var(--surface);color:var(--ink);border:1px solid var(--ring);border-radius:8px;box-shadow:var(--shadow);font-size:12px;line-height:1.6;font-variant-numeric:tabular-nums}
+.tip .time{color:var(--ink-2);font-weight:600}.tip .row{display:flex;align-items:center;gap:6px;white-space:nowrap}
+.tip .dot{width:8px;height:8px;border-radius:50%;flex:none}.tip .name{color:var(--ink-2)}.tip b{margin-left:auto;padding-left:16px;font-weight:600}
 .table{overflow-x:auto}
 table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
 th,td{text-align:right;padding:7px 10px;border-bottom:1px solid var(--grid);white-space:nowrap}
@@ -49,6 +57,58 @@ tr:last-child td{border-bottom:0}
 .split section{margin:0}
 footer{color:var(--muted);font-size:12px;text-align:center;margin-top:24px}
 </style>
+"#;
+
+/// The chart tooltips. Hover, tap or focus a chart (arrow keys, Home and End
+/// move) for a guide line at the nearest column and a tooltip with its time
+/// and every series' value. Text goes in through `textContent` only; without
+/// the script, each column's SVG title is the fallback.
+const SCRIPT: &str = r#"<script>
+(()=>{
+const tip=document.createElement('div');let on=null,at=-1;
+tip.className='tip';tip.hidden=true;tip.setAttribute('role','tooltip');document.body.appendChild(tip);
+const el=(tag,cls,text)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e};
+const hide=()=>{if(on)on.g.setAttribute('visibility','hidden');on=null;at=-1;tip.hidden=true};
+// Next to the guide line, on the side with more room, inside the viewport.
+const place=()=>{
+const c=on,m=c.svg.getScreenCTM(),r=c.svg.getBoundingClientRect(),b=c.svg.parentNode.getBoundingClientRect(),vw=document.documentElement.clientWidth,vh=innerHeight;
+if(!m||r.bottom<0||r.top>vh)return hide();
+const x=m.a*c.d.x[at]+m.e,w=tip.offsetWidth,h=tip.offsetHeight,mid=(Math.max(b.left,0)+Math.min(b.right,vw))/2;
+let left=x>mid?x-12-w:x+12;if(left+w>vw-8)left=x-12-w;if(left<8)left=Math.min(x+12,vw-w-8);
+tip.style.left=Math.max(8,left)+'px';tip.style.top=Math.max(8,Math.min(r.top+8,vh-h-8))+'px'};
+const show=(c,i)=>{
+const d=c.d;c.i=i=Math.max(0,Math.min(d.x.length-1,i));
+if(on!==c||at!==i){
+if(on&&on!==c)on.g.setAttribute('visibility','hidden');
+on=c;at=i;const x=d.x[i];c.line.setAttribute('x1',x);c.line.setAttribute('x2',x);
+tip.textContent='';tip.appendChild(el('div','time',d.t[i]));
+d.s.forEach((s,k)=>{c.dots[k].setAttribute('cx',x);c.dots[k].setAttribute('cy',s.y[i]);
+const row=el('div','row'),dot=el('span','dot');dot.style.background=s.c;
+row.append(dot,el('span','name',s.n),el('b',null,s.v[i]));tip.appendChild(row)});
+c.g.setAttribute('visibility','visible');tip.hidden=false}
+place()};
+// The column nearest to the pointer, in the SVG's own (viewBox) units.
+const pick=(c,e)=>{const m=c.svg.getScreenCTM(),xs=c.d.x;if(!m)return c.i;
+const x=(e.clientX-m.e)/m.a;let lo=0,hi=xs.length-1;
+while(lo<hi){const k=(lo+hi)>>1;if(xs[k]<x)lo=k+1;else hi=k}
+return lo>0&&x-xs[lo-1]<xs[lo]-x?lo-1:lo};
+for(const box of document.querySelectorAll('.chart')){
+const svg=box.querySelector('svg'),data=box.querySelector('script[type="application/json"]'),g=svg&&svg.querySelector('.cursor');
+if(!g||!data)continue;
+const c={svg,g,d:JSON.parse(data.textContent),line:g.querySelector('line'),dots:g.querySelectorAll('circle'),i:-1};
+for(const t of svg.querySelectorAll('.hit title'))t.remove();
+svg.classList.add('live');svg.setAttribute('tabindex','0');
+svg.addEventListener('pointermove',e=>show(c,pick(c,e)));
+svg.addEventListener('pointerdown',e=>show(c,pick(c,e)));
+svg.addEventListener('pointerleave',e=>{if(e.pointerType!=='touch')hide()});
+svg.addEventListener('focus',()=>show(c,c.i<0?c.d.x.length-1:c.i));
+svg.addEventListener('blur',()=>{if(on===c)hide()});
+svg.addEventListener('keydown',e=>{const k=e.key,n=k==='ArrowLeft'?c.i-1:k==='ArrowRight'?c.i+1:k==='Home'?0:k==='End'?c.d.x.length-1:null;
+if(n!==null){e.preventDefault();show(c,n)}else if(k==='Escape')hide()})}
+addEventListener('scroll',()=>{if(on)place()},true);addEventListener('resize',()=>{if(on)place()});
+document.addEventListener('pointerdown',e=>{if(on&&!on.svg.contains(e.target))hide()},true);
+})();
+</script>
 "#;
 
 /// Escape text for HTML content and attribute values.
@@ -196,7 +256,11 @@ pub(crate) fn report(title: &str, s: &Summary) -> String {
     out.push_str("</div>\n");
 
     out.push_str("<footer>Made by Zorvik. Latency counts from each request's scheduled start (open model) or send (virtual users) to the end of the response body.</footer>\n");
-    out.push_str("</main>\n</body>\n</html>\n");
+    out.push_str("</main>\n");
+    if !s.points.is_empty() {
+        out.push_str(SCRIPT);
+    }
+    out.push_str("</body>\n</html>\n");
     out
 }
 
@@ -360,6 +424,8 @@ struct Series<'a> {
     name: &'a str,
     color: &'a str,
     values: Vec<f64>,
+    /// A value with its unit, as tooltips show it.
+    format: fn(f64) -> String,
 }
 
 fn charts(out: &mut String, points: &[TimePoint]) {
@@ -369,37 +435,77 @@ fn charts(out: &mut String, points: &[TimePoint]) {
         return;
     }
     let cols = columns(points);
-    let span = |c: &Column| {
-        if c.to - c.from <= 1 { clock(c.from) } else { format!("{}–{}", clock(c.from), clock(c.to)) }
-    };
+    let times: Vec<String> = cols
+        .iter()
+        .map(|c| if c.to - c.from <= 1 { clock(c.from) } else { format!("{}–{}", clock(c.from), clock(c.to)) })
+        .collect();
+    let per_second = |v: f64| format!("{} req/s", rate(v));
     let throughput = [
-        Series { name: "Completed", color: "var(--s1)", values: cols.iter().map(|c| c.rps).collect() },
-        Series { name: "Failed", color: "var(--s2)", values: cols.iter().map(|c| c.errors).collect() },
+        Series {
+            name: "Completed",
+            color: "var(--s1)",
+            values: cols.iter().map(|c| c.rps).collect(),
+            format: per_second,
+        },
+        Series {
+            name: "Failed",
+            color: "var(--s2)",
+            values: cols.iter().map(|c| c.errors).collect(),
+            format: per_second,
+        },
     ];
-    let tips: Vec<String> =
-        cols.iter().map(|c| format!("{} · {} req/s · {} failed/s", span(c), rate(c.rps), rate(c.errors))).collect();
-    chart(out, "Requests per second", &cols, &throughput, &tips, true, false);
+    chart(out, "Requests per second", &cols, &throughput, &times, true, false);
 
     let latency = [
-        Series { name: "p50", color: "var(--s1)", values: cols.iter().map(|c| c.p50).collect() },
-        Series { name: "p95", color: "var(--s2)", values: cols.iter().map(|c| c.p95).collect() },
-        Series { name: "p99", color: "var(--s3)", values: cols.iter().map(|c| c.p99).collect() },
+        Series { name: "p50", color: "var(--s1)", values: cols.iter().map(|c| c.p50).collect(), format: ms },
+        Series { name: "p95", color: "var(--s2)", values: cols.iter().map(|c| c.p95).collect(), format: ms },
+        Series { name: "p99", color: "var(--s3)", values: cols.iter().map(|c| c.p99).collect(), format: ms },
     ];
-    let tips: Vec<String> = cols
-        .iter()
-        .map(|c| format!("{} · p50 {} · p95 {} · p99 {}", span(c), ms(c.p50), ms(c.p95), ms(c.p99)))
-        .collect();
-    chart(out, "Latency (ms)", &cols, &latency, &tips, false, false);
+    chart(out, "Latency (ms)", &cols, &latency, &times, false, false);
 
-    let active = [Series { name: "Active", color: "var(--s1)", values: cols.iter().map(|c| c.active).collect() }];
-    let tips: Vec<String> = cols.iter().map(|c| format!("{} · {} active", span(c), number(c.active.round()))).collect();
-    chart(out, "Users or requests in flight", &cols, &active, &tips, true, true);
+    let active = [Series {
+        name: "Active",
+        color: "var(--s1)",
+        values: cols.iter().map(|c| c.active).collect(),
+        format: |v| number(v.round()),
+    }];
+    chart(out, "Users or requests in flight", &cols, &active, &times, true, true);
     out.push_str("</section>\n");
 }
 
+/// What the tooltip script needs for one chart: each column's middle (in
+/// viewBox units) and time, and each series' point heights and values.
+#[derive(Serialize)]
+struct Tips<'a> {
+    x: Vec<f64>,
+    t: &'a [String],
+    s: Vec<TipSeries<'a>>,
+}
+
+#[derive(Serialize)]
+struct TipSeries<'a> {
+    /// Name and color.
+    n: &'a str,
+    c: &'a str,
+    y: Vec<f64>,
+    v: Vec<String>,
+}
+
+/// JSON for a `<script type="application/json">` block: `<`, `>` and `&`
+/// become `\u` escapes, so no text in it can close the block.
+fn script_json(value: &impl Serialize) -> String {
+    serde_json::to_string(value)
+        .unwrap_or_default()
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
+}
+
 /// A line chart over time with one y axis starting at 0 (`whole`: counts, no
-/// fractional ticks). Hovering a column shows its values (SVG titles, no script).
-fn chart(out: &mut String, title: &str, cols: &[Column], series: &[Series], tips: &[String], area: bool, whole: bool) {
+/// fractional ticks). Hovering, tapping or focusing it shows a guide line and a
+/// tooltip with every series' value at the nearest column (drawn by `SCRIPT`
+/// from the chart's JSON); without scripts, each column has an SVG title.
+fn chart(out: &mut String, title: &str, cols: &[Column], series: &[Series], times: &[String], area: bool, whole: bool) {
     const W: f64 = 800.0;
     const H: f64 = 220.0;
     const LEFT: f64 = 56.0;
@@ -483,17 +589,42 @@ fn chart(out: &mut String, title: &str, cols: &[Column], series: &[Series], tips
         }
         let _ = writeln!(out, "<polyline class=\"line\" stroke=\"{}\" points=\"{}\"/>", s.color, pts.join(" "));
     }
-    // Hover bands.
-    for (c, tip) in cols.iter().zip(tips) {
+    // The script's guide line and points, hidden until it shows them.
+    let _ = write!(
+        out,
+        "<g class=\"cursor\" visibility=\"hidden\" pointer-events=\"none\"><line x1=\"0\" x2=\"0\" y1=\"{TOP}\" y2=\"{}\"/>",
+        TOP + ph
+    );
+    for s in series {
+        let _ = write!(out, "<circle r=\"3.5\" stroke=\"{}\"/>", s.color);
+    }
+    out.push_str("</g>\n");
+    // Hover bands, with titles for when scripts don't run.
+    for (i, (c, time)) in cols.iter().zip(times).enumerate() {
         let (x0, x1) = (x(f64::from(c.from)), x(f64::from(c.to)));
+        let values: Vec<String> = series.iter().map(|s| format!("{} {}", s.name, (s.format)(s.values[i]))).collect();
         let _ = writeln!(
             out,
             "<rect class=\"hit\" x=\"{x0:.1}\" y=\"{TOP}\" width=\"{:.1}\" height=\"{ph}\"><title>{}</title></rect>",
             (x1 - x0).max(0.5),
-            esc(tip)
+            esc(&format!("{time} · {}", values.join(" · ")))
         );
     }
-    out.push_str("</svg></div>\n");
+    out.push_str("</svg>\n");
+    let tips = Tips {
+        x: cols.iter().map(|c| round1(mid(c))).collect(),
+        t: times,
+        s: series
+            .iter()
+            .map(|s| TipSeries {
+                n: s.name,
+                c: s.color,
+                y: s.values.iter().map(|v| round1(y(*v))).collect(),
+                v: s.values.iter().map(|v| (s.format)(*v)).collect(),
+            })
+            .collect(),
+    };
+    let _ = writeln!(out, "<script type=\"application/json\">{}</script></div>", script_json(&tips));
 }
 
 /// A round step and the axis top (a multiple of the step, ≥ `max`), about 4
@@ -626,5 +757,88 @@ mod tests {
         assert_eq!(nice_scale(9.0, true), (5.0, 10.0));
         assert_eq!(time_step(60), 10);
         assert_eq!(esc("<a href='x'>&\"</a>"), "&lt;a href=&#39;x&#39;&gt;&amp;&quot;&lt;/a&gt;");
+    }
+
+    /// Three seconds of one request whose name tries to break out of the page.
+    fn small_run() -> Summary {
+        let metrics = MetricsSummary { requests: 600, errors: 3, rps: 200.0, ..Default::default() };
+        Summary {
+            started_at: 1_790_000_000_000.0,
+            duration_ms: 3000,
+            totals: metrics.clone(),
+            targets: vec![crate::TargetSummary {
+                name: "Get \"users\"</script><script>alert(1)</script>".into(),
+                request: "users/</script>.yaml".into(),
+                metrics,
+            }],
+            points: (0..3)
+                .map(|s| TimePoint {
+                    second: s,
+                    rps: 200.0,
+                    errors: s,
+                    p50: 4.256,
+                    p95: 12.0,
+                    p99: 120.0,
+                    active: 10,
+                    target: 10.0,
+                })
+                .collect(),
+            thresholds: Vec::new(),
+            passed: true,
+            stopped_early: false,
+            error: None,
+            peak_cpu_percent: None,
+        }
+    }
+
+    #[test]
+    fn chart_tooltips() {
+        let html = report("Smoke </script>\"<!--", &small_run());
+        // The tooltip script and one data block per chart; names from files add none.
+        assert!(html.contains("<script>\n(()=>{") && html.contains("getScreenCTM"), "{html}");
+        assert_eq!(html.matches("<script").count(), 4, "{html}");
+        assert_eq!(html.matches("</script>").count(), 4, "{html}");
+        assert!(html.contains("<h1>Smoke &lt;/script&gt;&quot;&lt;!--</h1>"));
+        assert!(html.contains("Get &quot;users&quot;&lt;/script&gt;&lt;script&gt;alert(1)&lt;/script&gt;"));
+        assert!(html.contains("users/&lt;/script&gt;.yaml"));
+
+        // Each column's time, point heights and values.
+        let blocks: Vec<serde_json::Value> = html
+            .split("<script type=\"application/json\">")
+            .skip(1)
+            .map(|b| serde_json::from_str(&b[..b.find("</script>").unwrap()]).unwrap())
+            .collect();
+        assert_eq!(blocks.len(), 3);
+        let rps = &blocks[0];
+        assert_eq!(rps["t"], serde_json::json!(["0:00", "0:01", "0:02"]));
+        assert_eq!(rps["x"].as_array().unwrap().len(), 3);
+        assert_eq!(rps["s"][0]["n"], "Completed");
+        assert_eq!(rps["s"][0]["c"], "var(--s1)");
+        assert_eq!(rps["s"][0]["v"], serde_json::json!(["200 req/s", "200 req/s", "200 req/s"]));
+        assert_eq!(rps["s"][1]["v"], serde_json::json!(["0 req/s", "1 req/s", "2 req/s"]));
+        assert_eq!(rps["s"][1]["y"].as_array().unwrap().len(), 3);
+        assert_eq!(blocks[1]["s"][0]["v"][0], "4.26 ms");
+        assert_eq!(blocks[1]["s"][2]["v"][0], "120 ms");
+        assert_eq!(blocks[2]["s"][0]["n"], "Active");
+        assert_eq!(blocks[2]["s"][0]["v"][2], "10");
+        // The guide line and one point per series, hidden until the script shows them.
+        assert_eq!(html.matches("<g class=\"cursor\" visibility=\"hidden\"").count(), 3);
+
+        // Without scripts, the columns keep their titles.
+        assert!(html.contains("<title>0:01 · Completed 200 req/s · Failed 1 req/s</title>"), "{html}");
+        assert!(html.contains("<title>0:02 · p50 4.26 ms · p95 12 ms · p99 120 ms</title>"));
+        assert!(html.contains("<title>0:00 · Active 10</title>"));
+
+        // No charts, no script.
+        let empty = report("Smoke", &Summary { points: Vec::new(), ..small_run() });
+        assert!(!empty.contains("<script"));
+    }
+
+    #[test]
+    fn script_json_cannot_close_its_block() {
+        let text = "</script><script>alert(\"x\")</script><!-- & \u{2028}";
+        let json = script_json(&[text]);
+        assert!(!json.contains('<') && !json.contains('>') && !json.contains('&'), "{json}");
+        assert_eq!(serde_json::from_str::<Vec<String>>(&json).unwrap(), [text]);
     }
 }

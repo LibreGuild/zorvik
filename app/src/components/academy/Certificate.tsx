@@ -79,7 +79,8 @@ async function draw(canvas: HTMLCanvasElement, progress: ProgressView, course: C
   ctx.closePath();
   ctx.fill();
 
-  const lessons = course.units.reduce((n, u) => n + u.lessons.length, 0);
+  // The lessons the learner finished: an update can add lessons after graduation.
+  const lessons = progress.completedLessons;
   center(`Completed all ${course.units.length} units and ${lessons} hands-on lessons of the Zorvik Training Bootcamp:`, 580, `400 28px ${sans}`, ink);
   center("networking, DNS, HTTP, APIs and auth, TLS, testing, real-time protocols, mocking and load testing.", 624, `400 28px ${sans}`, ink);
 

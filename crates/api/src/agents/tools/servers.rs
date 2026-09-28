@@ -20,10 +20,10 @@ const TRAFFIC_BODY_CHARS: usize = 4_000;
 /// Placeholders mock bodies, headers, greetings and SSE events can use.
 const PLACEHOLDERS: &str = "Templates in status, headers and body: {{request.params.id}} (a :id path segment; \
     {{request.params.*}} for a trailing *), {{request.query.name}}, {{request.headers.name}}, {{request.body}}, \
-    {{request.method}}, {{request.path}}, {{request.url}}; dynamic values {{$uuid}} (= {{$randomUUID}}, {{$guid}}), \
-    {{$isoTimestamp}}, {{$timestamp}} (seconds), {{$timestampMs}}, {{$randomInt}} (0-1000), {{$randomBoolean}}, \
-    {{$randomAlphaNumeric}}, {{$randomEmail}}; and the active environment's and the collection's variables (secret \
-    ones stay literal). Text a client sends is inserted as-is, never expanded.";
+    {{request.method}}, {{request.path}}, {{request.url}}; dynamic values: every Postman one and more, e.g. {{$uuid}}, \
+    {{$isoTimestamp}}, {{$timestamp(+1h)}}, {{$randomInt(1, 100)}}, {{$randomFullName}}, {{$randomEmail}}, \
+    {{$randomPrice(5, 50)}}, {{$randomFrom(a, b, c)}}; and the active environment's and the collection's variables \
+    (secret ones stay literal). Text a client sends is inserted as-is, never expanded.";
 
 fn key_values(description: &str) -> Value {
     json!({

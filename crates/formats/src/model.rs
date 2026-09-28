@@ -329,6 +329,8 @@ pub enum GrantType {
     ClientCredentials,
     Password,
     AuthorizationCode,
+    /// The token comes back in the redirect's `#fragment` (older single-page apps).
+    Implicit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
@@ -343,6 +345,304 @@ pub enum ClientAuthMethod {
 }
 
 pub const DEFAULT_REDIRECT_URI: &str = "http://127.0.0.1:53682/callback";
+
+/// A signing method of OAuth 1.0a.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub enum OAuth1Method {
+    #[default]
+    #[serde(rename = "HMAC-SHA1")]
+    HmacSha1,
+    #[serde(rename = "HMAC-SHA256")]
+    HmacSha256,
+    #[serde(rename = "HMAC-SHA512")]
+    HmacSha512,
+    #[serde(rename = "RSA-SHA1")]
+    RsaSha1,
+    #[serde(rename = "RSA-SHA256")]
+    RsaSha256,
+    #[serde(rename = "RSA-SHA512")]
+    RsaSha512,
+    #[serde(rename = "PLAINTEXT")]
+    Plaintext,
+}
+
+/// A JWT signing algorithm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "UPPERCASE")]
+#[ts(export)]
+pub enum JwtAlgorithm {
+    #[default]
+    HS256,
+    HS384,
+    HS512,
+    RS256,
+    RS384,
+    RS512,
+    PS256,
+    PS384,
+    PS512,
+    ES256,
+    ES384,
+}
+
+impl JwtAlgorithm {
+    /// Signs with a shared secret (HS*) rather than a private key.
+    pub fn uses_secret(self) -> bool {
+        matches!(self, Self::HS256 | Self::HS384 | Self::HS512)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum HawkAlgorithm {
+    #[default]
+    Sha256,
+    Sha1,
+}
+
+/// AWS Signature Version 4.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AwsSigV4Config {
+    #[serde(default)]
+    pub access_key: String,
+    #[serde(default)]
+    pub secret_key: String,
+    /// Temporary credentials (STS): sent as `X-Amz-Security-Token`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub session_token: String,
+    /// e.g. `us-east-1`.
+    #[serde(default)]
+    pub region: String,
+    /// e.g. `execute-api`, `s3`, `sts`.
+    #[serde(default)]
+    pub service: String,
+    /// Sign in headers, or in the query string (a presigned URL).
+    #[serde(default, skip_serializing_if = "is_default")]
+    #[ts(optional, as = "Option<ApiKeyLocation>")]
+    pub location: ApiKeyLocation,
+}
+
+/// OAuth 1.0a request signing (RFC 5849).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct OAuth1Config {
+    #[serde(default)]
+    pub consumer_key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub consumer_secret: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub token: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub token_secret: String,
+    #[serde(default, skip_serializing_if = "is_default")]
+    #[ts(optional, as = "Option<OAuth1Method>")]
+    pub signature_method: OAuth1Method,
+    /// PEM private key, for the RSA methods.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub private_key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub callback: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub verifier: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub realm: String,
+    /// Send `oauth_version=1.0` (on unless switched off).
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    #[ts(optional, as = "Option<bool>")]
+    pub include_version: bool,
+    /// Add `oauth_body_hash` for bodies that aren't form data.
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional, as = "Option<bool>")]
+    pub include_body_hash: bool,
+    /// Parameters in the Authorization header, or in the query string.
+    #[serde(default, skip_serializing_if = "is_default")]
+    #[ts(optional, as = "Option<ApiKeyLocation>")]
+    pub location: ApiKeyLocation,
+}
+
+fn default_jwt_payload() -> String {
+    "{}".to_string()
+}
+fn default_token_param() -> String {
+    "token".to_string()
+}
+
+/// A JWT that Zorvik signs for each request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct JwtConfig {
+    #[serde(default)]
+    pub algorithm: JwtAlgorithm,
+    /// The shared secret (HS*) or a PEM private key (RS*, PS*, ES*).
+    #[serde(default)]
+    pub secret: String,
+    /// The HS* secret is base64.
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional, as = "Option<bool>")]
+    pub secret_base64: bool,
+    /// The claims, as JSON (variables allowed).
+    #[serde(default = "default_jwt_payload")]
+    pub payload: String,
+    /// Extra header fields, as JSON (`alg` and `typ` are set).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub header: String,
+    /// Authorization header prefix; empty sends the bare token.
+    #[serde(default = "default_bearer")]
+    pub prefix: String,
+    /// Send it in the Authorization header, or as a query parameter.
+    #[serde(default, skip_serializing_if = "is_default")]
+    #[ts(optional, as = "Option<ApiKeyLocation>")]
+    pub location: ApiKeyLocation,
+    /// The query parameter's name.
+    #[serde(default = "default_token_param")]
+    pub query_param: String,
+}
+
+impl Default for JwtConfig {
+    fn default() -> Self {
+        Self {
+            algorithm: JwtAlgorithm::HS256,
+            secret: String::new(),
+            secret_base64: false,
+            payload: default_jwt_payload(),
+            header: String::new(),
+            prefix: default_bearer(),
+            location: ApiKeyLocation::Header,
+            query_param: default_token_param(),
+        }
+    }
+}
+
+/// Hawk (https://github.com/mozilla/hawk).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct HawkConfig {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub key: String,
+    #[serde(default, skip_serializing_if = "is_default")]
+    #[ts(optional, as = "Option<HawkAlgorithm>")]
+    pub algorithm: HawkAlgorithm,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub ext: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub app: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub dlg: String,
+    /// Sign the body too (the server must check it).
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional, as = "Option<bool>")]
+    pub include_payload_hash: bool,
+}
+
+fn default_edgegrid_max_body() -> u64 {
+    131_072
+}
+
+/// Akamai EdgeGrid (EG1-HMAC-SHA256).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct EdgeGridConfig {
+    #[serde(default)]
+    pub client_token: String,
+    #[serde(default)]
+    pub client_secret: String,
+    #[serde(default)]
+    pub access_token: String,
+    /// Header names to sign, comma-separated (usually none).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub headers_to_sign: String,
+    /// How much of a POST body is hashed, in bytes.
+    #[serde(default = "default_edgegrid_max_body")]
+    #[ts(type = "number")]
+    pub max_body: u64,
+}
+
+impl Default for EdgeGridConfig {
+    fn default() -> Self {
+        Self {
+            client_token: String::new(),
+            client_secret: String::new(),
+            access_token: String::new(),
+            headers_to_sign: String::new(),
+            max_body: default_edgegrid_max_body(),
+        }
+    }
+}
+
+fn default_asap_algorithm() -> JwtAlgorithm {
+    JwtAlgorithm::RS256
+}
+fn default_asap_expiry() -> u32 {
+    3600
+}
+
+/// Atlassian ASAP (service-to-service JWT).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AsapConfig {
+    #[serde(default)]
+    pub issuer: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub subject: String,
+    /// One or more audiences, comma-separated.
+    #[serde(default)]
+    pub audience: String,
+    /// The key id (`kid`) the receiver looks the public key up by.
+    #[serde(default)]
+    pub key_id: String,
+    /// PEM private key.
+    #[serde(default)]
+    pub private_key: String,
+    #[serde(default = "default_asap_algorithm")]
+    pub algorithm: JwtAlgorithm,
+    /// Lifetime of each token, in seconds (at most 3600).
+    #[serde(default = "default_asap_expiry")]
+    pub expires_in: u32,
+    /// Extra claims, as JSON.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub claims: String,
+}
+
+impl Default for AsapConfig {
+    fn default() -> Self {
+        Self {
+            issuer: String::new(),
+            subject: String::new(),
+            audience: String::new(),
+            key_id: String::new(),
+            private_key: String::new(),
+            algorithm: default_asap_algorithm(),
+            expires_in: default_asap_expiry(),
+            claims: String::new(),
+        }
+    }
+}
 
 fn default_redirect_uri() -> String {
     DEFAULT_REDIRECT_URI.to_string()
@@ -446,6 +746,37 @@ pub enum Auth {
     },
     #[serde(rename = "oauth2")]
     OAuth2(OAuth2Config),
+    /// HTTP Digest: answers the server's challenge (MD5, SHA-256, qop auth / auth-int).
+    #[serde(rename_all = "camelCase")]
+    Digest {
+        #[serde(default)]
+        username: String,
+        #[serde(default)]
+        password: String,
+    },
+    /// NTLMv2 (Windows and IIS servers), over one HTTP/1.1 connection.
+    #[serde(rename_all = "camelCase")]
+    Ntlm {
+        /// `user`, `DOMAIN\user` or `user@domain`.
+        #[serde(default)]
+        username: String,
+        #[serde(default)]
+        password: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        #[ts(optional, as = "Option<String>")]
+        domain: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        #[ts(optional, as = "Option<String>")]
+        workstation: String,
+    },
+    AwsSigV4(AwsSigV4Config),
+    #[serde(rename = "oauth1")]
+    OAuth1(OAuth1Config),
+    Jwt(JwtConfig),
+    Hawk(HawkConfig),
+    #[serde(rename = "akamaiEdgeGrid")]
+    EdgeGrid(EdgeGridConfig),
+    Asap(AsapConfig),
 }
 
 impl Auth {
@@ -627,6 +958,39 @@ pub struct Request {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub openapi: Option<OpenApiOperation>,
+    /// Saved responses ("Save as example"): documentation, and what mocks answer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<Example>>")]
+    pub examples: Vec<Example>,
+}
+
+/// A saved response of a request.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Example {
+    pub name: String,
+    #[serde(default = "status_ok")]
+    pub status: u16,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<KeyValue>>")]
+    pub headers: Vec<KeyValue>,
+    /// The response body as text.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub body: String,
+    /// The URL the request was sent to, as typed (variables kept), when it differs from the
+    /// request's own; its query parameters tell mocks which example to answer with.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub url: String,
+}
+
+/// The largest example body kept, in bytes.
+pub const MAX_EXAMPLE_BODY: usize = 1024 * 1024;
+
+fn status_ok() -> u16 {
+    200
 }
 
 /// Where an imported request came from in its OpenAPI document.
@@ -689,6 +1053,7 @@ impl Request {
             scripts: Scripts::default(),
             docs: String::new(),
             openapi: None,
+            examples: Vec::new(),
         }
     }
 }

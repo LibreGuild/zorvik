@@ -580,7 +580,8 @@ fn html_report_is_self_contained_and_escapes_text() {
         peak_cpu_percent: Some(42.0),
     };
     let html = html_report("<script>alert(1)</script>", &summary);
-    assert!(!html.contains("<script"), "{html}");
+    // The only scripts are the chart tooltips and their data (one block per chart).
+    assert_eq!(html.matches("<script").count(), 4, "{html}");
     assert!(!html.contains("<img"));
     assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
     assert!(html.contains("a&amp;b.yaml"));

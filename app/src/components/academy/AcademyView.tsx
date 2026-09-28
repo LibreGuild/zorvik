@@ -14,7 +14,7 @@ import { Button, cx, Menu, Spinner } from "../ui";
 import { Certificate } from "./Certificate";
 import { LessonPage } from "./LessonPage";
 import { unitImage } from "./media";
-import { allBadges, BadgeArt, Bar, hasBadge, isComplete, LessonMeta, LevelRing, nextLesson, unitDone } from "./parts";
+import { allBadges, BadgeArt, Bar, hasBadge, isComplete, isNew, LessonMeta, LevelRing, NewChip, nextLesson, unitDone } from "./parts";
 import { QuizCard } from "./Quiz";
 
 export default function AcademyView() {
@@ -140,7 +140,11 @@ function Home({ course, progress }: { course: CourseView; progress: ProgressView
             </Button>
           </div>
         )}
-        {progress.graduatedAt ? <Graduated /> : next && <ContinueCard unit={next.unit} lessonId={next.lesson.id} started={progress.completedLessons > 0 || !!progress.lastLesson} />}
+        {progress.graduatedAt && <Graduated />}
+        {/* A graduate still sees lessons an update added. */}
+        {next && (!progress.graduatedAt || progress.newLessons > 0) && (
+          <ContinueCard unit={next.unit} lessonId={next.lesson.id} started={progress.completedLessons > 0 || !!progress.lastLesson} fresh={isNew(progress, next.lesson.id)} />
+        )}
         <h2 className="mb-3 mt-10 text-[13px] font-semibold uppercase tracking-[0.12em] text-faint">Course map</h2>
         <ol className="relative flex flex-col gap-3" data-testid="course-map">
           {course.units.map((unit, i) => (
@@ -152,7 +156,7 @@ function Home({ course, progress }: { course: CourseView; progress: ProgressView
   );
 }
 
-function ContinueCard({ unit, lessonId, started }: { unit: UnitView; lessonId: string; started: boolean }) {
+function ContinueCard({ unit, lessonId, started, fresh }: { unit: UnitView; lessonId: string; started: boolean; fresh: boolean }) {
   const lesson = unit.lessons.find((l) => l.id === lessonId)!;
   const art = unitImage(unit.image);
   return (
@@ -161,7 +165,7 @@ function ContinueCard({ unit, lessonId, started }: { unit: UnitView; lessonId: s
       <div className="flex flex-wrap items-center gap-6 py-5 pl-7 pr-6">
         <div className="min-w-[260px] flex-1">
           <div className="text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ color: unit.color }}>
-            {started ? "Continue" : "Start here"} · {unit.title}
+            {fresh ? "New lesson" : started ? "Continue" : "Start here"} · {unit.title}
           </div>
           <div className="mt-1 text-[20px] font-semibold tracking-tight text-fg">{lesson.title}</div>
           <p className="mt-1 max-w-[520px] text-[13.5px] leading-relaxed text-muted">{lesson.summary}</p>
@@ -169,7 +173,7 @@ function ContinueCard({ unit, lessonId, started }: { unit: UnitView; lessonId: s
             <LessonMeta minutes={lesson.minutes} labMinutes={lesson.labMinutes} questions={lesson.questions} />
           </div>
           <Button variant="primary" className="mt-4" icon={<ArrowRight size={15} />} onClick={() => openLesson(lesson.id)} data-testid="academy-continue">
-            {started ? "Continue" : "Start the Bootcamp"}
+            {fresh ? "Start the new lesson" : started ? "Continue" : "Start the Bootcamp"}
           </Button>
         </div>
         {art && <img src={art} alt="" draggable={false} className="pointer-events-none h-36 w-auto select-none object-contain" />}
@@ -197,6 +201,7 @@ function UnitCard({ unit, index, progress, open, onToggle }: { unit: UnitView; i
   const done = unitDone(progress, unit);
   const total = unit.lessons.length;
   const complete = progress.units.includes(unit.id);
+  const fresh = unit.lessons.filter((l) => isNew(progress, l.id)).length;
   const art = unitImage(unit.image);
   return (
     <li className="overflow-hidden rounded-2xl border border-line bg-elev shadow-sm" data-testid={`unit-${unit.id}`}>
@@ -212,6 +217,11 @@ function UnitCard({ unit, index, progress, open, onToggle }: { unit: UnitView; i
             {complete && (
               <span className="inline-flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-px text-[10.5px] font-semibold text-success">
                 <Check size={11} /> Done
+              </span>
+            )}
+            {fresh > 0 && (
+              <span className="inline-flex items-center rounded-full bg-accent/15 px-1.5 py-px text-[10.5px] font-semibold text-accent" data-testid={`unit-new-${unit.id}`}>
+                {fresh === 1 ? "1 new lesson" : `${fresh} new lessons`}
               </span>
             )}
           </div>
@@ -249,7 +259,10 @@ function UnitCard({ unit, index, progress, open, onToggle }: { unit: UnitView; i
                       {finished ? <Check size={14} /> : i + 1}
                     </span>
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-[13.5px] font-medium text-fg">{l.title}</div>
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-[13.5px] font-medium text-fg">{l.title}</span>
+                        {isNew(progress, l.id) && <NewChip />}
+                      </div>
                       <div className="truncate text-[12px] text-faint">{l.summary}</div>
                     </div>
                     <div className="hidden shrink-0 items-center gap-3 text-[11.5px] text-faint md:flex">

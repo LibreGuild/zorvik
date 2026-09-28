@@ -1,0 +1,31 @@
+---
+// The banner on every page of the preview of the next version (SITE_CHANNEL=next): on the docs
+// pages (through Banner.astro) and on the home page. It links to the same page on the main site,
+// or to the docs home there when the page is new.
+import { onMainSite } from "../lib/site.mjs";
+
+const main = onMainSite(Astro.url.pathname);
+const label = { home: "the main site", page: "this page on the main site", docs: "the docs on the main site" }[main.kind];
+---
+
+<div class="next-banner" role="note" data-pagefind-ignore>
+  You're reading the docs for the next version (nightly build). For the latest release, go to <a href={main.href}>{label}</a>.
+</div>
+
+<style>
+  /* Starlight's banner colors in the docs, the same terracotta on the home page. */
+  .next-banner {
+    padding: 0.7rem 1rem;
+    background: var(--sl-color-bg-accent, #f2c2ad);
+    color: var(--sl-color-text-invert, #3a2219);
+    font-size: 0.95rem;
+    line-height: 1.5;
+    text-align: center;
+    text-wrap: balance;
+  }
+  .next-banner a {
+    color: inherit;
+    font-weight: 600;
+    text-decoration: underline;
+  }
+</style>

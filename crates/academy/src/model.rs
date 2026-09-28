@@ -76,6 +76,10 @@ pub struct LessonMeta {
     pub summary: String,
     /// Reading time.
     pub minutes: u32,
+    /// The Zorvik version that added the lesson (`0.2.0`), for lessons added after 0.1.2:
+    /// learners who started before it see them as new.
+    #[serde(default)]
+    pub added: Option<String>,
     #[serde(default)]
     pub lab: Option<Lab>,
     #[serde(default)]
@@ -89,6 +93,7 @@ pub struct Lesson {
     pub title: String,
     pub summary: String,
     pub minutes: u32,
+    pub added: Option<String>,
     /// The reading, in Markdown.
     pub body: String,
     pub lab: Option<Lab>,

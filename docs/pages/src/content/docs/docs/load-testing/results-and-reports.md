@@ -85,7 +85,7 @@ Compare runs with the same settings: a different model, stage plan or data file 
 
 | Format | What you get |
 |---|---|
-| **HTML report…** | One self-contained page: inline styles and SVG charts, no scripts, no external files. Open it in any browser, attach it to a pull request, or archive it as a CI artifact. |
+| **HTML report…** | One self-contained page: inline styles, SVG charts and a small script for their tooltips, no external files. Open it in any browser, attach it to a pull request, or archive it as a CI artifact. |
 | **JSON…** | The full summary as JSON, for your own tools. |
 
 The suggested file name is the test's name with the run's start date and time, for example `Checkout smoke 2026-09-28 14-05.html`.
@@ -103,7 +103,7 @@ zorvik load ./api "Checkout smoke" --html report.html --json summary.json
 | Header | Test name, "Load test · Started *2026-09-28 12:05:00 UTC* · ran *duration*", "stopped early" when stopped, and the verdict: ✓ Passed, ✓ Passed (no thresholds), ✗ Failed (*n* of *m* thresholds) or ✗ Failed (error). |
 | Tiles | Requests and req/s, error rate, p95 and p99 latency, p95 first byte, data in and out, connections, and when they apply: capture misses, dropped requests, peak generator CPU. |
 | Thresholds | Each threshold, its actual value ("no data" when there was none) and ✓ Passed / ✗ Failed. |
-| Over time | Charts of requests per second (completed and failed), latency (p50, p95, p99) and users or requests in flight. Runs longer than 600 seconds are shown in up to 600 columns: counts and p50 are averaged per column, p95 and p99 take the column's highest value. |
+| Over time | Charts of requests per second (completed and failed), latency (p50, p95, p99) and users or requests in flight. Point at a chart, tap it, or focus it with Tab and move with the arrow keys to see the time and every value at that moment. Runs longer than 600 seconds are shown in up to 600 columns: counts and p50 are averaged per column, p95 and p99 take the column's highest value. |
 | Latency | min, avg, p50, p90, p95, p99, p99.9 and max of all requests. |
 | Timing | The phases above, with a note when no response had `Server-Timing`. |
 | Requests | Per request: requests, req/s, error rate, p50, p95, p99, max, p95 first byte, capture misses (when any), data in. |

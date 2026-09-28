@@ -1,6 +1,7 @@
 //! Zorvik data model and interchange formats.
 
 pub mod curl;
+pub mod filter;
 pub mod import;
 pub mod loadtest;
 pub mod mock;

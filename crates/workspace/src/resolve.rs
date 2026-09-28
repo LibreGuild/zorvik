@@ -12,6 +12,8 @@ use zorvik_formats::{
     ApiKeyLocation, Auth, BodyType, FolderMeta, KeyValue, OAuth2Config, Request, RequestKind, WorkspaceMeta,
 };
 
+use crate::signing::{Challenge, Signer};
+
 use crate::error::{Error, ErrorCode, Result};
 use crate::vars::VarContext;
 
@@ -36,6 +38,8 @@ pub struct Resolved {
     /// OAuth2 config (variables substituted) when a token must be obtained and
     /// applied with [`apply_token`].
     pub oauth2: Option<OAuth2Config>,
+    /// Digest or NTLM: credentials that answer the server's challenge while sending.
+    pub challenge: Option<Challenge>,
     /// Variables referenced but not defined.
     pub unresolved: Vec<String>,
 }
@@ -87,6 +91,8 @@ pub fn resolve(request: &Request, inherit: &Inheritance<'_>, vars: &VarContext) 
     }
 
     let mut oauth2 = None;
+    let mut challenge: Option<Challenge> = None;
+    let mut signer: Option<Signer> = None;
     match effective_auth(&request.auth, inherit) {
         Auth::Inherit | Auth::None => {}
         Auth::Basic { username, password } => {
@@ -122,11 +128,26 @@ pub fn resolve(request: &Request, inherit: &Inheritance<'_>, vars: &VarContext) 
                 oauth2 = Some(render_oauth2(config, &mut render));
             }
         }
+        auth => {
+            if !has_header(&headers, "authorization") {
+                match crate::signing::prepare(auth, &mut render) {
+                    Some(crate::signing::Prepared::Challenge(c)) => challenge = Some(c),
+                    Some(crate::signing::Prepared::Signer(s)) => signer = Some(s),
+                    None => {}
+                }
+            }
+        }
     }
 
+    let mut http = HttpRequest { method: request.method.trim().to_string(), url, headers, body };
+    // Signatures cover the final method, URL, headers and body.
+    if let Some(signer) = signer {
+        crate::signing::sign(&mut http, &signer)?;
+    }
     Ok(Resolved {
-        request: HttpRequest { method: request.method.trim().to_string(), url, headers, body },
+        request: http,
         oauth2,
+        challenge,
         unresolved: missing.into_iter().chain(empty_path_params).collect(),
     })
 }

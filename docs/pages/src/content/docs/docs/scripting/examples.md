@@ -60,7 +60,21 @@ auth:
 In the app, the token is kept on this computer for the active environment, never in the environment file. With `zorvik run` it lasts until the run ends. Declare `token` as a secret variable in the environment: if its value ever appears in a URL, run reports and history show `{{token}}` instead.
 
 :::tip
-Scripts can't send requests (`pm.sendRequest` is not supported), so a script can't log in by itself. Put the login request before the others, or use the **OAuth 2** auth type, which fetches and refreshes tokens on its own. See [Auth](../../requests/auth/).
+A pre-request script can also log in by itself with [`pm.sendRequest`](../pm-reference/#pmsendrequest), for APIs whose login isn't OAuth:
+
+```js title="Pre-request script of the folder"
+if (!pm.environment.get("token")) {
+  const res = await pm.sendRequest({
+    url: pm.variables.replaceIn("{{baseUrl}}/login"),
+    method: "POST",
+    header: { "Content-Type": "application/json" },
+    body: { mode: "raw", raw: JSON.stringify({ user: pm.environment.get("user"), password: pm.environment.get("password") }) },
+  });
+  pm.environment.set("token", res.json().token);
+}
+```
+
+For OAuth 2.0, the **OAuth 2.0** auth type fetches and refreshes tokens on its own. See [Auth](../../requests/auth/).
 :::
 
 ## Chain ids from one request to the next
@@ -146,9 +160,44 @@ pm.test(`Faster than ${limit} ms`, () => {
 In a collection run, a request **without tests** fails when its status is 400 or more, but a request **with tests** passes when all its tests pass. A test added by a workspace or folder script counts too, so a `404` passes if its only test is the time check. Add a status test where the status matters.
 :::
 
-## Schema-like checks
+## Schema checks
 
-`pm.response.to.have.jsonSchema` isn't supported. Checks like these cover most needs:
+The shortest way is the `jsonSchema` assertion:
+
+```js title="Post-response script"
+pm.test("Body matches the schema", () => {
+  pm.response.to.have.jsonSchema({
+    type: "object",
+    required: ["id", "email"],
+    properties: { id: { type: "integer" }, email: { type: "string", format: "email" } },
+  });
+});
+```
+
+For more control, use the built-in [Ajv](../sandbox/#libraries) yourself:
+
+```js title="Post-response script"
+const Ajv = require("ajv");
+const ajv = new Ajv({ allErrors: true });
+const schema = {
+  type: "object",
+  required: ["id", "email"],
+  properties: {
+    id: { type: "integer" },
+    email: { type: "string", format: "email" },
+    createdAt: { type: "string", format: "date-time" },
+  },
+};
+
+pm.test("Body matches the schema", () => {
+  const valid = ajv.validate(schema, pm.response.json());
+  pm.expect(valid, ajv.errorsText()).to.be.true;
+});
+```
+
+A failure names every problem: `data must have required property 'email', data/id must be integer`. `tv4.validate(data, schema)` works too, for older draft-04 schemas.
+
+Without a schema, checks like these cover most needs:
 
 ```js title="Post-response script"
 /** Check that `value` has each key of `shape` with the given type ("string", "number", "array", "object", "boolean", "null"). */
@@ -228,9 +277,17 @@ const password = pm.variables.get("password");
 pm.request.headers.upsert({ key: "Authorization", value: "Basic " + btoa(`${user}:${password}`) });
 ```
 
-:::note
-Scripts have no hashing or signing functions (`CryptoJS` and `crypto.subtle` are not available), so they can't compute HMAC signatures. `btoa` only encodes Latin-1 text.
-:::
+`btoa` only encodes Latin-1 text; for any text use `CryptoJS.enc.Base64.stringify(CryptoJS.enc.Utf8.parse(text))`.
+
+Sign a request with HMAC-SHA256, as many APIs ask, with the built-in [crypto-js](../sandbox/#libraries):
+
+```js title="Pre-request script"
+const timestamp = Date.now().toString();
+const payload = [pm.request.method, pm.request.url.getPathWithQuery(), timestamp, pm.request.body.raw || ""].join("\n");
+const signature = CryptoJS.HmacSHA256(payload, pm.environment.get("apiSecret")).toString(CryptoJS.enc.Base64);
+pm.request.headers.upsert({ key: "X-Timestamp", value: timestamp });
+pm.request.headers.upsert({ key: "X-Signature", value: signature });
+```
 
 ## Change the body before sending
 

@@ -1,6 +1,8 @@
 // Transport to the Rust API: Tauri IPC in the desktop app, the dev bridge
 // (HTTP) when running in a browser. Both call the same `zorvik_api::Api::call`.
 import { invoke } from "@tauri-apps/api/core";
+import type { FilterLanguage } from "../bindings/FilterLanguage";
+import type { FilterResult } from "../bindings/FilterResult";
 import type { ApiError } from "../bindings/ApiError";
 import type { ActiveLoadRun } from "../bindings/ActiveLoadRun";
 import type { AppInfo } from "../bindings/AppInfo";
@@ -133,6 +135,9 @@ export const api = {
     call<SendResult>("http.send", { requestId, request, path, standalone: opts?.standalone ?? false }),
   cancel: (requestId: string) => call<null>("http.cancel", { requestId }),
   saveResponse: (responseId: string, path: string) => call<null>("response.save", { responseId, path }),
+  responseText: (responseId: string) => call<{ text: string }>("response.text", { responseId }),
+  filterResponse: (responseId: string, language: FilterLanguage, expression: string) =>
+    call<FilterResult>("response.filter", { responseId, language, expression }),
 
   wsConnect: (connId: string, request: Request, path: string | null) =>
     call<StreamOpened>("ws.connect", { connId, request, path }),

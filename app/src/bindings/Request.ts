@@ -2,6 +2,7 @@
 import type { Auth } from "./Auth";
 import type { Body } from "./Body";
 import type { DnsOptions } from "./DnsOptions";
+import type { Example } from "./Example";
 import type { GrpcOptions } from "./GrpcOptions";
 import type { KeyValue } from "./KeyValue";
 import type { MqttOptions } from "./MqttOptions";
@@ -43,4 +44,8 @@ socket?: SocketOptions, dns?: DnsOptions, mqtt?: MqttOptions, grpc?: GrpcOptions
 /**
  * The OpenAPI operation this request was imported from (see [`OpenApiSource`]).
  */
-openapi?: OpenApiOperation, };
+openapi?: OpenApiOperation, 
+/**
+ * Saved responses ("Save as example"): documentation, and what mocks answer.
+ */
+examples?: Array<Example>, };

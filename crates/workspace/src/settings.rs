@@ -254,6 +254,7 @@ impl Settings {
             max_body_bytes: (d.max_response_mb.clamp(1, 2048) as usize) * 1024 * 1024,
             default_headers: d.send_default_headers,
             host_guard: None,
+            challenge_auth: None,
         })
     }
 }

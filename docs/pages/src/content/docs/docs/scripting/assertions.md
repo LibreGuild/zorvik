@@ -320,7 +320,7 @@ pm.expect(pm.response).to.have.status(201);
 | `jsonBody(object)` | The body is JSON equal to `object` by value |
 | `jsonBody(path)` | The JSON body has the dotted path, for example `data.items[0].id` |
 | `jsonBody(path, value)` | …and the value there equals `value` by value |
-| `jsonSchema(schema)` | Not supported: throws `pm.response.to.have.jsonSchema is not supported in Zorvik` |
+| `jsonSchema(schema, options?)` | The JSON body matches the [JSON Schema](https://json-schema.org) (draft-07; checked with the bundled Ajv). The message lists every mismatch, e.g. `body/id must be integer, body must have required property 'name'`. `options` go to Ajv. |
 
 ```js
 pm.response.to.have.header("Content-Type");
@@ -365,8 +365,7 @@ Not supported:
 
 - `nested` and `own` have no effect on `include`: `.nested.include({ "a.b": 1 })` fails, and `.own.include(…)` also finds inherited properties. Use `nested.property` and `own.property` instead.
 - `sealed`, `frozen`, `extensible`, `arguments`, `itself`, `respondTo`, `increase`, `decrease`, `change`, `by`, `fail` and `pm.expect.fail`.
-- `chai.assert` and `chai.should` styles: only `pm.expect` exists.
-- `jsonSchema` (see [Script examples](../examples/#schema-like-checks) for checks you can write instead, and [OpenAPI contract checks](../../testing/openapi-contract-checks/) for automatic ones).
+- `chai.assert` and `chai.should` styles in `pm.expect`. The full chai library is built in: `const { assert } = require("chai")`.
 
 Other details:
 

@@ -99,7 +99,7 @@ What you get:
 - **One route per HTTP request**, in sidebar order, including the requests in subfolders. Other kinds (WebSocket, gRPC, …) and files that can't be read are skipped. When two requests have the same method and path, the first one wins.
 - **Method**: the request's, in capitals (`GET` when empty).
 - **Name**: the request's name (or its file name).
-- **Answer**: `200` with `Content-Type: application/json` and the body `{}`, ready for you to fill in. `HEAD` and `OPTIONS` routes get no body and no headers.
+- **Answer**: the request's [saved examples](../../requests/responses/#examples), when it has some (below). Otherwise `200` with `Content-Type: application/json` and the body `{}`, ready for you to fill in. `HEAD` and `OPTIONS` routes get no body and no headers.
 - **Path**: made from the request URL. The scheme, the host and a leading variable (`{{baseUrl}}`) are dropped, and so are the query and the fragment. A segment containing a variable (`{{id}}`) or an OpenAPI-style `{id}` becomes a parameter; `:param` segments stay.
 
 | Request URL | Route path |
@@ -113,6 +113,21 @@ What you get:
 | `{{baseUrl}}` | `/` |
 
 When the folder has no HTTP requests, you get **There are no HTTP requests here to mock**.
+
+### Requests with examples
+
+A request with saved examples becomes one route per example, answering with the example's status, headers and body (framing headers such as `Content-Length` are left for the mock to set):
+
+- An example saved while the URL had query parameters gets them as **Match query**, so it answers only requests that carry them. A `{{variable}}` value matches any value. Examples with the same query are used once.
+- Then one route without conditions answers everything else: the first example saved without query parameters (or the first example, when they all have some).
+- Route names are `<request> · <example>`, for example `Get pet · Not found`.
+
+So a request `GET {{baseUrl}}/pets/:id` with the examples *Found* (200) and *Not found* (saved from `…/pets/999?include=owner`, 404) mocks as:
+
+| Route | Match query | Answers |
+|---|---|---|
+| `Get pet · Not found` | `include=owner` | 404 |
+| `Get pet · Found` | | 200 |
 
 ## From a response ("Mock this response")
 

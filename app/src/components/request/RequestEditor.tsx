@@ -11,6 +11,7 @@ import { KeyValueEditor } from "../KeyValueEditor";
 import { Button, cx, Input, Select, Switch, Tabs } from "../ui";
 import { AuthEditor } from "./AuthEditor";
 import { BodyEditor } from "./BodyEditor";
+import { ExamplesTab } from "./ExamplesTab";
 import { KIND_EDITOR_TABS } from "./kinds";
 import { ScriptsEditor, ScriptsTabLabel } from "./ScriptsEditor";
 
@@ -21,6 +22,14 @@ const AUTH_LABEL: Record<string, string> = {
   bearer: "Bearer",
   apiKey: "API key",
   oauth2: "OAuth 2",
+  oauth1: "OAuth 1",
+  jwt: "JWT",
+  digest: "Digest",
+  ntlm: "NTLM",
+  awsSigV4: "AWS",
+  hawk: "Hawk",
+  akamaiEdgeGrid: "EdgeGrid",
+  asap: "ASAP",
 };
 
 const count = (rows: KeyValue[] | undefined) => (rows ?? []).filter((r) => r.enabled !== false && r.key.trim()).length;
@@ -61,6 +70,7 @@ export function RequestEditor({ tab, toolbar }: { tab: Tab; toolbar?: React.Reac
         { id: "settings", label: "Settings" },
         ...(kind === "http" ? [{ id: "scripts", label: <ScriptsTabLabel scripts={req.scripts} /> }] : []),
         { id: "docs", label: "Docs" },
+        ...(kind === "http" ? [{ id: "examples", label: "Examples", badge: req.examples?.length || undefined }] : []),
       ];
   const current = items.some((i) => i.id === tab.requestTab) ? tab.requestTab : items[0].id;
   const KindView = kindTabs?.find((t) => t.id === current)?.View;
@@ -113,6 +123,7 @@ export function RequestEditor({ tab, toolbar }: { tab: Tab; toolbar?: React.Reac
         {current === "scripts" && kind === "http" && (
           <ScriptsEditor where="request" scripts={req.scripts ?? {}} onChange={(scripts) => update((r) => ({ ...r, scripts }))} />
         )}
+        {current === "examples" && kind === "http" && <ExamplesTab tab={tab} />}
         {current === "docs" && (
           <CodeEditor
             value={req.docs ?? ""}

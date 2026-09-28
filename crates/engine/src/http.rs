@@ -87,6 +87,37 @@ impl HostGuard {
     }
 }
 
+/// Authentication that answers the server's challenge (a 401 with `WWW-Authenticate`),
+/// such as Digest and NTLM. The engine sends the request, and when the server challenges
+/// it, sends it again with the answer on the same connection.
+pub trait ChallengeAuth: Send + Sync {
+    /// The Authorization header of the first attempt (NTLM's negotiate message), if any.
+    fn initial(&self) -> Option<String>;
+    /// The Authorization header answering a 401 whose `WWW-Authenticate` values are
+    /// `challenges`. `target` is the request target as sent (path and query). `Ok(None)`:
+    /// nothing this auth can answer, so the 401 is the response.
+    fn answer(
+        &self,
+        challenges: &[String],
+        method: &str,
+        target: &str,
+        body: &[u8],
+    ) -> std::result::Result<Option<String>, String>;
+    /// The answer must travel on the connection that got the challenge, over HTTP/1.1 (NTLM).
+    fn connection_bound(&self) -> bool {
+        false
+    }
+}
+
+#[derive(Clone)]
+pub struct ChallengeAuthRef(pub std::sync::Arc<dyn ChallengeAuth>);
+
+impl std::fmt::Debug for ChallengeAuthRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ChallengeAuth")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RequestOptions {
     /// Whole request including redirects and body download. `None` = no limit.
@@ -105,6 +136,8 @@ pub struct RequestOptions {
     pub default_headers: bool,
     /// Hosts requests may go to; `None` = any.
     pub host_guard: Option<HostGuard>,
+    /// Digest or NTLM: answer the server's 401 challenge.
+    pub challenge_auth: Option<ChallengeAuthRef>,
 }
 
 impl Default for RequestOptions {
@@ -121,6 +154,7 @@ impl Default for RequestOptions {
             max_body_bytes: 100 * 1024 * 1024,
             default_headers: true,
             host_guard: None,
+            challenge_auth: None,
         }
     }
 }
@@ -265,6 +299,30 @@ struct Hop {
     timing: Timing,
 }
 
+/// The request side of an HTTP/1.1 or HTTP/2 connection, kept to send again (auth challenges).
+enum Sender {
+    H1(hyper::client::conn::http1::SendRequest<Full<Bytes>>),
+    H2(hyper::client::conn::http2::SendRequest<Full<Bytes>>),
+}
+
+impl Sender {
+    async fn send(
+        &mut self,
+        request: http::Request<Full<Bytes>>,
+    ) -> std::result::Result<http::Response<Incoming>, hyper::Error> {
+        match self {
+            Self::H1(sender) => {
+                sender.ready().await?;
+                sender.send_request(request).await
+            }
+            Self::H2(sender) => {
+                sender.ready().await?;
+                sender.send_request(request).await
+            }
+        }
+    }
+}
+
 pub(crate) struct Prepared {
     pub(crate) method: http::Method,
     pub(crate) url: Url,
@@ -389,7 +447,13 @@ impl Client {
         let bare_host = host.trim_start_matches('[').trim_end_matches(']');
         let port = url.port_or_known_default().unwrap_or(if https { 443 } else { 80 });
         let proxy = opts.proxy.for_target(bare_host, https);
+        let challenge = opts.challenge_auth.as_ref().map(|c| c.0.clone());
+        let bound = challenge.as_ref().is_some_and(|c| c.connection_bound());
+        if bound && opts.http_version == HttpVersionPref::Http2 {
+            return Err(EngineError::invalid("NTLM needs HTTP/1.1: choose HTTP/1.1 or Auto in the request's settings"));
+        }
         let alpn = match opts.http_version {
+            _ if bound => Alpn::Http1,
             HttpVersionPref::Auto | HttpVersionPref::Http3 => Alpn::Auto,
             HttpVersionPref::Http1 => Alpn::Http1,
             HttpVersionPref::Http2 => Alpn::Http2,
@@ -418,11 +482,17 @@ impl Client {
             return Err(EngineError::new(ErrorKind::Protocol, "Server did not agree to HTTP/2 (ALPN)"));
         }
 
-        let headers = build_headers(req, opts, jar, conn.via_forward_proxy, proxy, use_h2, accept_compressed);
+        let mut headers = build_headers(req, opts, jar, conn.via_forward_proxy, proxy, use_h2, accept_compressed);
+        let user_authorization = has_header(&req.headers, "authorization");
+        if !user_authorization && let Some(initial) = challenge.as_ref().and_then(|c| c.initial()) {
+            headers.retain(|h| !h.name.eq_ignore_ascii_case("authorization"));
+            headers.push(Header::new("Authorization", initial));
+        }
         let authority_override = if use_h2 { host_override(&headers) } else { None };
         let uri = request_uri(url, use_h2 || conn.via_forward_proxy, authority_override)?;
+        let target = uri.path_and_query().map_or_else(|| "/".to_string(), |p| p.to_string());
         let version = if use_h2 { http::Version::HTTP_2 } else { http::Version::HTTP_11 };
-        let (builder, sent_headers) = request_head(&req.method, uri, version, headers)?;
+        let (builder, mut sent_headers) = request_head(&req.method, uri.clone(), version, headers.clone())?;
         let request = builder
             .body(Full::new(req.body.clone()))
             .map_err(|e| EngineError::invalid(format!("Invalid request: {e}")))?;
@@ -430,7 +500,7 @@ impl Client {
         let Connection { stream, remote_addr, tls, timing: conn_timing, .. } = conn;
         let io = TokioIo::new(stream);
         let send_started = Instant::now();
-        let (response, guard) = if use_h2 {
+        let (response, guard, mut sender) = if use_h2 {
             let (mut sender, connection) = hyper::client::conn::http2::Builder::new(TokioExecutor::new())
                 .adaptive_window(true)
                 // hyper's default (16 KB) rejects response headers that HTTP/1.1 accepts (~400 KB).
@@ -444,7 +514,7 @@ impl Client {
                 })
                 .abort_handle(),
             );
-            (sender.send_request(request).await, guard)
+            (sender.send_request(request).await, guard, Sender::H2(sender))
         } else {
             let (mut sender, connection) = hyper::client::conn::http1::Builder::new()
                 .title_case_headers(true)
@@ -460,16 +530,48 @@ impl Client {
                 })
                 .abort_handle(),
             );
-            (sender.send_request(request).await, guard)
+            (sender.send_request(request).await, guard, Sender::H1(sender))
         };
-        let response = response.map_err(|e| {
+        let closed = |e: hyper::Error| {
             let err = EngineError::from_hyper(e);
             if err.message.contains("connection closed before message completed") {
                 EngineError::new(ErrorKind::Io, "Server closed the connection without sending a response")
             } else {
                 err
             }
-        })?;
+        };
+        let mut response = response.map_err(closed)?;
+        // Digest / NTLM: answer the challenge with the same request on this connection.
+        if let Some(auth) = &challenge
+            && !user_authorization
+            && response.status() == http::StatusCode::UNAUTHORIZED
+        {
+            let challenges = header_values(response.headers(), "www-authenticate");
+            let answer = auth
+                .answer(&challenges, req.method.as_str(), &target, &req.body)
+                .map_err(|message| EngineError::new(ErrorKind::Protocol, message))?;
+            if let Some(answer) = answer {
+                // The connection is reused only once the first response is read to its end.
+                let _ = response.into_body().collect().await;
+                headers.retain(|h| !h.name.eq_ignore_ascii_case("authorization"));
+                headers.push(Header::new("Authorization", answer));
+                let (builder, retry_headers) = request_head(&req.method, uri, version, headers)?;
+                sent_headers = retry_headers;
+                let retry = builder
+                    .body(Full::new(req.body.clone()))
+                    .map_err(|e| EngineError::invalid(format!("Invalid request: {e}")))?;
+                response = sender.send(retry).await.map_err(|e| {
+                    if auth.connection_bound() {
+                        EngineError::new(
+                            ErrorKind::Io,
+                            format!("The server closed the connection during the NTLM handshake ({e})"),
+                        )
+                    } else {
+                        closed(e)
+                    }
+                })?;
+            }
+        }
         let ttfb = send_started.elapsed();
         let (parts, body) = response.into_parts();
 

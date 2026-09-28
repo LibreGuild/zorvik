@@ -4,7 +4,9 @@
 import { readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import "../styles/site.css";
+import NextBanner from "../components/NextBanner.astro";
 import { CLI_FILES, formatSize, latestRelease, REPO, type Os } from "../lib/releases";
+import { NEXT } from "../lib/site.mjs";
 
 const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
 const docs = `${base}docs/`;
@@ -97,7 +99,7 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
     <meta name="description" content="Zorvik is a free, open-source desktop app to build, test, mock and load test APIs over HTTP, GraphQL, gRPC, WebSocket, SSE, MQTT, TCP, UDP and DNS. Local first, for Windows, macOS and Linux." />
     <meta name="theme-color" content="#161514" />
     <link rel="icon" href={`${base}favicon.png`} />
-    <link rel="canonical" href={`https://libreguild.github.io${base}`} />
+    {NEXT ? <meta name="robots" content="noindex" /> : <link rel="canonical" href={`https://libreguild.github.io${base}`} />}
     <meta property="og:title" content="Zorvik: one workbench for every wire" />
     <meta property="og:description" content="Build, test, mock and load test APIs, and see what really happens on the network. Free and open source." />
     <meta property="og:image" content={`https://libreguild.github.io${base}shots/banner.webp`} />
@@ -107,6 +109,7 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
   </head>
   <body>
     <a class="skip" href="#main">Skip to content</a>
+    {NEXT && <NextBanner />}
     <header class="nav" id="top">
       <div class="nav-inner">
         <a class="brand" href={base} aria-label="Zorvik home">
@@ -459,6 +462,7 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
             <p class="sub">
               {version ? <>Version <b data-version>{version}</b>{released && <> · released {released}</>} · <a href={release.notesUrl}>what's new</a></> : <>The newest version from <a href={`${github}/releases/latest`}>GitHub Releases</a>.</>}
               <br />Every download includes the app <em>and</em> the <code>zorvik</code> command line.
+              {NEXT && <><br />These are the latest release. Nightly builds of the next version are on the <a href={`${github}/releases/tag/nightly`}>releases page</a>.</>}
             </p>
           </div>
           <div class="os-grid">

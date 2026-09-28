@@ -13,6 +13,8 @@ publish.workspace = true
 # error in some built-ins leaks an object, and the leak check on freeing the
 # runtime would abort the whole app (docs/architecture.md, "Scripts").
 rquickjs = { workspace = true, features = ["disable-assertions"] }
+# `crypto.getRandomValues` for scripts and the built-in libraries.
+rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 ts-rs.workspace = true

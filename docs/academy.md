@@ -10,7 +10,7 @@ crates/api/src/academy/  academy.* RPC: the Bootcamp workspace, labs (servers, c
 app/src/components/academy/  Academy view (course map, lessons, rewards), Lab Guide, diagrams
 ```
 - **The Bootcamp workspace** is a normal workspace in the app data folder (`bootcamp/`). It is always listed first (pinned in the workspace menu and on the welcome screen, which open the Academy) and can't be removed; **Reset** empties it (progress stays). Only this workspace shows the *Workbench | Academy* switch in the title bar.
-- **Progress** lives in `academy-progress.json` in the app data folder, not in the workspace.
+- **Progress** lives in `academy-progress.json` in the app data folder, not in the workspace. It is kept by lesson and unit id, so updates that add lessons keep everything a learner finished: units stay done, badges and the certificate stay. Lessons an update adds show **New** (on the lesson, its unit and the **Continue** card, graduates included) until the learner opens them; `knownLessons` in the progress file records the lessons the learner has seen.
 - **A lab** saves its servers into the workspace as `Lab · <name>` and starts them on free ports, fills the **Lab** environment (`{{api}}`, …) and makes it active. Starting another lab removes the previous lab's servers. The practice servers (the same ones the tests use, `crates/testkit`) start on first use and stay up.
 - **Checks.** While a lab runs, every app call is noted in a short journal. After each call, and once a second, the steps are checked in order from the first one not done; each check looks at everything since the lab started. Rewards reach the UI only as `academy` events.
 - **Nobody gets stuck.** Up to three hints per step (the last one says exactly what to do), and **Do it for me** runs the step's solution (the step then earns no XP).
@@ -55,6 +55,7 @@ id: status-codes              # unique across the course
 title: Status codes
 summary: One sentence, the idea of the lesson.
 minutes: 5                    # reading time
+added: 0.2.0                  # the release that adds the lesson (only for lessons added to a released course)
 lab: { … }                    # optional, see below
 quiz:                         # usually 3 questions
   - question: What does 404 mean?
@@ -65,6 +66,8 @@ quiz:                         # usually 3 questions
 The reading…
 ```
 A lesson without a lab and without a quiz gets a **Mark as done** button.
+
+**Adding a lesson to a released course:** give it `added:` with the release that ships it. Learners who started before know every lesson without `added` and see the new ones as **New**; from then on, `knownLessons` in their progress remembers what they have seen, so later additions show as new too. Keep lesson ids stable: progress is kept by id, and a renamed id is a new lesson.
 
 ### Style
 - Plain, friendly words. Short paragraphs. Explain every term the first time it appears.
@@ -138,7 +141,7 @@ Patterns are plain YAML values ([`matcher.rs`](../crates/academy/src/matcher.rs)
 |---|---|---|
 | `request: {server, …}` | an HTTP request a lab server received | `method`, `path`, `query` (object), `headers` (lower-case names), `body`, `json` (parsed body), `status` (the mock's answer), `route`, `httpVersion`; `count: 2` = at least two |
 | `message: {server, …}` | a message, connection or DNS query a lab server saw | `kind` (`data`, `open`, `close`, `dns`, `info`, `error`), `direction` (`in`, `out`), `text`, `summary`, `size` |
-| `send: {…}` | an HTTP request sent from Zorvik and its answer | `kind`, `method`, `url` (as sent), `finalUrl`, `status`, `httpVersion`, `headers` (sent), `responseHeaders`, `body`, `json`, `tests` (`[{name, passed}]`), `testsPassed`, `testsFailed`, `redirects`, `tls`, `auth` (type), `request` (the request as written, variables unresolved), `error`, `errorKind` |
+| `send: {…}` | an HTTP request sent from Zorvik and its answer | `kind`, `method`, `url` (as sent), `finalUrl`, `status`, `httpVersion`, `headers` (sent), `responseHeaders`, `body`, `json`, `tests` (`[{name, passed}]`), `testsPassed`, `testsFailed`, `visualized` (a script called `pm.visualizer.set`), `redirects`, `tls`, `auth` (type), `request` (the request as written, variables unresolved), `error`, `errorCode` (e.g. `skipped`), `errorKind` |
 | `call: {method, params, ok, result, error}` | any app action (see `app/src/lib/rpc.ts` for methods and parameters) | e.g. `{method: dns.query, params: {request: {url: "shop.lab.test"}}, ok: true}` |
 | `saved: {request \| folder \| environment \| server \| loadTest \| workspace: …}` | something saved in the workspace (the file's fields, plus `path`, `id`, `running` for servers) | e.g. `{request: {name: Login, auth: {type: bearer}}}` |
 | `run: {…}` | a collection run that finished during the lab | its summary: `passed`, `requests`, `failed`, `testsPassed`, `testsFailed`, `iterations`, `name` |
