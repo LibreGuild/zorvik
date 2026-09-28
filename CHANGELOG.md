@@ -29,6 +29,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Collection runs say why a request was skipped.
 
 ### Fixed
+- The app's Runner tab now sends event-stream (SSE) requests too, like `zorvik run` and agents do.
 - Load tests: an arrival-rate run could drop its last request on Windows (a timer woke too late and the end of the run won).
 - Long menus now fit the window and scroll.
 - `save_environment` reported `active: false` for an environment that was active.
