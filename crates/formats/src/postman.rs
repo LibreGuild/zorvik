@@ -365,6 +365,7 @@ impl Importer {
                     query: field("query").map(text).unwrap_or_default(),
                     variables,
                     operation_name: trimmed(field("operationName")),
+                    ..Default::default()
                 };
             }
             "" | "none" => {}
@@ -1285,6 +1286,7 @@ mod tests {
                 query: "query Repos($n: Int) { viewer { repos(first: $n) { name } } }".into(),
                 variables: "{\n  \"n\": 5\n}".into(),
                 operation_name: Some("Repos".into()),
+                ..Default::default()
             }
         );
         assert!(c.warnings.is_empty(), "{:?}", c.warnings);

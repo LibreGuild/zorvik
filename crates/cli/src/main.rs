@@ -36,7 +36,7 @@ enum Command {
     Run(RunArgs),
     /// Run a saved load test and check its thresholds (exit code 1 when one fails).
     Load(LoadArgs),
-    /// Start a saved server (mock API, WebSocket, SSE, TCP, UDP, DNS, relay) and
+    /// Start a saved server (mock API, WebSocket, Socket.IO, SSE, TCP, UDP, DNS, relay) and
     /// print its traffic until Ctrl+C.
     Serve(ServeArgs),
     /// MCP server for AI agents (Claude Code, Codex, Gemini CLI, Cursor, …) over
@@ -387,6 +387,7 @@ fn kind_name(kind: RequestKind) -> &'static str {
         RequestKind::Dns => "DNS",
         RequestKind::Mqtt => "MQTT",
         RequestKind::Grpc => "gRPC",
+        RequestKind::SocketIo => "Socket.IO",
     }
 }
 
@@ -919,6 +920,7 @@ fn kind_label(kind: ServerKind) -> &'static str {
         ServerKind::Udp => "UDP server",
         ServerKind::Dns => "DNS server",
         ServerKind::TcpProxy => "TCP relay",
+        ServerKind::SocketIo => "Socket.IO server",
     }
 }
 

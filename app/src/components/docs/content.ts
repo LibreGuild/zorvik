@@ -72,7 +72,7 @@ export const TOPICS: DocTopic[] = [
       "Filter a response with JSONPath, jq or XPath (the funnel icon above the body)",
       "Save as example: keep responses in the request, as documentation and for mocks",
       "A timing waterfall: DNS → connect → TLS → first byte → download",
-      "Save a response to a file, or copy any request as cURL or code (Kotlin, Swift, JavaScript, Python)",
+      "Save a response to a file, or copy any request as cURL or code in 16 languages (JavaScript, Python, Go, Java, C#, …)",
       "Query parameters keep their descriptions; hover the ⓘ next to a name",
     ],
     tryIt: [
@@ -95,8 +95,13 @@ export const TOPICS: DocTopic[] = [
       "Variables as JSON, and an operation picker when a document has several",
       "A schema explorer to browse types, fields and deprecations",
       "Prettify with one click; auth, headers and environments work as for HTTP",
+      "Subscriptions stream their results live, over WebSocket (graphql-transport-ws or the legacy protocol) or SSE",
     ],
-    tryIt: ["In the collection, choose New → GraphQL request.", "Type `{` in the query and let autocomplete suggest the fields."],
+    tryIt: [
+      "In the collection, choose New → GraphQL request.",
+      "Type `{` in the query and let autocomplete suggest the fields.",
+      "Write a `subscription`: Send turns into Subscribe, and results arrive in the log.",
+    ],
   },
   {
     id: "grpc",
@@ -116,13 +121,14 @@ export const TOPICS: DocTopic[] = [
   {
     id: "realtime",
     group: "Build & send",
-    title: "WebSocket, SSE, TCP, UDP & MQTT",
+    title: "WebSocket, Socket.IO, SSE, TCP, UDP & MQTT",
     tagline: "Talk to live connections and watch every message.",
     image: "docs-realtime",
     intro:
       "Connection requests keep a live log of everything sent and received, so you can follow a conversation and filter it. DNS queries are a request type too.",
     features: [
       "WebSocket: text, JSON or binary (hex) messages",
+      "Socket.IO 3 and 4: namespaces, events with acknowledgements, binary, WebSocket or long-polling",
       "Server-Sent Events: every event as it arrives",
       "Raw TCP (plain or TLS) and UDP, with message framing",
       "MQTT: subscriptions, QoS and retained messages",
@@ -235,10 +241,11 @@ export const TOPICS: DocTopic[] = [
     tagline: "Stand in for backends that don't exist yet.",
     image: "docs-servers",
     intro:
-      "Start a mock API in seconds from a folder, an OpenAPI file or a response. You can also run WebSocket, SSE, TCP, UDP and DNS servers, or a relay to watch the traffic between two sides.",
+      "Start a mock API in seconds from a folder, an OpenAPI file or a response. You can also run WebSocket, Socket.IO, SSE, TCP, UDP and DNS servers, or a relay to watch the traffic between two sides.",
     features: [
       "Mock routes with templates, delays, faults, CORS, and a fallback or forward to the real backend",
       "Live traffic for every server, and replies to one client or all of them",
+      "Socket.IO servers that socket.io-client apps connect to: echo, rules with acknowledgements and broadcasts",
       "Servers keep running in the background; the title bar shows what's running",
       "Saved in the workspace, so your team gets the same mocks",
       "A port that's taken says which program holds it",
@@ -276,7 +283,7 @@ export const TOPICS: DocTopic[] = [
       "Responses to imported requests are checked against the spec: a test named “Matches the API spec” fails when a field or type drifts",
       "Update from API spec: a new version adds and updates operations and keeps your edits; removed ones stay, crossed out",
       "cURL commands (bash, cmd and PowerShell) by pasting",
-      "Copy any request as cURL, or as Kotlin, Swift, JavaScript or Python code",
+      "Copy any request as cURL, HTTPie, Wget or code: JavaScript, Python, Go, Java, Kotlin, Swift, C#, PHP, Ruby, Rust, Dart, C, PowerShell",
     ],
     tryIt: [
       "Open the collection menu → Import…, then drop a file, paste a cURL command, or enter a URL.",

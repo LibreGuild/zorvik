@@ -1,6 +1,6 @@
 ---
 title: GraphQL
-description: Send GraphQL queries and mutations with a schema-aware editor, variables, operation picking and introspection.
+description: Send GraphQL queries, mutations and subscriptions with a schema-aware editor, variables, operation picking and introspection.
 sidebar:
   order: 1
 ---
@@ -57,6 +57,24 @@ Placeholders are replaced as text, so put quotes around them when the value is a
 }
 ```
 
+## Subscriptions
+
+When the operation that runs is a `subscription`, the request becomes a live one: **Send** turns into **Subscribe**, and the response pane shows the results as they arrive, like a [WebSocket](../websocket/) log. The operation is sent first (marked **subscribe**), then each result appears as a received message; **Unsubscribe** ends it, and the log says when the server completes the subscription or rejects it.
+
+Below the query, the **Variables** pane gets a **Subscription** tab next to it:
+
+| Setting | Default | What it does |
+|---|---|---|
+| Transport | **WebSocket** | **WebSocket**: the `graphql-transport-ws` protocol (the graphql-ws library, Apollo Server 4 and later, Hasura, most servers). **WebSocket (legacy)**: `subscriptions-transport-ws` (subprotocol `graphql-ws`), Apollo Server 2 and 3. **SSE**: graphql-sse over Server-Sent Events (GraphQL Yoga and others). |
+| URL | the request URL | Where subscriptions connect when it isn't the request URL, for example `{{baseUrl}}/subscriptions`. For WebSocket, `http://` and `https://` become `ws://` and `wss://`. |
+| Connection params | none | WebSocket only: JSON sent in `connection_init`, where servers often expect the auth token, for example `{"authToken": "{{token}}"}`. |
+
+The request's headers, auth (including OAuth 2.0 tokens), cookies, proxy and TLS settings apply as for other requests. Over SSE the operation is a `POST` with `Accept: text/event-stream`.
+
+**When the server says no.** A server that closes the connection explains why with a close code, which the log puts in words: `4401` (credentials needed), `4403` (forbidden: check the connection params and auth), `4406` (it doesn't speak this protocol: try the other WebSocket transport), `4408` (the connection took too long to start). Validation errors come back as the server's GraphQL errors.
+
+**In collection runs, the CLI and for AI agents**, a subscription is read like an [event stream](../../testing/repeat-and-streams/): until a number of results or a time limit (the request's **Settings** tab, **In collection runs**). Post-response scripts get the results as a JSON array in `pm.response.json()` and as events named `next` in `pm.response.events`. Load tests don't send subscriptions.
+
 ## Schema introspection
 
 The schema powers completion, validation, hover docs and the schema panel.
@@ -112,12 +130,15 @@ body:
 | `body.graphql.query` | empty | The GraphQL document. |
 | `body.graphql.variables` | empty | Variables as JSON text (may contain `{{variables}}`). |
 | `body.graphql.operationName` | none | The operation to run. |
+| `body.graphql.transport` | `websocket` | Subscriptions: `websocket`, `websocketLegacy` or `sse`. |
+| `body.graphql.subscriptionUrl` | the request URL | Subscriptions: where they connect. |
+| `body.graphql.connectionParams` | none | WebSocket subscriptions: the `connection_init` payload as JSON text. |
 
 Switching the body to another type keeps the GraphQL fields in the file, so switching back loses nothing. See [Workspace format](../../reference/workspace-format/).
 
 ## Not supported
 
-- **Subscriptions** are not run by the GraphQL editor: there is no GraphQL-over-WebSocket or SSE transport built in. You can still speak the `graphql-transport-ws` protocol by hand in a [WebSocket request](../websocket/) (add a `Sec-WebSocket-Protocol: graphql-transport-ws` header).
+- Subscriptions over HTTP multipart responses (Apollo Router's `multipart/mixed`) are not built in.
 - Other request shapes, such as batched arrays of operations or persisted-query hashes, are not built in; send them with a JSON body instead.
 
 :::tip[AI agents]

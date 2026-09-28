@@ -11,7 +11,7 @@ In this table, **Mod** is <kbd>⌘</kbd> (Command) on macOS and <kbd>Ctrl</kbd> 
 
 | Shortcut | Does |
 |---|---|
-| <kbd>Mod</kbd> <kbd>Enter</kbd> | The main action of the tab: send the request (or connect a WebSocket, SSE, TCP, MQTT … session), start or restart a server, start or stop a load test, start or stop a collection run. |
+| <kbd>Mod</kbd> <kbd>Enter</kbd> | The main action of the tab: send the request (or connect a WebSocket, Socket.IO, SSE, TCP, MQTT … session, or subscribe), start or restart a server, start or stop a load test, start or stop a collection run. |
 | <kbd>Mod</kbd> <kbd>S</kbd> | Save the tab (request, load test, server …). |
 | <kbd>Mod</kbd> <kbd>N</kbd> | New HTTP request. |
 | <kbd>Mod</kbd> <kbd>W</kbd> | Close the tab (asks first when it has unsaved changes). |

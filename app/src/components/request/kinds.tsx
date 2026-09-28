@@ -14,6 +14,7 @@ import { GrpcResultPane } from "./GrpcResultPane";
 import { MqttOptions } from "./MqttOptions";
 import { MqttSubscriptions } from "./MqttSubscriptions";
 import { MqttTopicField } from "./MqttTopicField";
+import { SocketIoEventField, SocketIoOptions } from "./SocketIo";
 import { SocketOptions } from "./SocketOptions";
 
 export interface KindPaneProps {
@@ -46,7 +47,12 @@ export const KIND_EDITOR_TABS: Partial<Record<RequestKind, KindEditorTab[]>> = {
     { id: "metadata", label: "Metadata", View: GrpcMetadataTab },
     { id: "protos", label: "Proto files", View: GrpcProtoFilesTab },
   ],
+  // Shown before the HTTP-like tabs (Params, Headers, Auth, …).
+  socketio: [{ id: "connection", label: "Connection", View: SocketIoOptions }],
 };
+
+/** Kinds whose editor tabs come before the usual Params, Headers, Auth and Settings. */
+export const WITH_HTTP_TABS: RequestKind[] = ["socketio"];
 
 /** Replaces the method picker left of the URL (e.g. the DNS record type). */
 export const URL_PREFIXES: Partial<Record<RequestKind, ComponentType<KindPaneProps>>> = {
@@ -57,6 +63,7 @@ export const URL_PREFIXES: Partial<Record<RequestKind, ComponentType<KindPanePro
 /** Extra controls in the message composer (e.g. the MQTT topic). */
 export const COMPOSER_EXTRAS: Partial<Record<RequestKind, ComponentType<KindPaneProps>>> = {
   mqtt: MqttTopicField,
+  socketio: SocketIoEventField,
 };
 
 /** Placeholder text of the URL field per kind. */
@@ -68,4 +75,5 @@ export const URL_PLACEHOLDERS: Partial<Record<RequestKind, string>> = {
   dns: "example.com",
   mqtt: "mqtt://localhost:1883",
   grpc: "grpc://localhost:50051",
+  socketio: "http://localhost:3000/chat",
 };

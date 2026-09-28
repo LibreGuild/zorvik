@@ -1,5 +1,7 @@
-//! Socket client sessions (TCP, UDP, MQTT): `socket.connect`, `socket.send`,
-//! `socket.close`. Events go to the UI as [`StreamEvent::Socket`].
+//! Socket client sessions (TCP, UDP, MQTT, Socket.IO, GraphQL subscriptions): `socket.connect`,
+//! `socket.send`, `socket.close`. Events go to the UI as [`StreamEvent::Socket`].
+
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -88,10 +90,16 @@ impl Api {
         }
         let connected = tokio::select! {
             r = async {
-                let resolved = self.prepare(&ws, &p.request, p.path.as_deref())?;
+                let mut resolved = self.prepare(&ws, &p.request, p.path.as_deref())?;
                 let opts = crate::request_options(&settings, &p.request.settings)?;
-                let conn = self.connect_socket(&p.request, &resolved, &opts).await?;
-                Ok::<_, ApiError>((conn, resolved.unresolved))
+                self.authorize(&ws, &mut resolved, &opts).await?;
+                let jar = settings.cookie_jar.then(|| self.jar(&ws));
+                let unresolved = resolved.unresolved.clone();
+                let conn = self.connect_socket(&p.request, resolved, &opts, jar.as_ref()).await?;
+                if let Some(jar) = &jar {
+                    self.save_jar(&ws, jar);
+                }
+                Ok::<_, ApiError>((conn, unresolved))
             } => r,
             _ = cancel.cancelled() => Err(EngineError::cancelled().into()),
         };
@@ -102,7 +110,7 @@ impl Api {
                 return Err(e);
             }
         };
-        let SocketConnected { opened, session, mut events } = conn;
+        let SocketConnected { opened, session, mut events, .. } = conn;
         match lock(&self.inner.socket_sessions).get_mut(&p.conn_id) {
             Some(entry) if entry.generation == generation => entry.session = Some(session),
             // Closed or replaced while connecting: dropping the session closes it.
@@ -124,12 +132,33 @@ impl Api {
     }
 
     /// Open the connection for the request's kind (variables already resolved).
-    async fn connect_socket(
+    pub(crate) async fn connect_socket(
         &self,
         request: &Request,
-        resolved: &Resolved,
+        resolved: Resolved,
         opts: &zorvik_engine::RequestOptions,
+        jar: Option<&Arc<zorvik_engine::CookieJar>>,
     ) -> ApiResult<SocketConnected> {
+        if let Some(subscription) = resolved.subscription {
+            return Ok(
+                subscribe(&self.inner.client, resolved.request, subscription, opts, jar.map(|j| j.as_ref())).await?
+            );
+        }
+        if request.kind == RequestKind::SocketIo {
+            use zorvik_engine::socketio::{SocketIoConfig, SocketIoTransport as Transport};
+            use zorvik_workspace::formats::SocketIoTransport;
+            let config = SocketIoConfig {
+                path: request.socketio.path.clone(),
+                auth: resolved.socketio_auth,
+                transport: match request.socketio.transport {
+                    SocketIoTransport::Auto => Transport::Auto,
+                    SocketIoTransport::Websocket => Transport::Websocket,
+                    SocketIoTransport::Polling => Transport::Polling,
+                },
+            };
+            return Ok(self.inner.client.socketio(resolved.request, config, opts, jar.cloned()).await?);
+        }
+        let resolved = &resolved;
         let socket = &request.socket;
         let config = SocketConfig {
             framing: socket.framing,
@@ -142,9 +171,34 @@ impl Api {
             RequestKind::Tcp => Ok(self.inner.client.tcp(url, opts, config).await?),
             RequestKind::Udp => Ok(self.inner.client.udp(url, opts, config).await?),
             RequestKind::Mqtt => self.connect_mqtt(request, resolved, opts).await,
-            _ => Err(ApiError::invalid("This request is not a TCP, UDP or MQTT connection")),
+            _ => Err(ApiError::invalid("This request is not a TCP, UDP, MQTT or Socket.IO connection")),
         }
     }
+}
+
+/// Start a GraphQL subscription: `request` is the resolved HTTP request (its body the operation).
+pub(crate) async fn subscribe(
+    client: &zorvik_engine::Client,
+    mut request: zorvik_engine::HttpRequest,
+    subscription: zorvik_workspace::resolve::Subscription,
+    opts: &zorvik_engine::RequestOptions,
+    jar: Option<&zorvik_engine::CookieJar>,
+) -> Result<SocketConnected, EngineError> {
+    use zorvik_engine::GraphqlWsProtocol;
+    use zorvik_workspace::formats::GraphqlTransport;
+    request.url = subscription.url;
+    let protocol = match subscription.transport {
+        GraphqlTransport::Websocket => GraphqlWsProtocol::TransportWs,
+        GraphqlTransport::WebsocketLegacy => GraphqlWsProtocol::Legacy,
+        GraphqlTransport::Sse => {
+            request.method = "POST".into();
+            return client.graphql_sse(request, opts, jar).await;
+        }
+    };
+    let operation = serde_json::from_slice::<Value>(&request.body)
+        .map_err(|e| EngineError::invalid(format!("The GraphQL operation is not valid JSON: {e}")))?;
+    request.body = Default::default();
+    client.graphql_ws(request, protocol, operation, subscription.connection_params, opts, jar).await
 }
 
 // ---- MQTT -----------------------------------------------------------------------

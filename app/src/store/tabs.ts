@@ -17,6 +17,7 @@ import { SOCKET_KINDS, STREAM_KINDS } from "../lib/http";
 import { newId } from "../lib/ids";
 import { api, errorMessage, RpcError } from "../lib/rpc";
 import { confirm } from "./dialogs";
+import { isSubscription } from "./graphql";
 import { toast } from "./toasts";
 import { openModal } from "./ui";
 import { refreshEnvironments, refreshTree, refreshVariables, reloadWorkspace } from "./workspace";
@@ -169,6 +170,7 @@ export const REQUEST_KIND_NAMES: Record<NewRequestType, string> = {
   dns: "New DNS query",
   mqtt: "New MQTT client",
   grpc: "New gRPC request",
+  socketio: "New Socket.IO client",
 };
 
 export function newRequestDraft(type: NewRequestType = "http"): Request {
@@ -186,6 +188,8 @@ export function newRequestDraft(type: NewRequestType = "http"): Request {
     method: type === "dns" ? "A" : "GET",
     url: "",
     ...(composer ? { body: { type: "text", text: "" } } : {}),
+    // Socket.IO arguments are JSON.
+    ...(type === "socketio" ? { body: { type: "json", text: "" }, socketio: { event: "message" } } : {}),
   };
 }
 
@@ -198,7 +202,8 @@ function makeTab(draft: Request, path: string | null, saved: Request | null): Ta
     response: { status: "idle" },
     stream: emptyStream(),
     // GraphQL requests open on their query.
-    requestTab: draft.kind && draft.kind !== "http" && draft.kind !== "sse" ? "options" : draft.body?.type === "graphql" ? "body" : "params",
+    requestTab:
+      draft.kind === "socketio" ? "connection" : draft.kind && draft.kind !== "http" && draft.kind !== "sse" ? "options" : draft.body?.type === "graphql" ? "body" : "params",
     responseTab: "body",
   };
 }
@@ -489,13 +494,28 @@ export async function closeOtherTabs(keepId: string) {
 
 function stopTabActivity(tab: Tab) {
   if (tab.response.status === "loading") void api.cancel(tab.id).catch(() => {});
-  if (tab.stream.status === "open" || tab.stream.status === "connecting") closeStream(tab.draft.kind, tab.stream.connId);
+  if (tab.stream.status === "open" || tab.stream.status === "connecting") closeStream(tab.draft, tab.stream.connId);
 }
 
-function closeStream(kind: RequestKind | null | undefined, connId: string) {
-  if (kind === "websocket") void api.wsClose(connId).catch(() => {});
-  else if (kind === "sse") void api.sseClose(connId).catch(() => {});
-  else if (kind && SOCKET_KINDS.includes(kind)) void api.socketClose(connId).catch(() => {});
+/** Which API a live request uses: WebSocket, SSE, or the socket sessions (also GraphQL subscriptions). */
+function sessionApi(draft: Request): "ws" | "sse" | "socket" {
+  const kind = draft.kind ?? "http";
+  if (kind === "websocket") return "ws";
+  if (kind === "sse") return "sse";
+  return "socket";
+}
+
+/** The tab shows a live session: a stream kind, a GraphQL subscription, or one still open. */
+export function isLive(tab: Tab): boolean {
+  const kind = tab.draft.kind ?? "http";
+  return STREAM_KINDS.includes(kind) || isSubscription(tab.draft) || tab.stream.status === "open" || tab.stream.status === "connecting";
+}
+
+function closeStream(draft: Request, connId: string) {
+  const which = sessionApi(draft);
+  if (which === "ws") void api.wsClose(connId).catch(() => {});
+  else if (which === "sse") void api.sseClose(connId).catch(() => {});
+  else void api.socketClose(connId).catch(() => {});
 }
 
 /** Save the tab; unsaved drafts open the "Save as" dialog. */
@@ -594,7 +614,7 @@ export async function send(id: string) {
   const tab = reqTab(id);
   if (!tab) return;
   const kind = tab.draft.kind ?? "http";
-  if (STREAM_KINDS.includes(kind)) return connect(id);
+  if (STREAM_KINDS.includes(kind) || isSubscription(tab.draft)) return connect(id);
   // Already sending, like the Send button (hidden while loading): cancel first to resend. This also
   // stops one key press that reaches both a field's Enter handler and the global Mod+Enter from sending twice.
   if (tab.response.status === "loading") return;
@@ -641,27 +661,28 @@ export async function connect(id: string) {
     return;
   }
   const connId = newId();
-  const kind = tab.draft.kind;
+  const which = sessionApi(tab.draft);
   updateTab(id, (t) => ({
     stream: { ...t.stream, status: "connecting", connId, error: null, opened: null },
   }));
-  pushMessage(id, { direction: "info", kind: "info", text: `Connecting to ${tab.draft.url}…` });
+  const subscriptionUrl = isSubscription(tab.draft) ? tab.draft.body?.graphql?.subscriptionUrl?.trim() : "";
+  pushMessage(id, { direction: "info", kind: "info", text: `Connecting to ${subscriptionUrl || tab.draft.url}…` });
   try {
     let opened: StreamOpened | SocketOpened;
     let summary: string;
-    if (kind && SOCKET_KINDS.includes(kind)) {
+    if (which === "socket") {
       const r = await api.socketConnect(connId, tab.draft, tab.path);
       opened = r.opened;
       summary = [r.opened.protocol, r.opened.remoteAddr, `${Math.round(r.opened.timing.totalMs)} ms`].filter(Boolean).join(" · ");
     } else {
-      const r = kind === "websocket" ? await api.wsConnect(connId, tab.draft, tab.path) : await api.sseConnect(connId, tab.draft, tab.path);
+      const r = which === "ws" ? await api.wsConnect(connId, tab.draft, tab.path) : await api.sseConnect(connId, tab.draft, tab.path);
       opened = r;
       summary = `${r.meta.status} ${r.meta.statusText} · ${Math.round(r.timing.totalMs)} ms`;
     }
     // Disconnected, closed or replaced while connecting: close it rather than leak it (closing
     // before it opened was a no-op on the backend).
     if (reqTab(id)?.stream.connId !== connId) {
-      closeStream(kind, connId);
+      closeStream(tab.draft, connId);
       return;
     }
     updateTab(id, (t) => ({ stream: { ...t.stream, status: "open", opened } }));
@@ -677,8 +698,9 @@ export async function connect(id: string) {
 export async function disconnect(id: string) {
   const tab = reqTab(id);
   if (!tab) return;
-  if (tab.draft.kind === "websocket") await api.wsClose(tab.stream.connId).catch(() => {});
-  else if (tab.draft.kind === "sse") await api.sseClose(tab.stream.connId).catch(() => {});
+  const which = sessionApi(tab.draft);
+  if (which === "ws") await api.wsClose(tab.stream.connId).catch(() => {});
+  else if (which === "sse") await api.sseClose(tab.stream.connId).catch(() => {});
   else await api.socketClose(tab.stream.connId).catch(() => {});
   if (tab.stream.status === "connecting") {
     updateTab(id, (t) => ({ stream: { ...t.stream, status: "closed", connId: newId() } }));
@@ -696,7 +718,18 @@ export async function wsSend(id: string, text: string, binary: boolean) {
       toast("error", "Invalid hex", "Binary messages are entered as hex bytes, e.g. 48 65 6c 6c 6f");
       return;
     }
-    if (tab.draft.kind === "mqtt") {
+    if (tab.draft.kind === "socketio") {
+      // The composer's text is the arguments: JSON, or one string in text mode, or one binary argument.
+      const options = tab.draft.socketio;
+      const event = options?.event?.includes("{{") ? await api.renderVariables(options.event) : (options?.event ?? "");
+      if (!event.trim()) {
+        toast("info", "Enter the name of the event to emit");
+        return;
+      }
+      const rendered = base64 !== null ? "" : text.includes("{{") ? await api.renderVariables(text) : text;
+      const args = base64 !== null || tab.draft.body?.type === "json" ? rendered : JSON.stringify(rendered);
+      await api.socketSend(tab.stream.connId, { type: "emit", event: event.trim(), args, base64, ack: options?.ack ?? false });
+    } else if (tab.draft.kind === "mqtt") {
       // Text or bytes, always as a publish (the session has no plain "send").
       const mqtt = tab.draft.mqtt;
       const topic = mqtt?.topic?.includes("{{") ? await api.renderVariables(mqtt.topic) : (mqtt?.topic ?? "");

@@ -60,7 +60,7 @@ Drag the border between the sidebar and the work area to resize the sidebar (200
 Every request, server, load test, collection run and tool opens in a tab.
 
 - **New tab**: the **+** at the right end of the tab bar offers every kind of request. <kbd>Mod</kbd>+<kbd>N</kbd> opens a new HTTP request.
-- **Badges**: a request tab shows its method (or `GQL`, `WS`, `SSE`, `TCP`, `UDP`, `DNS`, `MQTT`, `gRPC`), servers and load tests their kind. Hover a tab to see its file.
+- **Badges**: a request tab shows its method (or `GQL`, `WS`, `SSE`, `TCP`, `UDP`, `DNS`, `MQTT`, `gRPC`, `SIO`), servers and load tests their kind. Hover a tab to see its file.
 - **Unsaved**: a tab that was never saved shows its name in italics. A tab with unsaved changes shows a dot where the close button is; hover it to close.
 - **Live**: a green dot means a connection is open or a request is running; a pulsing dot means a load test or collection run is going.
 - **Close**: <kbd>Mod</kbd>+<kbd>W</kbd>, the **×**, or a middle click. Right-click a tab for **Close** and **Close others**. Closing a tab with unsaved changes asks **Discard unsaved changes?** A new tab you haven't typed anything into closes without asking.

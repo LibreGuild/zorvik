@@ -9,7 +9,8 @@ use base64::Engine as _;
 use bytes::Bytes;
 use zorvik_engine::{Header, HttpRequest};
 use zorvik_formats::{
-    ApiKeyLocation, Auth, BodyType, FolderMeta, KeyValue, OAuth2Config, Request, RequestKind, WorkspaceMeta,
+    ApiKeyLocation, Auth, BodyType, FolderMeta, GraphqlTransport, KeyValue, OAuth2Config, Request, RequestKind,
+    WorkspaceMeta,
 };
 
 use crate::signing::{Challenge, Signer};
@@ -40,8 +41,22 @@ pub struct Resolved {
     pub oauth2: Option<OAuth2Config>,
     /// Digest or NTLM: credentials that answer the server's challenge while sending.
     pub challenge: Option<Challenge>,
+    /// A GraphQL subscription: where and how it connects (`request` carries the operation).
+    pub subscription: Option<Subscription>,
+    /// Socket.IO: the connection's `auth` payload.
+    pub socketio_auth: Option<serde_json::Value>,
     /// Variables referenced but not defined.
     pub unresolved: Vec<String>,
+}
+
+/// A GraphQL subscription, variables filled in.
+#[derive(Debug, Clone)]
+pub struct Subscription {
+    pub transport: GraphqlTransport,
+    /// The subscription URL, or the request URL.
+    pub url: String,
+    /// WebSocket: the `connection_init` payload.
+    pub connection_params: Option<serde_json::Value>,
 }
 
 /// The auth that applies: the request's own, else the nearest folder's, else the workspace's.
@@ -139,6 +154,23 @@ pub fn resolve(request: &Request, inherit: &Inheritance<'_>, vars: &VarContext) 
         }
     }
 
+    let subscription = match request.is_graphql_subscription() {
+        true => {
+            let g = &request.body.graphql;
+            let own_url = render(g.subscription_url.trim());
+            Some(Subscription {
+                transport: g.transport,
+                url: if own_url.is_empty() { url.clone() } else { own_url },
+                connection_params: json_payload(&render(&g.connection_params), "Connection params are")?,
+            })
+        }
+        false => None,
+    };
+    let socketio_auth = match request.kind {
+        RequestKind::SocketIo => json_payload(&render(&request.socketio.auth), "The auth payload is")?,
+        _ => None,
+    };
+
     let mut http = HttpRequest { method: request.method.trim().to_string(), url, headers, body };
     // Signatures cover the final method, URL, headers and body.
     if let Some(signer) = signer {
@@ -148,8 +180,23 @@ pub fn resolve(request: &Request, inherit: &Inheritance<'_>, vars: &VarContext) 
         request: http,
         oauth2,
         challenge,
+        subscription,
+        socketio_auth,
         unresolved: missing.into_iter().chain(empty_path_params).collect(),
     })
+}
+
+/// JSON typed in the request (variables filled in), `None` when blank. Undefined variables
+/// become `null` rather than failing, as in GraphQL variables.
+fn json_payload(text: &str, what_is: &str) -> Result<Option<serde_json::Value>> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str(text)
+        .or_else(|e| serde_json::from_str(&undefined_as_null(text)).map_err(|_| e))
+        .map(Some)
+        .map_err(|e| Error::invalid(format!("{what_is} not valid JSON: {e}")))
 }
 
 /// `text` with each `{{…}}` left by rendering (an undefined variable) as `null`.
@@ -579,6 +626,7 @@ mod tests {
                 query: "query User($id: ID!) { user(id: $id) { name } } # {{token}}".into(),
                 variables: "{\"id\": \"{{id}}\", \"n\": 2}".into(),
                 operation_name: Some("User".into()),
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -668,5 +716,46 @@ mod tests {
         assert_eq!(r.oauth2.as_ref().unwrap().client_id, "t0k");
         apply_token(&mut r, "abc");
         assert!(r.request.headers.iter().any(|h| h.value == "Bearer abc"));
+    }
+
+    #[test]
+    fn graphql_subscription_and_socketio_auth() {
+        let mut req = Request::new("r", RequestKind::Http);
+        req.url = "{{base}}/graphql".into();
+        req.body.body_type = BodyType::Graphql;
+        req.body.graphql.query = "subscription OnTick { tick }".into();
+        let r = resolve_simple(&req, &[]);
+        let sub = r.subscription.expect("a subscription");
+        assert_eq!((sub.transport, sub.url.as_str()), (GraphqlTransport::Websocket, "https://api.test/graphql"));
+        assert!(sub.connection_params.is_none());
+        // The operation goes where an HTTP body would.
+        assert_eq!(r.request.body, Bytes::from_static(br#"{"query":"subscription OnTick { tick }"}"#));
+
+        req.body.graphql.transport = GraphqlTransport::Sse;
+        req.body.graphql.subscription_url = " {{base}}/stream ".into();
+        req.body.graphql.connection_params = r#"{"authToken": "{{token}}", "n": {{undefined}}}"#.into();
+        let sub = resolve_simple(&req, &[]).subscription.unwrap();
+        assert_eq!(sub.url, "https://api.test/stream");
+        assert_eq!(sub.connection_params, Some(serde_json::json!({ "authToken": "t0k", "n": null })));
+        req.body.graphql.connection_params = "{nope".into();
+        let m = meta();
+        let inherit = Inheritance { workspace: &m, folders: &[], base_dir: Path::new("."), outside_files: false };
+        let e = resolve(&req, &inherit, &ctx()).unwrap_err();
+        assert!(e.to_string().contains("Connection params are not valid JSON"), "{e}");
+
+        // Queries and mutations are plain HTTP.
+        req.body.graphql.query = "query { a } subscription B { b }".into();
+        req.body.graphql.connection_params.clear();
+        assert!(resolve_simple(&req, &[]).subscription.is_none());
+        req.body.graphql.operation_name = Some("B".into());
+        assert!(resolve_simple(&req, &[]).subscription.is_some());
+
+        let mut io = Request::new("io", RequestKind::SocketIo);
+        io.url = "{{base}}/chat".into();
+        io.socketio.auth = r#"{"token": "{{token}}"}"#.into();
+        let r = resolve_simple(&io, &[]);
+        assert_eq!(r.socketio_auth, Some(serde_json::json!({ "token": "t0k" })));
+        assert_eq!(r.request.url, "https://api.test/chat");
+        assert!(r.request.body.is_empty());
     }
 }

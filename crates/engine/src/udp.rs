@@ -51,7 +51,7 @@ impl Client {
         let (out_tx, out_rx) = mpsc::unbounded_channel();
         let (ev_tx, ev_rx) = mpsc::unbounded_channel();
         tokio::spawn(run_udp(socket, target, config, out_rx, ev_tx));
-        Ok(SocketConnected { opened, session: SocketSession { tx: out_tx }, events: ev_rx })
+        Ok(SocketConnected { opened, meta: None, session: SocketSession { tx: out_tx }, events: ev_rx })
     }
 }
 

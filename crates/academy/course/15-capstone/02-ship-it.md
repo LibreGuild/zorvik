@@ -255,11 +255,11 @@ lab:
             method: server.start
             params: { id: Rocket Pizza mock, server: *rocketMock }
     - text: |
-        **Code for Android.** Open **List pizzas**, click **⋯** (More actions, next to Save) → **Copy as cURL or code…**, choose **Kotlin (OkHttp, Android)** and press **Copy**. That's the mobile team's first line of networking code, ready to paste.
+        **Code for Android.** Open **List pizzas**, click **⋯** (More actions, next to Save) → **Copy as cURL or code…**, choose **Kotlin** (it uses OkHttp, the Android favourite) and press **Copy**. That's the mobile team's first line of networking code, ready to paste.
       hints:
-        - Zorvik writes the request as code in cURL, Kotlin, Swift, JavaScript or Python, with the variables filled in.
-        - The ⋯ button sits right of the Save button in the request tab. The Format list has a Code group.
-        - List pizzas → ⋯ → Copy as cURL or code… → Format Kotlin (OkHttp, Android) → Copy.
+        - Zorvik writes the request as cURL or code in 16 languages, with the variables filled in.
+        - The ⋯ button sits right of the Save button in the request tab. The languages are listed on the left of the dialog; type kotlin or android in its search box.
+        - List pizzas → ⋯ → Copy as cURL or code… → Kotlin → Copy.
       check:
         call:
           method: export.snippet

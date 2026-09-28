@@ -1,6 +1,6 @@
 id: realtime
-title: "Real-time: WebSocket, SSE, MQTT"
-summary: Stop asking "anything new?" and let servers push live updates to you, over WebSocket, Server-Sent Events and MQTT.
+title: "Real-time: WebSocket, SSE, MQTT, Socket.IO"
+summary: Stop asking "anything new?" and let servers push live updates to you, over WebSocket, Server-Sent Events, MQTT and Socket.IO.
 color: "#2E6FB5"
 image: realtime
 badge:

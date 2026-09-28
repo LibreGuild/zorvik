@@ -177,6 +177,6 @@ Every HTTP request you send from a tab (GraphQL included) is recorded in the wor
 | What is recorded | The request as you wrote it (with its `{{variables}}`, so secret values from environments aren't stored), the URL as sent, the status or error, the duration, the body size and the time. Response bodies are not stored. |
 | Secrets in URLs | Values of secret variables in the sent URL (such as an API key in the query) are replaced by `{{name}}` |
 | Failed requests | Recorded, with their error. Cancelled requests and requests stopped by a pre-request script are not. |
-| Not recorded | Collection runs, requests from the network tools, and other request kinds (WebSocket, SSE, gRPC, TCP, UDP, DNS, MQTT) |
+| Not recorded | Collection runs, requests from the network tools, GraphQL subscriptions, and other request kinds (WebSocket, Socket.IO, SSE, gRPC, TCP, UDP, DNS, MQTT) |
 | How many | The newest 500 per workspace. Change it in **Settings → Data & privacy → History size** (10 to 100000). |
 | Where | `history.sqlite3` in the app data folder, readable only by your user on macOS and Linux. Never in the workspace. |

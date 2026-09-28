@@ -103,7 +103,7 @@ fn request_schema() -> Value {
     obj(
         json!({
             "name": string("Request name, e.g. \"Create order\" (also its file name)."),
-            "kind": { "type": "string", "enum": ["http", "grpc", "dns", "websocket", "sse", "tcp", "udp", "mqtt"], "description": "Default http. GraphQL is http with a graphql body." },
+            "kind": { "type": "string", "enum": ["http", "grpc", "dns", "websocket", "sse", "tcp", "udp", "mqtt", "socketio"], "description": "Default http. GraphQL is http with a graphql body. socketio: a Socket.IO client (url is the server and namespace, e.g. http://localhost:3000/chat)." },
             "method": string("HTTP method (default GET). gRPC: package.Service/Method. DNS: the record type (A, AAAA, MX…)."),
             "url": string("Full URL with the query string, using {{variables}}: {{baseUrl}}/orders/{{orderId}}?expand=items. :name path segments take their value from pathParams ({{baseUrl}}/users/:id). gRPC: grpc://host:port (grpcs:// for TLS). DNS: the name."),
             "query": {
@@ -124,7 +124,12 @@ fn request_schema() -> Value {
                 "form": kv,
                 "multipart": { "type": "array", "items": obj(json!({ "key": { "type": "string" }, "value": { "type": "string", "description": "Text, or a file path when file is true" }, "file": { "type": "boolean" } }), &["key", "value"]) },
                 "file": string("Binary body: a file inside the workspace folder."),
-                "graphql": obj(json!({ "query": { "type": "string" }, "variables": string("Variables as JSON text."), "operationName": { "type": "string" } }), &[]),
+                "graphql": obj(json!({
+                    "query": { "type": "string" }, "variables": string("Variables as JSON text."), "operationName": { "type": "string" },
+                    "transport": { "type": "string", "enum": ["websocket", "websocketLegacy", "sse"], "description": "Subscriptions only: websocket (graphql-transport-ws, default), websocketLegacy (subscriptions-transport-ws), sse (graphql-sse)." },
+                    "subscriptionUrl": string("Subscriptions only: where they connect when not the request URL (e.g. {{baseUrl}}/subscriptions)."),
+                    "connectionParams": string("WebSocket subscriptions: the connection_init payload as JSON text, e.g. {\"authToken\": \"{{token}}\"}."),
+                }), &[]),
             }), &["type"]),
             "auth": auth_schema(),
             "scripts": obj(json!({
@@ -133,6 +138,13 @@ fn request_schema() -> Value {
             }), &[]),
             "settings": obj(json!({ "timeoutMs": { "type": "integer" }, "followRedirects": { "type": "boolean" }, "verifyTls": { "type": "boolean" } }), &[]),
             "grpc": obj(json!({ "protoFiles": { "type": "array", "items": { "type": "string" }, "description": ".proto files (relative to the workspace folder). Empty: server reflection." } }), &[]),
+            "socketio": obj(json!({
+                "path": string("The server's Socket.IO path (default /socket.io/)."),
+                "auth": string("The connection's auth payload as JSON text, e.g. {\"token\": \"{{token}}\"}."),
+                "transport": { "type": "string", "enum": ["auto", "websocket", "polling"], "description": "Default auto: WebSocket, or long-polling when the server doesn't take WebSocket." },
+                "event": string("The event the message composer emits."),
+                "ack": { "type": "boolean", "description": "The composer asks the server to acknowledge." },
+            }), &[]),
             "docs": string("Markdown notes: what it does, where the handler is in the code."),
             "examples": {
                 "type": "array",
@@ -425,7 +437,7 @@ fn defs() -> Vec<Def> {
         Def {
             name: "send_request",
             title: "Send a request",
-            description: "Send a saved request (`path`), a saved one with changes (`path` + `request`: only the fields given change, nothing is saved), or an unsaved one (`request`), with its scripts and tests, and return the response. HTTP, GraphQL, gRPC (unary), DNS, and Server-Sent Events: an SSE request is read until the event named in stream.untilEvent, stream.maxEvents events, or stream.timeoutMs, and returns the events. For a large JSON response, pass `filter` (JSONPath or jq) to get only the part you need: it runs on the whole body. The user sees it in Zorvik.",
+            description: "Send a saved request (`path`), a saved one with changes (`path` + `request`: only the fields given change, nothing is saved), or an unsaved one (`request`), with its scripts and tests, and return the response. HTTP, GraphQL, gRPC (unary), DNS, and Server-Sent Events: an SSE request is read until the event named in stream.untilEvent, stream.maxEvents events, or stream.timeoutMs, and returns the events. A GraphQL subscription is read the same way: each result is an event named \"next\". For a large JSON response, pass `filter` (JSONPath or jq) to get only the part you need: it runs on the whole body. The user sees it in Zorvik.",
             schema: obj(
                 json!({
                     "path": path("Saved request"),
@@ -437,9 +449,9 @@ fn defs() -> Vec<Def> {
                         "expression": string("JSONPath ($.items[?@.price > 10].name) or jq (.items[] | select(.price > 10) | .name)."),
                     }), &["language", "expression"]),
                     "stream": obj(json!({
-                        "untilEvent": string("SSE: stop after the first event with this name (\"message\" for events without a name)."),
-                        "maxEvents": { "type": "integer", "description": "SSE: stop after this many events (default 100; 0 = only the time limit)." },
-                        "timeoutMs": { "type": "integer", "description": "SSE: stop after this long (default 10000, at most 120000)." },
+                        "untilEvent": string("SSE: stop after the first event with this name (\"message\" for events without a name; \"next\" for a subscription's results)."),
+                        "maxEvents": { "type": "integer", "description": "SSE and subscriptions: stop after this many events (default 100; 0 = only the time limit)." },
+                        "timeoutMs": { "type": "integer", "description": "SSE and subscriptions: stop after this long (default 10000, at most 120000)." },
                     }), &[]),
                 }),
                 &[],
@@ -940,6 +952,9 @@ impl Api {
         match self.resolve_only(ws, request, path) {
             Ok(resolved) => {
                 urls.push(resolved.request.url.clone());
+                if let Some(subscription) = &resolved.subscription {
+                    urls.push(subscription.url.clone());
+                }
                 if let Some(config) = &resolved.oauth2 {
                     urls.push(config.token_url.clone());
                 }
@@ -1742,6 +1757,9 @@ impl Api {
     ) -> Outcome {
         let request_id = format!("agent-{}", uuid::Uuid::new_v4());
         let target = saved_path.clone().map(|path| AgentTarget::Request { path });
+        if request.is_graphql_subscription() {
+            return self.read_sse_for_agent(c, ws, &request, path.as_deref(), target).await;
+        }
         match request.kind {
             RequestKind::Http => {
                 let params = SendParams {
@@ -1815,7 +1833,8 @@ impl Api {
         }
     }
 
-    /// An SSE request read to the end the agent asked for (`stream`), with its events.
+    /// An SSE request (or a GraphQL subscription, whose results are `next` events) read to the
+    /// end the agent asked for (`stream`), with its events.
     async fn read_sse_for_agent(
         &self,
         c: &Call<'_>,
@@ -1843,7 +1862,12 @@ impl Api {
             timeout_ms: stream.timeout_ms.unwrap_or(10_000).clamp(100, MAX_SSE_WAIT_MS),
         };
         let started = Instant::now();
-        let reading = self.read_event_stream(ws, request, path, &until, &c.cancel);
+        let reading = async {
+            match request.is_graphql_subscription() {
+                true => self.read_subscription(ws, request, path, &until, &c.cancel).await,
+                false => self.read_event_stream(ws, request, path, &until, &c.cancel).await,
+            }
+        };
         let ticking = async {
             loop {
                 tokio::time::sleep(Duration::from_secs(5)).await;

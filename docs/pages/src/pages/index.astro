@@ -28,6 +28,7 @@ const PROTOCOLS = [
   { label: "GraphQL", color: "#ec7fbd" },
   { label: "gRPC", color: "#a4aaf2" },
   { label: "WebSocket", color: "#6fbac5" },
+  { label: "Socket.IO", color: "#6fd3b4" },
   { label: "SSE", color: "#e3935f" },
   { label: "MQTT", color: "#c79be0" },
   { label: "TCP", color: "#8fb0e3" },
@@ -96,7 +97,7 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Zorvik: one workbench for every wire</title>
-    <meta name="description" content="Zorvik is a free, open-source desktop app to build, test, mock and load test APIs over HTTP, GraphQL, gRPC, WebSocket, SSE, MQTT, TCP, UDP and DNS. Local first, for Windows, macOS and Linux." />
+    <meta name="description" content="Zorvik is a free, open-source desktop app to build, test, mock and load test APIs over HTTP, GraphQL, gRPC, WebSocket, Socket.IO, SSE, MQTT, TCP, UDP and DNS. Local first, for Windows, macOS and Linux." />
     <meta name="theme-color" content="#161514" />
     <link rel="icon" href={`${base}favicon.png`} />
     {NEXT ? <meta name="robots" content="noindex" /> : <link rel="canonical" href={`https://libreguild.github.io${base}`} />}
@@ -144,7 +145,7 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
             </a>
             <h1>One workbench<br />for <span class="grad">every wire.</span></h1>
             <p class="lead">
-              Build, test, mock and load test APIs over HTTP, GraphQL, gRPC, WebSocket, SSE, MQTT, TCP, UDP and DNS, and see what really happens on the network.
+              Build, test, mock and load test APIs over HTTP, GraphQL, gRPC, WebSocket, Socket.IO, SSE, MQTT, TCP, UDP and DNS, and see what really happens on the network.
             </p>
             <div class="cta-row">
               <a class="btn btn-primary btn-lg" id="hero-download" href="#download" data-goatcounter-click="download-hero">
@@ -161,7 +162,7 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
             </p>
           </div>
           <div class="hero-art">
-            <svg class="wire" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Zorvik at the center of every protocol: HTTP, GraphQL, gRPC, WebSocket, SSE, MQTT, TCP, UDP and DNS">
+            <svg class="wire" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Zorvik at the center of every protocol: HTTP, GraphQL, gRPC, WebSocket, Socket.IO, SSE, MQTT, TCP, UDP and DNS">
               <defs>
                 <radialGradient id="pkt-out"><stop offset="0" stop-color="#ffd2bd" /><stop offset=".45" stop-color="#d97757" /><stop offset="1" stop-color="#d97757" stop-opacity="0" /></radialGradient>
                 <radialGradient id="pkt-back"><stop offset="0" stop-color="#cdf3ee" /><stop offset=".45" stop-color="#4fb2ad" /><stop offset="1" stop-color="#4fb2ad" stop-opacity="0" /></radialGradient>
@@ -227,7 +228,7 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
         <div class="marquee-track">
           {[0, 1].map((copy) => (
             <ul aria-hidden={copy === 1 ? "true" : undefined}>
-              {["HTTP/1.1", "HTTP/2", "HTTP/3", "GraphQL", "gRPC", "WebSocket", "Server-Sent Events", "MQTT 3.1.1 & 5", "TCP", "UDP", "DNS over UDP, TCP, TLS, HTTPS", "OpenAPI 3", "Swagger 2", "Postman", "cURL", "OAuth 2.0", "mTLS", "JUnit"].map((p) => <li>{p}</li>)}
+              {["HTTP/1.1", "HTTP/2", "HTTP/3", "GraphQL", "GraphQL subscriptions", "gRPC", "WebSocket", "Socket.IO 3 & 4", "Server-Sent Events", "MQTT 3.1.1 & 5", "TCP", "UDP", "DNS over UDP, TCP, TLS, HTTPS", "OpenAPI 3", "Swagger 2", "Postman", "cURL", "OAuth 2.0", "mTLS", "JUnit"].map((p) => <li>{p}</li>)}
             </ul>
           ))}
         </div>

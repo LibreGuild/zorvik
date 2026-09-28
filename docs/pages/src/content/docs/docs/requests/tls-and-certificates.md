@@ -99,11 +99,11 @@ settings:
 The certificate settings apply to every TLS connection Zorvik makes as a client:
 
 - HTTPS requests, including GraphQL and HTTP/3
-- WebSocket (`wss://`), event streams, gRPC (`grpcs://`), TCP over TLS, MQTT over TLS (`mqtts://`), DNS over TLS and DNS over HTTPS
+- WebSocket (`wss://`), Socket.IO and GraphQL subscriptions over TLS, event streams, gRPC (`grpcs://`), TCP over TLS, MQTT over TLS (`mqtts://`), DNS over TLS and DNS over HTTPS
 - OAuth 2.0 token requests and OpenAPI imports from a URL
 - Load tests
 
-WebSocket, event stream, gRPC, TCP and MQTT requests have the same **Verify TLS certificates** setting in their **Settings** tab.
+WebSocket, Socket.IO, event stream, gRPC, TCP and MQTT requests have the same **Verify TLS certificates** setting in their **Settings** tab.
 
 :::note[Command line]
 The `zorvik` command line doesn't read the app's settings, so the extra CA and the client certificate don't apply there. It trusts the OS trust store, and `-k` (`--insecure`) skips verification. See [Command line](../../cli/overview/).

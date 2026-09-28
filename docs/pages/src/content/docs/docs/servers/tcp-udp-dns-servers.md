@@ -2,7 +2,7 @@
 title: TCP, UDP & DNS servers
 description: Run TCP and UDP servers that echo or answer by rules in text or hex, and a DNS server that answers with your own records.
 sidebar:
-  order: 6
+  order: 7
 ---
 
 Below HTTP, Zorvik runs three kinds of servers: **TCP** and **UDP** servers that answer messages (echo, reply rules or by hand), and a **DNS server** that answers with your own records and forwards the rest.

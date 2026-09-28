@@ -56,11 +56,11 @@ lab:
             method: GET
             url: "{{api}}/forecast?city=Lisbon"
             headers: [{ key: Accept, value: application/json }, { key: X-Client, value: bootcamp }]
-    - text: Your teammate writes Python. Open **More actions** (the **⋯** next to Save) → **Copy as cURL or code…** and choose **Python (requests)** in the format menu. (JavaScript works too.)
+    - text: Your teammate writes Python. Open **More actions** (the **⋯** next to Save) → **Copy as cURL or code…** and choose **Python** in the list of languages. (Any other language works too.)
       hints:
-        - The same dialog makes cURL for bash, the Windows Command Prompt and PowerShell, and code in four languages.
-        - The format menu is at the top left of the dialog. Code languages are under "Code".
-        - "Pick Python (requests) or JavaScript (fetch). The code appears right away; Copy puts it on the clipboard."
+        - The same dialog makes cURL for bash, the Windows Command Prompt and PowerShell, and code in 16 languages.
+        - The languages are listed on the left of the dialog, under "Code". Type in the search box to find one.
+        - "Pick Python (requests is the default library; HTTPX is next to it). The code appears right away; Copy puts it on the clipboard."
       check:
         call: { method: export.snippet, ok: true }
       solution:
@@ -126,13 +126,16 @@ curl 'https://api.example.com/forecast?city=Lisbon' | the URL, query included
 In a request tab, open **More actions** (the **⋯** next to Save) → **Copy as cURL or code…**. You can pick:
 
 - **cURL** for bash and zsh (macOS, Linux), the Windows Command Prompt or PowerShell.
-- **Code:** Kotlin (OkHttp, Android), Swift (URLSession), JavaScript (fetch) and Python (requests).
+- **HTTPie, Wget and PowerShell** commands.
+- **Code** in JavaScript (fetch or axios), Python (requests or HTTPX), Go, Java, Kotlin (OkHttp, Android), Swift (URLSession), C#, PHP, Ruby, Rust, Dart (Flutter) and C (libcurl).
+
+A comment at the top of the code tells you when it can't do something Zorvik does for you, like answering a Digest login or signing each request.
 
 **Substitute variables** decides what the code says: on, it holds real values, ready to run; off, it keeps `{{baseUrl}}` and `{{apiKey}}`, safe to paste in a chat.
 
 ```flow
 API docs, browser -[cURL]-> Import -> Request in Zorvik
-Request in Zorvik -[Copy as cURL or code]-> Terminal, Python, JavaScript, Swift, Kotlin
+Request in Zorvik -[Copy as cURL or code]-> Terminal, Python, JavaScript, Go, Java, Swift, Kotlin, …
 ```
 
 > [!note] Think of it like…

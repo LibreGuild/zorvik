@@ -8,7 +8,7 @@ sidebar:
 Two request settings make collection runs work with APIs that don't answer right away:
 
 - **Repeat until** sends a request again and again until a condition holds, for example until a background job reports `done`.
-- **Stream settings** say how long a run reads a **Server-Sent Events** (SSE) request, so its tests can check the events.
+- **Stream settings** say how long a run reads a **Server-Sent Events** (SSE) request or a **GraphQL subscription**, so its tests can check the events.
 
 Both only apply in [collection runs](../collection-runner/). A single send in the app ignores them.
 
@@ -124,6 +124,15 @@ A Server-Sent Events request sends one HTTP request and reads events from the an
 :::note
 SSE requests run in the app's Runner tab, in `zorvik run` and in runs an AI agent starts.
 :::
+
+[GraphQL subscriptions](../../protocols/graphql/#subscriptions) run the same way: each result is an event named `next`, and `pm.response.json()` is the list of results (`[{"data": …}, …]`), so a test can check them all:
+
+```js
+pm.test("three ticks", () => {
+  const ticks = pm.response.json().map((r) => r.data.tick);
+  pm.expect(ticks).to.eql([1, 2, 3]);
+});
+```
 
 ### Stream settings
 

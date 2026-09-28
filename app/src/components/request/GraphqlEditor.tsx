@@ -2,7 +2,7 @@
 // hover docs, ⌘-click opens the type), Variables (JSON), operation picker, Prettify and the
 // Schema panel. The schema is introspected with the request's own URL, headers and auth and
 // loads by itself once the URL's host is known (store/graphql.ts).
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { type Diagnostic, linter } from "@codemirror/lint";
 import type { EditorState } from "@codemirror/state";
@@ -13,8 +13,10 @@ import { getHoverInformation } from "graphql-language-service";
 import { RefreshCw, Wand2 } from "lucide-react";
 import type { Body } from "../../bindings/Body";
 import type { GraphqlBody } from "../../bindings/GraphqlBody";
+import type { GraphqlTransport } from "../../bindings/GraphqlTransport";
 import {
   canAutoLoad,
+  isSubscription,
   keptOperationName,
   loadSchema,
   namedType,
@@ -30,9 +32,16 @@ import { toast } from "../../store/toasts";
 import { useVariableNames, useWorkspace } from "../../store/workspace";
 import { CodeEditor } from "../CodeEditor";
 import { Splitter } from "../Splitter";
-import { Button, cx, IconButton, Select, Tooltip } from "../ui";
+import { VarInput } from "../VarInput";
+import { Button, cx, IconButton, Segmented, Select, Tooltip } from "../ui";
 import { SchemaPanel, schemaStatus, StatusDot } from "./GraphqlSchemaPanel";
 import { beautifyJson } from "./jsonFormat";
+
+const TRANSPORTS: { id: GraphqlTransport; label: string; hint: string }[] = [
+  { id: "websocket", label: "WebSocket", hint: "graphql-transport-ws: the graphql-ws library, Apollo Server 4+, Hasura and most servers." },
+  { id: "websocketLegacy", label: "WebSocket (legacy)", hint: "subscriptions-transport-ws (subprotocol graphql-ws): Apollo Server 2 and 3." },
+  { id: "sse", label: "SSE", hint: "graphql-sse over Server-Sent Events: GraphQL Yoga and others." },
+];
 
 /** Wait after the URL changes before introspecting it by itself. */
 const AUTO_LOAD_DELAY_MS = 700;
@@ -174,6 +183,8 @@ export function GraphqlEditor({ tab, body, onChange, onSubmit }: { tab: Tab; bod
   const setGql = (patch: Partial<GraphqlBody>) => onChange({ ...body, graphql: { ...gql, ...patch } });
   const area = useRef<HTMLDivElement>(null);
   const column = useRef<HTMLDivElement>(null);
+  const subscription = isSubscription(tab.draft);
+  const [pane, setPane] = useState<"variables" | "connection">("variables");
 
   // Introspect by itself once the URL settles, unless its host still has undefined variables.
   const latest = useRef(tab);
@@ -239,16 +250,33 @@ export function GraphqlEditor({ tab, body, onChange, onSubmit }: { tab: Tab; bod
           }}
         />
         <div className="flex min-h-0 flex-1 flex-col" data-testid="graphql-variables">
-          <div className="flex h-7 shrink-0 items-center px-3 text-[11px] font-semibold uppercase tracking-wide text-faint">Variables</div>
+          <div className="flex h-7 shrink-0 items-center gap-2 px-3">
+            {subscription ? (
+              <Segmented
+                items={[
+                  { id: "variables", label: "Variables" },
+                  { id: "connection", label: "Subscription" },
+                ]}
+                value={pane}
+                onChange={setPane}
+              />
+            ) : (
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-faint">Variables</span>
+            )}
+          </div>
           <div className="min-h-0 flex-1 overflow-hidden">
-            <CodeEditor
-              value={gql.variables ?? ""}
-              onChange={(variables) => setGql({ variables })}
-              language="json"
-              variables={names}
-              onSubmit={onSubmit}
-              placeholder={'{\n  "id": "{{userId}}"\n}'}
-            />
+            {subscription && pane === "connection" ? (
+              <SubscriptionSettings gql={gql} setGql={setGql} names={names} onSubmit={onSubmit} />
+            ) : (
+              <CodeEditor
+                value={gql.variables ?? ""}
+                onChange={(variables) => setGql({ variables })}
+                language="json"
+                variables={names}
+                onSubmit={onSubmit}
+                placeholder={'{\n  "id": "{{userId}}"\n}'}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -266,6 +294,56 @@ export function GraphqlEditor({ tab, body, onChange, onSubmit }: { tab: Tab; bod
             <SchemaPanel tabId={tab.id} entry={entry} canRefresh={!!tab.draft.url.trim()} onRefresh={refresh} />
           </div>
         </>
+      )}
+    </div>
+  );
+}
+
+/** How a subscription connects: the transport, its URL when not the request's, the connection params. */
+function SubscriptionSettings({
+  gql,
+  setGql,
+  names,
+  onSubmit,
+}: {
+  gql: GraphqlBody;
+  setGql: (patch: Partial<GraphqlBody>) => void;
+  names: string[];
+  onSubmit: () => void;
+}) {
+  const transport = gql.transport ?? "websocket";
+  const websocket = transport !== "sse";
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-2 overflow-auto px-3 pb-2" data-testid="graphql-subscription">
+      <div className="flex flex-wrap items-center gap-2">
+        <Segmented items={TRANSPORTS.map((t) => ({ id: t.id, label: t.label }))} value={transport} onChange={(t) => setGql({ transport: t === "websocket" ? undefined : t })} />
+      </div>
+      <p className="text-[11.5px] text-faint">{TRANSPORTS.find((t) => t.id === transport)?.hint}</p>
+      <div className="flex h-8 shrink-0 items-center rounded-lg border border-line bg-input focus-within:border-accent">
+        <span className="shrink-0 pl-2.5 text-[11px] font-semibold text-faint">URL</span>
+        <VarInput
+          value={gql.subscriptionUrl ?? ""}
+          onChange={(subscriptionUrl) => setGql({ subscriptionUrl: subscriptionUrl || undefined })}
+          placeholder={websocket ? "Empty: the request URL, as ws:// (e.g. ws://localhost:4000/graphql)" : "Empty: the request URL"}
+          className="flex-1"
+          ariaLabel="Subscription URL"
+        />
+      </div>
+      {websocket && (
+        <div className="flex min-h-[90px] flex-1 flex-col">
+          <div className="pb-1 text-[11px] font-semibold text-faint">Connection params (JSON, sent in connection_init; often the auth token)</div>
+          <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-line" data-testid="graphql-connection-params">
+            <CodeEditor
+              value={gql.connectionParams ?? ""}
+              onChange={(connectionParams) => setGql({ connectionParams: connectionParams || undefined })}
+              language="json"
+              variables={names}
+              onSubmit={onSubmit}
+              lineNumbers={false}
+              placeholder={'{"authToken": "{{token}}"}'}
+            />
+          </div>
+        </div>
       )}
     </div>
   );

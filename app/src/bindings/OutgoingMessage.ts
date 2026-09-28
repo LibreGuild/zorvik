@@ -3,4 +3,4 @@
 /**
  * Sent from the UI to a running server (manual mode, or broadcast).
  */
-export type OutgoingMessage = { "type": "text", text: string, } | { "type": "binary", base64: string, } | { "type": "event", event: string, data: string, id: string, };
+export type OutgoingMessage = { "type": "text", text: string, } | { "type": "binary", base64: string, } | { "type": "event", event: string, data: string, id: string, } | { "type": "emit", event: string, args: string, namespace: string, };

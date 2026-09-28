@@ -39,6 +39,7 @@ mod auth;
 pub mod graphql;
 pub mod grpc;
 pub mod h3;
+mod subscriptions;
 pub use auth::ConnectionId;
 pub use grpc::GrpcTestServer;
 pub use h3::H3TestServer;
@@ -233,6 +234,8 @@ pub fn router() -> Router {
         .route("/oauth/protected", get(oauth_protected))
         .route("/graphql", get(graphql::endpoint).post(graphql::endpoint))
         .route("/graphql-auth", get(graphql::endpoint_auth).post(graphql::endpoint_auth))
+        .route("/graphql-ws", get(subscriptions::ws))
+        .route("/graphql-sse", post(subscriptions::sse))
         .with_state(Arc::new(AppState::default()))
 }
 
@@ -245,7 +248,7 @@ async fn index() -> impl IntoResponse {
             "/digest-auth/{qop}/{user}/{passwd}[/{algorithm}]", "/ntlm/{domain}/{user}/{passwd}",
             "/json", "/big-json?n=", "/html", "/xml",
             "/image.png", "/sse?count=&interval=", "/ws", "/oauth/authorize", "/oauth/token", "/oauth/protected",
-            "/graphql?legacy=", "/graphql-auth"]
+            "/graphql?legacy=", "/graphql-auth", "/graphql-ws?auth=", "/graphql-sse"]
     }))
 }
 

@@ -11,7 +11,7 @@ vi.mock("../lib/rpc", async (importOriginal) => {
 
 const { api, RpcError } = await import("../lib/rpc");
 const gql = await import("./graphql");
-const { canAutoLoad, docsBack, keptOperationName, loadSchema, MAX_SCHEMAS, namedType, operationNames, prettifyQuery, schemaKey, showType, useGraphql } = gql;
+const { canAutoLoad, docsBack, isSubscription, keptOperationName, loadSchema, MAX_SCHEMAS, namedType, operationNames, operations, operationType, prettifyQuery, schemaKey, showType, useGraphql } = gql;
 const graphqlSchema = api.graphqlSchema as unknown as ReturnType<typeof vi.fn>;
 
 const SDL = `
@@ -71,6 +71,32 @@ describe("operations", () => {
 
   it("finds the named type of a wrapped type", () => {
     expect(namedType("[User!]!")).toBe("User");
+  });
+
+  it("knows which operation runs, also while it is being typed", () => {
+    const doc = `# query X { a }
+      query Get($id: ID = "a { b") @cached(ttl: {s: 1}) { user(id: $id) { ...F } }
+      fragment F on User { id name(format: "} subscription X {") }
+      mutation Save { save(input: """block \\""" subscription {""") }
+      subscription($room: ID!) { messages(room: $room) }`;
+    expect(operations(doc)).toEqual([
+      { type: "query", name: "Get" },
+      { type: "mutation", name: "Save" },
+      { type: "subscription", name: null },
+    ]);
+    expect(operations("{ ping }")).toEqual([{ type: "query", name: null }]);
+    expect(operations("subscription Live { ticks {")).toEqual([{ type: "subscription", name: "Live" }]);
+    expect(operationType("query A { a } subscription B { b }", "B")).toBe("subscription");
+    expect(operationType("query A { a } subscription B { b }", null)).toBeNull();
+    expect(operationType("subscription { b }", "")).toBe("subscription");
+  });
+
+  it("sends subscriptions over a live connection", () => {
+    const sub = (query: string, kind: Request["kind"] = "http"): Request => ({ ...request, kind, body: { type: "graphql", graphql: { query } } });
+    expect(isSubscription(sub("subscription { tick }"))).toBe(true);
+    expect(isSubscription(sub("query { tick }"))).toBe(false);
+    expect(isSubscription(sub("subscription { tick }", "websocket"))).toBe(false);
+    expect(isSubscription({ ...request, body: { type: "json", text: "subscription { tick }" } })).toBe(false);
   });
 });
 

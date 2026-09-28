@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import { Columns2, FilePlus2, Import, Radio, Rows2, Zap } from "lucide-react";
 import { modKey } from "../../lib/platform";
-import { isLoadTestTab, isRunnerTab, isServerTab, isToolTab, newRequest, type Tab, useTabs } from "../../store/tabs";
+import { isLive, isLoadTestTab, isRunnerTab, isServerTab, isToolTab, newRequest, type Tab, useTabs } from "../../store/tabs";
 import { LoadTestView } from "../loadtests/LoadTestView";
 import { RunnerView } from "../runner/RunnerView";
 import { openModal, useUi } from "../../store/ui";
@@ -66,7 +66,7 @@ function RequestWorkbench({ tab }: { tab: Tab }) {
           }}
         />
         <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
-          {ResultPane ? <ResultPane tab={tab} /> : kind === "http" ? <ResponsePane tab={tab} /> : <StreamPane tab={tab} />}
+          {ResultPane ? <ResultPane tab={tab} /> : isLive(tab) ? <StreamPane tab={tab} /> : <ResponsePane tab={tab} />}
         </div>
       </div>
     </div>

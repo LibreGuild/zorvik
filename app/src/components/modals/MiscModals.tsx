@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Cookie, FileJson, Globe, GraduationCap, ListChecks, Search, Terminal, Trash2 } from "lucide-react";
 import type { CookieInfo } from "../../bindings/CookieInfo";
-import type { CurlFlavor } from "../../bindings/CurlFlavor";
-import type { SnippetLanguage } from "../../bindings/SnippetLanguage";
 import type { SpecUpdate } from "../../bindings/SpecUpdate";
 import type { FolderMeta } from "../../bindings/FolderMeta";
 import type { ImportSummary } from "../../bindings/ImportSummary";
@@ -27,7 +25,8 @@ import { KeyValueEditor } from "../KeyValueEditor";
 import { AuthEditor } from "../request/AuthEditor";
 import { ScriptsEditor, ScriptsTabLabel } from "../request/ScriptsEditor";
 import { moveItem } from "../sidebar/Sidebar";
-import { Button, cx, EmptyState, Field, Input, Kbd, Modal, Select, Spinner, Switch, Tabs } from "../ui";
+import { Button, cx, EmptyState, Field, Input, Kbd, Modal, Segmented, Select, Spinner, Switch, Tabs } from "../ui";
+import { findVariant, initialVariant, rememberVariant, searchLanguages } from "./exportTargets";
 
 // Stable fallback: a selector returning a fresh [] on every call makes React re-render forever.
 const NO_NODES: TreeNode[] = [];
@@ -256,31 +255,36 @@ export function ImportModal({ parent: initialParent }: { parent?: string }) {
   );
 }
 
-// ---- Export (cURL) ---------------------------------------------------------------
-
-const CURL_FLAVORS: CurlFlavor[] = ["bash", "cmd", "powerShell"];
-type ExportFormat = CurlFlavor | SnippetLanguage;
+// ---- Export (cURL or code) -----------------------------------------------------
 
 export function ExportModal({ tabId }: { tabId: string }) {
   const tab = useTabs((s) => {
     const t = s.tabs.find((x) => x.id === tabId);
     return isRequestTab(t) ? t : undefined;
   });
-  const [format, setFormat] = useState<ExportFormat>(navigator.userAgent.includes("Windows") ? "cmd" : "bash");
+  const [variantId, setVariantId] = useState(() => initialVariant(navigator.userAgent.includes("Windows")));
+  const [query, setQuery] = useState("");
   const [resolveVars, setResolveVars] = useState(true);
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const draft = tab?.draft;
   const path = tab?.path ?? null;
+  const found = findVariant(variantId) ?? findVariant("curl-bash")!;
+  const { language, variant } = found;
+  const languages = useMemo(() => searchLanguages(query), [query]);
+  const choose = (id: string) => {
+    setVariantId(id);
+    rememberVariant(id);
+  };
   // Depends on the request, not the whole tab (which changes with every streamed message);
   // `alive` drops a slower, older result so the text always matches the chosen options.
   useEffect(() => {
     if (!draft) return;
     let alive = true;
-    const isCurl = CURL_FLAVORS.includes(format as CurlFlavor);
-    (isCurl
-      ? api.exportCurl(draft, path, format as CurlFlavor, resolveVars)
-      : api.exportSnippet(draft, path, format as SnippetLanguage, resolveVars)
+    const target = variant.target;
+    (target.kind === "curl"
+      ? api.exportCurl(draft, path, target.flavor, resolveVars)
+      : api.exportSnippet(draft, path, target.language, resolveVars)
     )
       .then((t) => {
         if (!alive) return;
@@ -295,14 +299,21 @@ export function ExportModal({ tabId }: { tabId: string }) {
     return () => {
       alive = false;
     };
-  }, [draft, path, format, resolveVars]);
+  }, [draft, path, variant, resolveVars]);
   if (!tab) return null;
+  // Up and Down in the search box move through the languages shown.
+  const step = (by: number) => {
+    const at = languages.findIndex((l) => l.id === language.id);
+    const next = languages[Math.min(languages.length - 1, Math.max(0, (at < 0 ? -1 : at) + by))];
+    if (next) choose(next.variants[0].id);
+  };
+  const groups = (["Command line", "Code"] as const).map((g) => ({ group: g, items: languages.filter((l) => l.group === g) })).filter((g) => g.items.length);
   return (
     <Modal
       open
       onClose={closeModal}
       title="Copy as cURL or code"
-      width={760}
+      width={880}
       footer={
         <>
           <Button variant="ghost" onClick={closeModal}>
@@ -323,30 +334,69 @@ export function ExportModal({ tabId }: { tabId: string }) {
         </>
       }
     >
-      <div className="mb-3 flex items-center gap-4">
-        <Select value={format} onChange={(e) => setFormat(e.target.value as ExportFormat)} className="w-64" aria-label="Format">
-          <optgroup label="cURL">
-            <option value="bash">cURL for bash / zsh (macOS, Linux)</option>
-            <option value="cmd">cURL for Windows Command Prompt</option>
-            <option value="powerShell">cURL for Windows PowerShell</option>
-          </optgroup>
-          <optgroup label="Code">
-            <option value="kotlin">Kotlin (OkHttp, Android)</option>
-            <option value="swift">Swift (URLSession)</option>
-            <option value="javascript">JavaScript (fetch)</option>
-            <option value="python">Python (requests)</option>
-          </optgroup>
-        </Select>
-        <Switch checked={resolveVars} onChange={setResolveVars} label="Substitute variables" />
-      </div>
-      {error ? (
-        <div className="rounded-md border border-danger/30 bg-danger/10 p-3 text-[12.5px] text-danger">{error}</div>
-      ) : (
-        <div className="h-72 overflow-hidden rounded-md border border-line bg-panel-2">
-          <CodeEditor value={text} readOnly lineNumbers={false} language={format === "javascript" ? "javascript" : "text"} />
+      <div className="flex h-[440px] min-h-0 gap-3">
+        <div className="flex w-48 shrink-0 flex-col gap-2">
+          <div className="relative">
+            <Search size={13} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-faint" />
+            <Input
+              aria-label="Search languages"
+              value={query}
+              autoFocus
+              placeholder="Search"
+              className="pl-7"
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                  e.preventDefault();
+                  step(e.key === "ArrowDown" ? 1 : -1);
+                }
+              }}
+            />
+          </div>
+          <div role="listbox" aria-label="Language" className="min-h-0 flex-1 overflow-y-auto pr-1">
+            {groups.map(({ group, items }) => (
+              <div key={group} role="group" aria-label={group} className="mb-2">
+                <div className="px-2 pb-1 pt-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-faint">{group}</div>
+                {items.map((l) => (
+                  <button
+                    key={l.id}
+                    role="option"
+                    aria-selected={l.id === language.id}
+                    onClick={() => choose(l.variants[0].id)}
+                    className={cx(
+                      "flex h-7 w-full items-center justify-between rounded-md px-2 text-left text-[12.5px]",
+                      l.id === language.id ? "bg-accent-soft font-medium text-accent" : "text-fg hover:bg-hover",
+                    )}
+                  >
+                    {l.label}
+                    {l.variants.length > 1 && <span className="text-[11px] text-faint">{l.variants.length}</span>}
+                  </button>
+                ))}
+              </div>
+            ))}
+            {!groups.length && <div className="px-2 py-3 text-[12px] text-muted">No language matches “{query}”.</div>}
+          </div>
         </div>
-      )}
-      {resolveVars && <p className="mt-2 text-[11.5px] text-faint">Contains resolved values — including secrets — so be careful where you paste it.</p>}
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          <div className="flex min-h-8 flex-wrap items-center gap-3">
+            {language.variants.length > 1 ? (
+              <Segmented items={language.variants.map((v) => ({ id: v.id, label: v.label }))} value={variant.id} onChange={choose} />
+            ) : (
+              <span className="text-[12.5px] text-muted">{variant.label}</span>
+            )}
+            <div className="flex-1" />
+            <Switch checked={resolveVars} onChange={setResolveVars} label="Substitute variables" />
+          </div>
+          {error ? (
+            <div className="rounded-md border border-danger/30 bg-danger/10 p-3 text-[12.5px] text-danger">{error}</div>
+          ) : (
+            <div className="min-h-0 flex-1 overflow-hidden rounded-md border border-line bg-panel-2" data-testid="export-code">
+              <CodeEditor value={text} readOnly lineNumbers={false} language={language.highlight} />
+            </div>
+          )}
+          {resolveVars && <p className="text-[11.5px] text-faint">Contains resolved values — including secrets — so be careful where you paste it.</p>}
+        </div>
+      </div>
     </Modal>
   );
 }

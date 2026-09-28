@@ -15,6 +15,7 @@ mod http;
 mod relay;
 pub mod report;
 pub mod rules;
+mod socketio;
 mod sse;
 mod tcp;
 mod template;
@@ -150,7 +151,8 @@ impl Drop for RunningServer {
 fn alpn(kind: ServerKind) -> &'static [&'static [u8]] {
     match kind {
         ServerKind::Http | ServerKind::Sse => &[b"h2", b"http/1.1"],
-        ServerKind::Websocket => &[b"http/1.1"],
+        // WebSocket upgrades need HTTP/1.1.
+        ServerKind::Websocket | ServerKind::SocketIo => &[b"http/1.1"],
         _ => &[],
     }
 }
@@ -164,8 +166,8 @@ pub fn display_url(kind: ServerKind, tls: bool, addr: SocketAddr) -> String {
     };
     let host = SocketAddr::new(ip, addr.port());
     let scheme = match (kind, tls) {
-        (ServerKind::Http | ServerKind::Sse, false) => "http",
-        (ServerKind::Http | ServerKind::Sse, true) => "https",
+        (ServerKind::Http | ServerKind::Sse | ServerKind::SocketIo, false) => "http",
+        (ServerKind::Http | ServerKind::Sse | ServerKind::SocketIo, true) => "https",
         (ServerKind::Websocket, false) => "ws",
         (ServerKind::Websocket, true) => "wss",
         (ServerKind::Tcp | ServerKind::TcpProxy, false) => "tcp",
@@ -267,7 +269,9 @@ pub async fn start(
                 ServerKind::Websocket => Box::pin(ws::run(listener, ctx)),
                 ServerKind::Sse => Box::pin(sse::run(listener, ctx)),
                 ServerKind::Tcp => Box::pin(tcp::run(listener, ctx)),
-                _ => Box::pin(relay::run(listener, ctx)),
+                ServerKind::SocketIo => Box::pin(socketio::run(listener, ctx)),
+                ServerKind::TcpProxy => Box::pin(relay::run(listener, ctx)),
+                ServerKind::Udp | ServerKind::Dns => unreachable!("bound above"),
             };
             (addr, run)
         }
@@ -311,5 +315,6 @@ pub(crate) fn message_bytes(message: &OutgoingMessage) -> Result<(Vec<u8>, bool)
             .map(|b| (b, false))
             .map_err(|e| format!("Binary payload is not valid base64: {e}")),
         OutgoingMessage::Event { data, .. } => Ok((data.as_bytes().to_vec(), true)),
+        OutgoingMessage::Emit { .. } => Err("Only Socket.IO servers emit events: send text or binary data".into()),
     }
 }

@@ -2,7 +2,7 @@
 title: TCP relay
 description: Put a relay between a client and a TCP server to see the bytes in both directions, including decrypted TLS traffic, and inject your own.
 sidebar:
-  order: 7
+  order: 8
 ---
 
 A TCP relay sits between a client and a TCP server. The client connects to the relay instead of the server; the relay connects to the server (the **target**) and passes everything along in both directions, showing each chunk in the traffic log. Use it to see what a database driver, a Redis client, an SMTP library or an IoT device actually sends and receives, without changing the client or the server.

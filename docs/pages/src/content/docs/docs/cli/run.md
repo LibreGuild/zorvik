@@ -113,8 +113,8 @@ Saves a JUnit XML report to the file, in addition to the normal output (text or 
 ## What runs
 
 - Every request under the workspace or folder, in sidebar order, once per iteration.
-- HTTP and GraphQL requests are sent. [Server-Sent Events requests](../../testing/repeat-and-streams/#event-streams-in-runs) are read until their stop settings say to stop.
-- WebSocket, TCP, UDP, MQTT, gRPC and DNS requests are listed as skipped, with the reason.
+- HTTP and GraphQL requests are sent. [Server-Sent Events requests](../../testing/repeat-and-streams/#event-streams-in-runs) and [GraphQL subscriptions](../../protocols/graphql/#subscriptions) are read until their stop settings say to stop.
+- WebSocket, Socket.IO, TCP, UDP, MQTT, gRPC and DNS requests are listed as skipped, with the reason.
 - For each request: pre-request scripts, send, post-response scripts, then "repeat until" and the OpenAPI contract check when they apply.
 - Script values and cookies carry from one request to the next during the run, and are forgotten at the end.
 

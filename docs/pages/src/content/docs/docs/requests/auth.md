@@ -351,7 +351,7 @@ An `Authorization` header in the **Headers** of the request, a folder or the wor
 
 ## Other request kinds
 
-WebSocket, event stream (SSE) and gRPC requests have the same **Auth** tab. MQTT clients log in with the **Basic auth** username and password.
+WebSocket, Socket.IO, event stream (SSE) and gRPC requests have the same **Auth** tab (for Socket.IO it becomes a header of the handshake). MQTT clients log in with the **Basic auth** username and password.
 
 ## Importing auth
 

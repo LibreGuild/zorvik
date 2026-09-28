@@ -2,7 +2,7 @@
 title: DNS
 description: Look up any DNS record type with the system resolver or a server of your choice, over UDP, TCP, DNS over TLS or DNS over HTTPS.
 sidebar:
-  order: 7
+  order: 8
 ---
 
 A DNS query asks one question (a name and a record type) and shows the whole answer the way `dig` does: the response code, the header flags and every section. `NXDOMAIN` and other response codes are results, not errors.

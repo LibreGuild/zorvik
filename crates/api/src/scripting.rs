@@ -317,6 +317,35 @@ async fn send(
         let token = oauth2::ensure_token(cx.client, &opts, &config, cx.tokens, &cx.ws.local_key()).await?;
         apply_token(&mut resolved, &token.access_token);
     }
+    if let Some(subscription) = resolved.subscription.clone() {
+        // Read like an event stream; the body is the results as a JSON array.
+        let until = request.settings.stream.clone().unwrap_or_default();
+        let started = std::time::Instant::now();
+        let deadline = tokio::time::Instant::now()
+            + std::time::Duration::from_millis(until.timeout_ms.max(1)).min(crate::sse_read::MAX_WAIT);
+        let jar = cx.jar.map(|j| j.as_ref());
+        let connected = crate::sockets::subscribe(cx.client, resolved.request.clone(), subscription, &opts, jar);
+        let conn = tokio::select! {
+            r = connected => r?,
+            _ = tokio::time::sleep_until(deadline) => {
+                return Err(ApiError::new("timeout", format!("No answer within {} ms", until.timeout_ms)));
+            }
+        };
+        let never = tokio_util::sync::CancellationToken::new();
+        let read = crate::sse_read::collect_results(conn, &until, &never, started, deadline).await?;
+        let body = crate::sse_read::results_json(&read.events).into_bytes();
+        let mut timing = read.timing;
+        timing.total_ms = read.duration.as_secs_f64() * 1000.0;
+        let response = HttpResponse {
+            meta: read.meta,
+            timing,
+            body_wire_size: body.len() as u64,
+            body,
+            body_truncated: read.dropped > 0,
+            decode_warning: read.error,
+        };
+        return Ok((resolved, response, Some((read.events, read.end))));
+    }
     if request.kind == zorvik_workspace::formats::RequestKind::Sse {
         let has = |name: &str| resolved.request.headers.iter().any(|h| h.name.eq_ignore_ascii_case(name));
         let mut outgoing = resolved.request.clone();

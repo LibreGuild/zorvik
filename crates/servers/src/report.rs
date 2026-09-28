@@ -160,6 +160,16 @@ pub enum OutgoingMessage {
         #[serde(default)]
         id: String,
     },
+    /// Socket.IO: emit `event` with `args` (JSON: an array for several arguments, else one) to
+    /// the clients of `namespace` (`/` when empty).
+    #[serde(rename_all = "camelCase")]
+    Emit {
+        event: String,
+        #[serde(default)]
+        args: String,
+        #[serde(default)]
+        namespace: String,
+    },
 }
 
 pub(crate) fn now_ms() -> f64 {

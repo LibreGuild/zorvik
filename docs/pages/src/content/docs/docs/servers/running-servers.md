@@ -2,7 +2,7 @@
 title: Running servers
 description: Start and stop servers, choose address and port, start servers with the workspace, use TLS, and read the traffic log.
 sidebar:
-  order: 8
+  order: 9
 ---
 
 This page covers what all servers have in common: starting and stopping, the address and port they listen on, starting with the workspace, TLS, variables and the traffic log.
@@ -13,6 +13,7 @@ This page covers what all servers have in common: starting and stopping, the add
 |---|---|---|---|---|
 | [Mock API (HTTP)](../mock-api/) | `http` | 3000 | Yes | `http://…` / `https://…` |
 | [WebSocket server](../websocket-and-sse-servers/#websocket-server) | `websocket` | 3001 | Yes | `ws://…` / `wss://…` |
+| [Socket.IO server](../socketio-server/) | `socketio` | 3003 | Yes | `http://…` / `https://…` |
 | [Event stream (SSE) server](../websocket-and-sse-servers/#event-stream-sse-server) | `sse` | 3002 | Yes | `http://…` / `https://…` |
 | [TCP server](../tcp-udp-dns-servers/#tcp-server) | `tcp` | 9000 | Yes | `tcp://…` / `tls://…` |
 | [UDP server](../tcp-udp-dns-servers/#udp-server) | `udp` | 9001 | No | `udp://…` |
@@ -88,7 +89,7 @@ Server answers can use `{{variables}}` from the **active environment** and the *
 
 ## TLS
 
-Mock APIs, WebSocket, event stream and TCP servers can listen with TLS: turn on **TLS** next to the port. Two fields appear:
+Mock APIs, WebSocket, Socket.IO, event stream and TCP servers can listen with TLS: turn on **TLS** next to the port. Two fields appear:
 
 | Field | Description |
 |---|---|
@@ -103,7 +104,7 @@ TLS 1.2 and 1.3 are offered. Client certificates are not requested. A client mus
 | Kind | ALPN protocols offered |
 |---|---|
 | Mock API, event stream | `h2`, `http/1.1` |
-| WebSocket | `http/1.1` |
+| WebSocket, Socket.IO | `http/1.1` |
 | TCP | none |
 
 UDP, DNS and relay servers can't use TLS (**TLS is not available for this kind of server**); the relay can speak TLS to its target instead.
@@ -138,7 +139,7 @@ Limits, so a flood can't swamp the app:
 
 ## Sending from the traffic panel
 
-WebSocket, event stream, TCP, UDP and relay servers have a composer under the log to send to **All clients** or one connection. Hover a log row for its **Send to** and **Disconnect** buttons. See [WebSocket & SSE servers](../websocket-and-sse-servers/#sending-from-the-traffic-panel), [TCP, UDP & DNS servers](../tcp-udp-dns-servers/) and [TCP relay](../relay/#sending-to-a-client) for what each kind sends. Mock APIs and DNS servers only answer, so they have no composer.
+WebSocket, Socket.IO, event stream, TCP, UDP and relay servers have a composer under the log to send to **All clients** or one connection. Hover a log row for its **Send to** and **Disconnect** buttons. See [WebSocket & SSE servers](../websocket-and-sse-servers/#sending-from-the-traffic-panel), [TCP, UDP & DNS servers](../tcp-udp-dns-servers/) and [TCP relay](../relay/#sending-to-a-client) for what each kind sends. Mock APIs and DNS servers only answer, so they have no composer.
 
 ## Command line
 
@@ -189,6 +190,7 @@ http:
 | `autoStart` | `false` | **Start with workspace**. |
 | `http` | | [Mock API settings](../mock-api/#saved-format). |
 | `websocket`, `sse` | | [WebSocket and event stream settings](../websocket-and-sse-servers/#saved-format). |
+| `socketio` | | [Socket.IO settings](../socketio-server/#saved-format). |
 | `socket` | | [TCP and UDP settings](../tcp-udp-dns-servers/#saved-format). |
 | `dns` | | [DNS settings](../tcp-udp-dns-servers/#saved-format). |
 | `proxy` | | [Relay settings](../relay/#saved-format). |

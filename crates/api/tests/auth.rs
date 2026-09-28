@@ -176,3 +176,41 @@ async fn load_tests_refuse_challenge_auth() {
     let e = h.api.call("load.start", json!({ "id": "x", "test": test })).await.unwrap_err();
     assert!(e.message.contains("can't be load tested"), "{}", e.message);
 }
+
+#[tokio::test]
+async fn exported_code_says_what_it_cannot_do() {
+    let h = Harness::new().await;
+    let export = |method: &'static str, auth: Value, extra: Value| {
+        let api = &h.api;
+        async move {
+            let mut params = json!({ "request": { "name": "r", "seq": 0, "method": "GET", "url": "https://x.test/", "auth": auth }, "path": null });
+            params.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            api.call(method, params).await.unwrap().as_str().unwrap().to_string()
+        }
+    };
+    let digest = json!({ "type": "digest", "username": "a", "password": "b" });
+    let python = export("export.snippet", digest.clone(), json!({ "language": "python" })).await;
+    assert!(python.starts_with("# This request uses Digest auth, which Zorvik answers"), "{python}");
+    let php = export("export.snippet", digest.clone(), json!({ "language": "php" })).await;
+    assert!(php.starts_with("<?php\n// This request uses Digest auth"), "{php}");
+    let cmd = export("export.curl", digest, json!({ "flavor": "cmd" })).await;
+    assert!(cmd.starts_with("REM This request uses Digest auth"), "{cmd}");
+    let ntlm =
+        export("export.curl", json!({ "type": "ntlm", "username": "a", "password": "b" }), json!({ "flavor": "bash" }))
+            .await;
+    assert!(ntlm.starts_with("# This request uses NTLM auth"), "{ntlm}");
+
+    let hawk = json!({ "type": "hawk", "id": "i", "key": "k" });
+    let go = export("export.snippet", hawk, json!({ "language": "go" })).await;
+    assert!(go.starts_with("// The Hawk signature was made for this copy and soon expires"), "{go}");
+    assert!(go.contains("\"Hawk id=\\\"i\\\""), "{go}");
+
+    let oauth2 = json!({ "type": "oauth2", "grantType": "clientCredentials", "tokenUrl": "https://x.test/token", "clientId": "c" });
+    let ruby = export("export.snippet", oauth2, json!({ "language": "ruby" })).await;
+    assert!(ruby.starts_with("# <access-token> stands for an OAuth 2.0 access token"), "{ruby}");
+    assert!(ruby.contains("Bearer <access-token>"), "{ruby}");
+
+    let plain =
+        export("export.snippet", json!({ "type": "bearer", "token": "t" }), json!({ "language": "rust" })).await;
+    assert!(!plain.starts_with("//"), "{plain}");
+}

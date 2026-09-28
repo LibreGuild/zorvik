@@ -1,12 +1,13 @@
 // Server kinds: how each is labelled and which editor configures it.
 import type { ComponentType, ReactNode } from "react";
-import { ArrowLeftRight, Globe, Network, Radio, Router, Server as ServerIcon, Zap } from "lucide-react";
+import { ArrowLeftRight, Globe, Network, Radio, Router, Server as ServerIcon, Unplug, Zap } from "lucide-react";
 import type { RunningServerInfo } from "../../bindings/RunningServerInfo";
 import type { Server } from "../../bindings/Server";
 import type { ServerKind } from "../../bindings/ServerKind";
 import { DnsServerEditor } from "./DnsServerEditor";
 import { HttpMockEditor } from "./HttpMockEditor";
 import { RelayEditor } from "./RelayEditor";
+import { SocketIoServerEditor } from "./SocketIoServerEditor";
 import { SocketServerEditor } from "./SocketServerEditor";
 import { SseServerEditor } from "./SseServerEditor";
 import { WsServerEditor } from "./WsServerEditor";
@@ -49,6 +50,15 @@ export const SERVER_KINDS: Record<ServerKind, ServerKindInfo> = {
     icon: (size) => <Zap size={size} />,
     description: "Echo, reply by rules, or send messages to connected clients yourself.",
     Editor: WsServerEditor,
+    connections: true,
+  },
+  socketio: {
+    label: "Socket.IO server",
+    short: "SIO",
+    color: "var(--m-socketio)",
+    icon: (size) => <Unplug size={size} />,
+    description: "Socket.IO 3 and 4: echo events, answer by rules with acknowledgements and broadcasts, or emit yourself.",
+    Editor: SocketIoServerEditor,
     connections: true,
   },
   sse: {
@@ -98,4 +108,4 @@ export const SERVER_KINDS: Record<ServerKind, ServerKindInfo> = {
   },
 };
 
-export const SERVER_KIND_ORDER: ServerKind[] = ["http", "websocket", "sse", "tcp", "udp", "dns", "tcpProxy"];
+export const SERVER_KIND_ORDER: ServerKind[] = ["http", "websocket", "socketio", "sse", "tcp", "udp", "dns", "tcpProxy"];

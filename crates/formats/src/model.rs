@@ -59,6 +59,9 @@ pub enum RequestKind {
     /// gRPC call (`grpc://host:port`, `grpcs://` for TLS): `method` is
     /// `package.Service/Method`, `body.text` the JSON message.
     Grpc,
+    /// Socket.IO client: `url` is the server and namespace (`http://localhost:3000/chat`).
+    #[serde(rename = "socketio")]
+    SocketIo,
 }
 
 fn two() -> u8 {
@@ -92,6 +95,64 @@ pub struct SocketOptions {
 impl Default for SocketOptions {
     fn default() -> Self {
         Self { framing: Framing::Raw, length_bytes: 2, line_ending: LineEnding::None, broadcast: false }
+    }
+}
+
+/// How a Socket.IO client reaches the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum SocketIoTransport {
+    /// WebSocket, or HTTP long-polling when the server doesn't take WebSocket.
+    #[default]
+    Auto,
+    Websocket,
+    /// HTTP long-polling only.
+    Polling,
+}
+
+fn socketio_path() -> String {
+    "/socket.io/".to_string()
+}
+fn is_socketio_path(v: &String) -> bool {
+    v == "/socket.io/"
+}
+
+/// Options of Socket.IO requests (Socket.IO 3 and 4, Engine.IO 4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SocketIoOptions {
+    /// Where the server answers (socket.io's `path` option).
+    #[serde(default = "socketio_path", skip_serializing_if = "is_socketio_path")]
+    #[ts(optional, as = "Option<String>")]
+    pub path: String,
+    /// The connection's `auth` payload as JSON text (may contain `{{variables}}`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub auth: String,
+    #[serde(default, skip_serializing_if = "is_default")]
+    #[ts(optional, as = "Option<SocketIoTransport>")]
+    pub transport: SocketIoTransport,
+    /// The event the composer emits.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub event: String,
+    /// The composer asks the server to acknowledge.
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional, as = "Option<bool>")]
+    pub ack: bool,
+}
+
+impl Default for SocketIoOptions {
+    fn default() -> Self {
+        Self {
+            path: socketio_path(),
+            auth: String::new(),
+            transport: SocketIoTransport::Auto,
+            event: String::new(),
+            ack: false,
+        }
     }
 }
 
@@ -245,6 +306,40 @@ pub struct GraphqlBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub operation_name: Option<String>,
+    /// How a subscription is sent (queries and mutations always go over HTTP).
+    #[serde(default, skip_serializing_if = "is_default")]
+    #[ts(optional, as = "Option<GraphqlTransport>")]
+    pub transport: GraphqlTransport,
+    /// Where a subscription connects. Empty: the request URL (as `ws://`/`wss://` for WebSocket).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub subscription_url: String,
+    /// WebSocket: the `connection_init` payload as JSON text (may contain `{{variables}}`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub connection_params: String,
+}
+
+impl GraphqlBody {
+    /// Whether the operation that runs is a subscription.
+    pub fn is_subscription(&self) -> bool {
+        crate::graphql::operation_type(&self.query, self.operation_name.as_deref())
+            == Some(crate::graphql::OperationType::Subscription)
+    }
+}
+
+/// How a GraphQL subscription reaches the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum GraphqlTransport {
+    /// WebSocket with the `graphql-transport-ws` protocol (the graphql-ws library, Apollo Server 4+).
+    #[default]
+    Websocket,
+    /// WebSocket with the older `subscriptions-transport-ws` protocol (subprotocol `graphql-ws`).
+    WebsocketLegacy,
+    /// Server-Sent Events (the graphql-sse protocol, GraphQL Yoga).
+    Sse,
 }
 
 /// Request body. Data for every body type is kept, so switching the type in
@@ -949,6 +1044,9 @@ pub struct Request {
     #[ts(optional, as = "Option<GrpcOptions>")]
     pub grpc: GrpcOptions,
     #[serde(default, skip_serializing_if = "is_default")]
+    #[ts(optional, as = "Option<SocketIoOptions>")]
+    pub socketio: SocketIoOptions,
+    #[serde(default, skip_serializing_if = "is_default")]
     #[ts(optional, as = "Option<Scripts>")]
     pub scripts: Scripts,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1032,6 +1130,13 @@ fn is_no_body(b: &Body) -> bool {
 }
 
 impl Request {
+    /// An HTTP request whose GraphQL operation is a subscription (sent over WebSocket or SSE).
+    pub fn is_graphql_subscription(&self) -> bool {
+        self.kind == RequestKind::Http
+            && self.body.body_type == BodyType::Graphql
+            && self.body.graphql.is_subscription()
+    }
+
     pub fn new(name: impl Into<String>, kind: RequestKind) -> Self {
         Self {
             name: name.into(),
@@ -1050,6 +1155,7 @@ impl Request {
             dns: DnsOptions::default(),
             mqtt: MqttOptions::default(),
             grpc: GrpcOptions::default(),
+            socketio: SocketIoOptions::default(),
             scripts: Scripts::default(),
             docs: String::new(),
             openapi: None,
