@@ -191,13 +191,20 @@ const ResultRow = memo(function ResultRow({ result: r }: { result: RunResult }) 
             {r.name}
           </div>
           {r.skipped ? (
-            <div className="truncate text-[11px] text-faint">Skipped: only HTTP requests run</div>
+            <div className="truncate text-[11px] text-faint" title={r.skipReason}>
+              Skipped: {r.skipReason ?? "the runner sends HTTP, GraphQL and SSE requests"}
+            </div>
           ) : problem ? (
             <div className="truncate text-[11px] text-danger" title={problem}>
               {problem}
             </div>
           ) : null}
         </div>
+        {r.attempts != null && r.attempts > 1 && (
+          <span className="shrink-0 text-[11.5px] tabular-nums text-faint" title="Sent again until the “repeat until” condition held" data-testid="result-attempts">
+            {r.attempts}×
+          </span>
+        )}
         {t.total > 0 && (
           <span className={cx("shrink-0 text-[11.5px] tabular-nums", t.failed ? "text-danger" : "text-success")} title="Tests passed">
             {`${t.passed}/${t.total}`}

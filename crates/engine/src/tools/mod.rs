@@ -1,5 +1,6 @@
 //! Network tools below the request level: TLS inspection, TCP port checks,
-//! ping (ICMP, or TCP connect timing) and the local network interfaces.
+//! ping (ICMP, or TCP connect timing), the local network interfaces and
+//! which process holds a local port.
 //!
 //! Each tool validates and resolves its target first, so bad input fails
 //! right away, then runs with bounded concurrency and per-step timeouts.
@@ -7,6 +8,7 @@
 
 pub mod interfaces;
 pub mod ping;
+pub mod port_owner;
 pub mod ports;
 pub mod tls_inspect;
 
@@ -20,6 +22,7 @@ use crate::error::{EngineError, ErrorKind, Result};
 
 pub use interfaces::{IpFamily, NetAddress, NetInterface, list_interfaces};
 pub use ping::{PingMode, PingOptions, PingReply, PingStarted, PingSummary, Pinger};
+pub use port_owner::{PortOwner, Protocol, port_owner};
 pub use ports::{MAX_PORTS, PortErrorKind, PortResult, PortScan, PortScanOptions, PortScanSummary, parse_ports};
 pub use tls_inspect::{
     TlsCertificate, TlsCipherSupport, TlsInspectOptions, TlsReport, TlsVersionSupport, TlsWarning, TlsWarningLevel,

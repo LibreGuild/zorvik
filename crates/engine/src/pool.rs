@@ -11,9 +11,11 @@
 //! proxy CONNECT tunnel, TLS with the OS verifier and ALPN) and use the same
 //! header rules as `Client` (default User-Agent/Accept, Content-Length, Host).
 //! There is no cookie jar. Response bodies are read to the end and discarded:
-//! only the status, sizes and timing are kept. Redirects are not followed (a
-//! 3xx is an answer like any other) and bodies are not decoded, so sizes are
-//! what went over the wire. HTTP/3 is not supported here.
+//! only the status, sizes and timing are kept, unless the request asks to keep
+//! the response ([`PooledRequest::keep_response`], for load test captures).
+//! Redirects are not followed (a 3xx is an answer like any other) and bodies
+//! are not decoded (except a kept one), so sizes are what went over the wire.
+//! HTTP/3 is not supported here.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
@@ -27,6 +29,7 @@ use hyper::body::Incoming;
 use hyper::client::conn::{http1, http2};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 
+use crate::decode::decode_content;
 use crate::error::{EngineError, ErrorKind, Result};
 use crate::http::{self as h, Header, HttpRequest, HttpVersionPref, Prepared, RequestOptions};
 use crate::net::{self, Target};
@@ -50,14 +53,32 @@ pub struct Exchange {
     /// From the `started` instant given to [`PooledClient::send`] to the end of
     /// the response body (or the failure).
     pub latency: Duration,
-    /// Request handed to a ready connection until the response head arrived.
+    /// Request handed to a ready connection until the response head arrived:
+    /// the server's time plus one network round trip.
     pub ttfb: Option<Duration>,
+    /// Opening the connection(s) this request needed: DNS, TCP, proxy tunnel,
+    /// TLS and the HTTP/2 handshake. `None` when it reused one.
+    pub connect: Option<Duration>,
+    /// Response head until the end of the body.
+    pub transfer: Option<Duration>,
+    /// The `Server-Timing` header(s) of the response, joined with ", ".
+    pub server_timing: Option<String>,
+    /// Headers and (decoded) body, for requests prepared with [`PooledRequest::keep_response`].
+    pub response: Option<KeptResponse>,
     /// Response head (as text, approximate for HTTP/2) plus body bytes as received.
     pub bytes_in: u64,
     /// Request head (as text, approximate for HTTP/2) plus body.
     pub bytes_out: u64,
     /// This request opened a new connection (DNS, TCP, TLS were paid).
     pub new_connection: bool,
+}
+
+/// A response kept for the caller (load test captures).
+#[derive(Debug, Clone, Default)]
+pub struct KeptResponse {
+    pub headers: Vec<Header>,
+    /// Decoded (Content-Encoding) and cut at the limit given to `keep_response`.
+    pub body: Bytes,
 }
 
 /// A request checked and turned into ready-to-send heads, reusable for every send.
@@ -67,6 +88,22 @@ pub struct PooledRequest {
     body: Bytes,
     h1: Result<Head>,
     h2: Result<Head>,
+    /// Keep the response headers and up to this many body bytes.
+    keep: Option<usize>,
+}
+
+impl PooledRequest {
+    /// Also return the response headers and the start of the body (up to
+    /// `max_body` bytes, decoded) in [`Exchange::response`].
+    pub fn keep_response(mut self, max_body: usize) -> Self {
+        self.keep = Some(max_body);
+        self
+    }
+
+    /// The host this request goes to (lowercase; IPv6 without brackets).
+    pub fn host(&self) -> &str {
+        &self.origin.key.host
+    }
 }
 
 struct Head {
@@ -201,7 +238,8 @@ enum Conn {
 
 struct Lease {
     conn: Conn,
-    fresh: bool,
+    /// Time spent opening the connection; `None` for a reused one.
+    fresh: Option<Duration>,
 }
 
 /// A request that failed. `Unsent`: the connection closed before the server
@@ -214,7 +252,11 @@ enum Failure {
 #[derive(Default)]
 struct Progress {
     new_connection: bool,
+    connect: Option<Duration>,
     ttfb: Option<Duration>,
+    transfer: Option<Duration>,
+    server_timing: Option<String>,
+    response: Option<KeptResponse>,
     bytes_in: u64,
     bytes_out: u64,
 }
@@ -291,7 +333,7 @@ impl PooledClient {
                 }
             }
         }
-        Ok(PooledRequest { origin, method: prepared.method, body: prepared.body, h1, h2 })
+        Ok(PooledRequest { origin, method: prepared.method, body: prepared.body, h1, h2, keep: None })
     }
 
     /// Send a request and read the whole response. Latency is measured from
@@ -315,6 +357,10 @@ impl PooledClient {
             error,
             latency,
             ttfb: progress.ttfb,
+            connect: progress.connect,
+            transfer: progress.transfer,
+            server_timing: progress.server_timing,
+            response: progress.response,
             bytes_in: progress.bytes_in,
             bytes_out: progress.bytes_out,
             new_connection: progress.new_connection,
@@ -370,8 +416,11 @@ impl PooledClient {
         let mut retried = false;
         loop {
             let lease = self.checkout(&req.origin).await?;
-            let fresh = lease.fresh;
+            let fresh = lease.fresh.is_some();
             progress.new_connection |= fresh;
+            if let Some(took) = lease.fresh {
+                progress.connect = Some(progress.connect.unwrap_or_default() + took);
+            }
             match self.round_trip(lease, req, progress).await {
                 Ok(status) => return Ok(status),
                 // A reused connection the server closed meanwhile: once more on a new one.
@@ -383,28 +432,26 @@ impl PooledClient {
 
     async fn checkout(&self, origin: &Origin) -> Result<Lease> {
         if !self.keep_alive {
-            let conn = self.open(origin).await?;
-            return Ok(Lease { conn, fresh: true });
+            return self.open_timed(origin).await;
         }
         loop {
             match origin.proto() {
                 Proto::Http1 => {
                     if let Some(conn) = origin.take_idle().await {
-                        return Ok(Lease { conn: Conn::H1(conn), fresh: false });
+                        return Ok(Lease { conn: Conn::H1(conn), fresh: None });
                     }
                     // HTTP/1.1 needs a connection per concurrent request: open without queueing.
-                    let conn = self.open(origin).await?;
-                    return Ok(Lease { conn, fresh: true });
+                    return self.open_timed(origin).await;
                 }
                 Proto::Http2 => {
                     if let Some(lease) = origin.lease_h2() {
-                        return Ok(Lease { conn: Conn::H2(lease), fresh: false });
+                        return Ok(Lease { conn: Conn::H2(lease), fresh: None });
                     }
                     let queued = Instant::now();
                     let mut opening = origin.opening.lock().await;
                     // Someone else may have opened one while this request waited.
                     if let Some(lease) = origin.lease_h2() {
-                        return Ok(Lease { conn: Conn::H2(lease), fresh: false });
+                        return Ok(Lease { conn: Conn::H2(lease), fresh: None });
                     }
                     return self.open_serialized(origin, &mut opening, queued).await;
                 }
@@ -432,16 +479,23 @@ impl PooledClient {
         {
             return Err(err.clone());
         }
-        match self.open(origin).await {
-            Ok(conn) => {
+        match self.open_timed(origin).await {
+            Ok(lease) => {
                 *last_failure = None;
-                Ok(Lease { conn, fresh: true })
+                Ok(lease)
             }
             Err(e) => {
                 *last_failure = Some((Instant::now(), e.clone()));
                 Err(e)
             }
         }
+    }
+
+    /// [`Self::open`], timed.
+    async fn open_timed(&self, origin: &Origin) -> Result<Lease> {
+        let started = Instant::now();
+        let conn = self.open(origin).await?;
+        Ok(Lease { conn, fresh: Some(started.elapsed()) })
     }
 
     /// Connect and handshake. A new HTTP/2 connection is shared through the
@@ -530,11 +584,8 @@ impl PooledClient {
                             return Err(if unsent { Failure::Unsent(err) } else { Failure::Failed(err) });
                         }
                     };
-                progress.ttfb = Some(sent.elapsed());
                 let status = response.status().as_u16();
-                let (parts, body) = response.into_parts();
-                progress.bytes_in += response_head_size(&parts);
-                read_to_end(body, progress).await.map_err(Failure::Failed)?;
+                read_response(response, sent, req.keep, progress).await.map_err(Failure::Failed)?;
                 if self.keep_alive {
                     conn.idle_since = Instant::now();
                     lock(&req.origin.idle).push(conn);
@@ -558,11 +609,8 @@ impl PooledClient {
                             return Err(if unsent { Failure::Unsent(err) } else { Failure::Failed(err) });
                         }
                     };
-                progress.ttfb = Some(sent.elapsed());
                 let status = response.status().as_u16();
-                let (parts, body) = response.into_parts();
-                progress.bytes_in += response_head_size(&parts);
-                read_to_end(body, progress).await.map_err(Failure::Failed)?;
+                read_response(response, sent, req.keep, progress).await.map_err(Failure::Failed)?;
                 drop(lease);
                 Ok(status)
             }
@@ -583,15 +631,61 @@ fn request_error(err: hyper::Error) -> EngineError {
     }
 }
 
-/// Read and discard the body, counting its bytes.
-async fn read_to_end(mut body: Incoming, progress: &mut Progress) -> Result<()> {
+/// Note the head (time to first byte, `Server-Timing`), then read the body to
+/// the end, counting its bytes, and keep the response when `keep` asks for it.
+async fn read_response(
+    response: http::Response<Incoming>,
+    sent: Instant,
+    keep: Option<usize>,
+    progress: &mut Progress,
+) -> Result<()> {
+    let head_at = Instant::now();
+    progress.ttfb = Some(head_at.saturating_duration_since(sent));
+    let (parts, mut body) = response.into_parts();
+    progress.bytes_in += response_head_size(&parts);
+    progress.server_timing = server_timing(&parts.headers);
+    let mut kept = keep.map(|limit| {
+        let expected = parts
+            .headers
+            .get(http::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok()?.parse::<usize>().ok())
+            .unwrap_or(0);
+        (Vec::with_capacity(expected.min(limit)), limit)
+    });
     while let Some(frame) = body.frame().await {
         let frame = frame.map_err(EngineError::from_hyper)?;
         if let Some(data) = frame.data_ref() {
             progress.bytes_in += data.len() as u64;
+            if let Some((buf, limit)) = kept.as_mut() {
+                let room = limit.saturating_sub(buf.len());
+                buf.extend_from_slice(&data[..data.len().min(room)]);
+            }
         }
     }
+    progress.transfer = Some(head_at.elapsed());
+    if let Some((raw, limit)) = kept {
+        let headers: Vec<Header> =
+            parts.headers.iter().map(|(n, v)| Header::new(n.as_str(), String::from_utf8_lossy(v.as_bytes()))).collect();
+        let encoding = parts.headers.get(http::header::CONTENT_ENCODING).and_then(|v| v.to_str().ok());
+        let body = match encoding {
+            Some(coding) => decode_content(raw, coding, limit).body,
+            None => raw,
+        };
+        progress.response = Some(KeptResponse { headers, body: Bytes::from(body) });
+    }
     Ok(())
+}
+
+/// Every `Server-Timing` header value, joined (a list split over several
+/// headers means the same as one comma-separated header).
+fn server_timing(headers: &http::HeaderMap) -> Option<String> {
+    let mut values = headers.get_all("server-timing").iter().filter_map(|v| v.to_str().ok());
+    let first = values.next()?;
+    Some(values.fold(first.to_string(), |mut all, v| {
+        all.push_str(", ");
+        all.push_str(v);
+        all
+    }))
 }
 
 /// "HTTP/1.1 200 OK\r\n", "Name: value\r\n" per header, "\r\n".

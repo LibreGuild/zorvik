@@ -1,8 +1,9 @@
 //! Load tests (`load.*`): saved files, one run at a time, run history and
 //! reports. The generator itself is `zorvik_load`; this module turns a saved
 //! load test into a plan (resolving each request once, with variables,
-//! inheritance and OAuth2) and keeps the results.
+//! inheritance and OAuth2; the data file's rows) and keeps the results.
 
+use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -10,10 +11,13 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use ts_rs::TS;
-use zorvik_load::{LoadEvent, LoadRun, Plan, PlanTarget, RequestSource, Snapshot, Summary, TimePoint};
+use zorvik_load::{
+    DataRow, LoadEvent, LoadRun, Plan, PlanTarget, Render, RequestSource, Snapshot, Summary, TimePoint, UserVars,
+};
 use zorvik_workspace::Workspace;
-use zorvik_workspace::formats::{LoadTest, RequestKind, RequestSettings};
-use zorvik_workspace::resolve::{Inheritance, apply_token, resolve};
+use zorvik_workspace::formats::{LoadTest, RequestKind, RequestSettings, Variable};
+use zorvik_workspace::resolve::{Inheritance, apply_token, check_url_variables, resolve};
+use zorvik_workspace::vars::VarContext;
 
 use crate::{Api, ApiError, ApiResult, StreamEvent, lock, ok, params};
 
@@ -319,15 +323,34 @@ impl Api {
     }
 
     /// Resolve every enabled target once (variables, inherited headers/auth,
-    /// OAuth2 token). Requests using dynamic variables are re-rendered per iteration.
+    /// OAuth2 token) and read the data file. Requests that use dynamic
+    /// variables, data file columns or captured values are rendered again for
+    /// every request; the others are sent as resolved here.
     async fn build_plan(&self, ws: &Workspace, test: &LoadTest) -> ApiResult<Plan> {
         let settings = self.settings();
         let overrides =
             RequestSettings { timeout_ms: test.timeout_ms, http_version: test.http_version, ..Default::default() };
         let options = crate::request_options(&settings, &overrides)?;
-        let meta = self.revealed_meta(ws);
-        let vars = self.var_context(ws);
+        let meta = Arc::new(self.revealed_meta(ws));
         let outside_files = settings.files_outside_workspace;
+        let (rows, columns) = match test.data_file.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
+            // Up to 50 MB to read and parse: not on the async workers.
+            Some(file) => {
+                let (file, root) = (file.to_string(), ws.root().to_path_buf());
+                let (data, _) =
+                    tokio::task::spawn_blocking(move || crate::runner::read_data_file(&file, &root, outside_files))
+                        .await
+                        .map_err(crate::join_err)?
+                        .map_err(ApiError::invalid)?;
+                (data_rows(&data), data.columns)
+            }
+            None => (Vec::new(), Vec::new()),
+        };
+        // What a request may take from its user: data file columns and captured values.
+        let captured = test.targets.iter().flat_map(|t| &t.captures).map(|c| c.variable.trim().to_string());
+        let names: Vec<String> = columns.into_iter().chain(captured).filter(|n| !n.is_empty()).collect();
+        // Below the user's variables: the environment, workspace variables, globals.
+        let base = Arc::new(flatten(&[self.active_env_vars(ws), self.workspace_vars(ws), self.global_vars()]));
         let mut targets = Vec::new();
         for target in test.targets.iter().filter(|t| t.enabled && t.weight > 0) {
             let request = ws.read_request(&target.request).map_err(|e| {
@@ -339,7 +362,11 @@ impl Api {
                     request.name
                 )));
             }
-            let mut resolved = self.prepare(ws, &request, Some(&target.request))?;
+            let folders = ws.ancestors(&target.request);
+            // Checked with every user variable defined: a URL may use them.
+            let inherit = Inheritance { workspace: &meta, folders: &folders, base_dir: ws.root(), outside_files };
+            let mut resolved = resolve(&request, &inherit, &user_context(&UserVars::probe(&names), &base))?;
+            check_url_variables(&resolved)?;
             let token = match resolved.oauth2.clone() {
                 Some(config) => {
                     let token = zorvik_workspace::oauth2::ensure_token(
@@ -357,23 +384,29 @@ impl Api {
                 None => None,
             };
             let dynamic = serde_json::to_string(&request).is_ok_and(|json| json.contains("{{$"));
-            let source = if dynamic {
-                let folders = ws.ancestors(&target.request);
-                let (meta, vars, base_dir) = (meta.clone(), vars.clone(), ws.root().to_path_buf());
-                RequestSource::Dynamic(Arc::new(move || {
-                    let inherit =
-                        Inheritance { workspace: &meta, folders: &folders, base_dir: &base_dir, outside_files };
-                    let mut resolved = resolve(&request, &inherit, &vars).map_err(|e| e.message)?;
-                    if let Some(token) = &token {
-                        apply_token(&mut resolved, token);
-                    }
-                    Ok(resolved.request)
-                }))
-            } else {
-                RequestSource::Fixed(resolved.request)
-            };
-            let name = ws.read_request(&target.request).map(|r| r.name).unwrap_or_else(|_| target.request.clone());
-            targets.push(PlanTarget { name, request: target.request.clone(), source, weight: target.weight });
+            let name = request.name.clone();
+            let (meta, base, base_dir) = (meta.clone(), base.clone(), ws.root().to_path_buf());
+            // Without user variables (no data file, nothing captured) the context is built once.
+            let plain = user_context(&UserVars::default(), &base);
+            let render: Render = Arc::new(move |user: &UserVars| {
+                let inherit = Inheritance { workspace: &meta, folders: &folders, base_dir: &base_dir, outside_files };
+                let vars = if user.is_empty() { None } else { Some(user_context(user, &base)) };
+                let mut resolved =
+                    resolve(&request, &inherit, vars.as_ref().unwrap_or(&plain)).map_err(|e| e.message)?;
+                if let Some(token) = &token {
+                    apply_token(&mut resolved, token);
+                }
+                Ok(resolved.request)
+            });
+            let source = RequestSource::from_render(render, &names, dynamic)
+                .map_err(|e| ApiError::invalid(format!("{name}: {e}")))?;
+            targets.push(PlanTarget {
+                name,
+                request: target.request.clone(),
+                source,
+                weight: target.weight,
+                captures: target.captures.clone(),
+            });
         }
         let plan = Plan {
             targets,
@@ -384,6 +417,7 @@ impl Api {
             keep_alive: test.keep_alive,
             options,
             thresholds: test.thresholds.clone(),
+            rows,
         };
         zorvik_load::validate(&plan).map_err(ApiError::invalid)?;
         Ok(plan)
@@ -471,7 +505,7 @@ impl Api {
         Ok(stored.summary)
     }
 
-    fn load_history(&self, ws: &Workspace, test_id: &str) -> ApiResult<Vec<LoadRunRecord>> {
+    pub(crate) fn load_history(&self, ws: &Workspace, test_id: &str) -> ApiResult<Vec<LoadRunRecord>> {
         let Ok(entries) = std::fs::read_dir(self.history_dir(ws, test_id)?) else { return Ok(Vec::new()) };
         let mut runs: Vec<LoadRunRecord> = entries
             .flatten()
@@ -548,27 +582,45 @@ fn outside_hosts(plan: &Plan) -> Vec<String> {
     plan_hosts(plan).into_iter().filter(|h| !is_local(h)).collect()
 }
 
-/// Every host the plan targets.
+/// Every host the plan targets, also the ones that come from the data file.
 fn plan_hosts(plan: &Plan) -> Vec<String> {
-    let mut hosts: Vec<String> = Vec::new();
-    for target in &plan.targets {
-        let url = match &target.source {
-            RequestSource::Fixed(r) => r.url.clone(),
-            RequestSource::Dynamic(make) => match make() {
-                Ok(r) => r.url,
-                Err(_) => continue,
-            },
-        };
-        let Ok(url) = zorvik_engine::http::normalize_url(&url) else { continue };
-        let Some(host) = url.host_str().map(|h| h.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase())
-        else {
-            continue;
-        };
-        if !hosts.contains(&host) {
-            hosts.push(host);
-        }
+    zorvik_load::hosts(plan)
+}
+
+/// Data file rows as the generator takes them: `(column, value)` with values
+/// as variables see them (like the collection runner's data rows).
+fn data_rows(data: &crate::runner::DataFile) -> Vec<DataRow> {
+    data.rows
+        .iter()
+        .map(|row| row.iter().map(|(k, v)| (k.clone(), zorvik_script::value_text(v))).collect::<Vec<_>>().into())
+        .collect()
+}
+
+/// Several layers of variables as one (the first definition of a name wins, as in `VarContext`).
+fn flatten(layers: &[Vec<Variable>]) -> Vec<Variable> {
+    let mut seen = HashSet::new();
+    layers
+        .iter()
+        .flatten()
+        .filter(|v| v.enabled && !v.key.trim().is_empty() && seen.insert(v.key.trim().to_string()))
+        .cloned()
+        .collect()
+}
+
+/// Variables for one user's request: the user's (captured values, then its
+/// data row) above `base` (environment, workspace, globals), like the
+/// collection runner's data row.
+fn user_context(user: &UserVars, base: &[Variable]) -> VarContext {
+    let mut ctx = VarContext::new();
+    if !user.is_empty() {
+        let vars: Vec<Variable> = user
+            .iter()
+            .map(|(key, value)| Variable { key: key.into(), value: value.into(), enabled: true, secret: false })
+            .collect();
+        ctx.push_layer(&vars);
     }
-    hosts
+    ctx.push_layer(base);
+    ctx
 }
 
 /// This computer or a private network: loopback, private and link-local
@@ -658,7 +710,13 @@ mod tests {
                 headers: Vec::new(),
                 body: Default::default(),
             };
-            PlanTarget { name: url.into(), request: String::new(), source: RequestSource::Fixed(request), weight: 1 }
+            PlanTarget {
+                name: url.into(),
+                request: String::new(),
+                source: RequestSource::Fixed(request),
+                weight: 1,
+                captures: Vec::new(),
+            }
         };
         let plan = Plan {
             targets: vec![
@@ -676,6 +734,7 @@ mod tests {
             keep_alive: true,
             options: Default::default(),
             thresholds: Vec::new(),
+            rows: Vec::new(),
         };
         assert_eq!(outside_hosts(&plan), ["api.example.com", "2606:4700::1111"]);
     }

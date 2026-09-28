@@ -8,6 +8,8 @@ import type { AutoStartResult } from "../bindings/AutoStartResult";
 import type { Auth } from "../bindings/Auth";
 import type { CookieInfo } from "../bindings/CookieInfo";
 import type { CurlFlavor } from "../bindings/CurlFlavor";
+import type { SnippetLanguage } from "../bindings/SnippetLanguage";
+import type { SpecUpdate } from "../bindings/SpecUpdate";
 import type { CurlImportResult } from "../bindings/CurlImportResult";
 import type { DataPreview } from "../bindings/DataPreview";
 import type { DnsQueryResult } from "../bindings/DnsQueryResult";
@@ -242,11 +244,15 @@ export const api = {
   clearCookies: () => call<null>("cookies.clear"),
 
   importCurl: (text: string) => call<CurlImportResult>("import.curl", { text }),
-  importFile: (path: string, parent: string) => call<ImportSummary>("import.file", { path, parent }),
-  importText: (text: string, parent: string) => call<ImportSummary>("import.file", { text, parent }),
-  importUrl: (url: string, parent: string) => call<ImportSummary>("import.url", { url, parent }),
+  importFile: (path: string, parent: string, baseUrl?: string) => call<ImportSummary>("import.file", { path, parent, baseUrl }),
+  importText: (text: string, parent: string, baseUrl?: string) => call<ImportSummary>("import.file", { text, parent, baseUrl }),
+  importUrl: (url: string, parent: string, baseUrl?: string) => call<ImportSummary>("import.url", { url, parent, baseUrl }),
+  specUpdate: (folder: string, from: { text?: string; path?: string; url?: string }, apply: boolean) =>
+    call<SpecUpdate>(apply ? "import.update" : "import.updatePreview", { folder, ...from }),
   exportCurl: (request: Request, path: string | null, flavor: CurlFlavor, resolveVariables: boolean) =>
     call<string>("export.curl", { request, path, flavor, resolveVariables }),
+  exportSnippet: (request: Request, path: string | null, language: SnippetLanguage, resolveVariables: boolean) =>
+    call<string>("export.snippet", { request, path, language, resolveVariables }),
 };
 
 export interface RunnerStartParams {

@@ -4,7 +4,7 @@
 //! handling, and the final summary.
 
 use std::panic::AssertUnwindSafe;
-use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -13,12 +13,13 @@ use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use zorvik_engine::pool::{Exchange, PooledClient, PooledRequest};
-use zorvik_engine::{EngineError, ErrorKind, HttpRequest};
+use zorvik_engine::{EngineError, ErrorKind};
 use zorvik_formats::LoadModel;
 
-use crate::metrics::{Outcome, Recorder, Sample, SummaryInfo};
+use crate::capture::{CAPTURE_BODY, Capture, DataRow, UserVars, server_timing_ms};
+use crate::metrics::{Outcome, Phases, Recorder, Sample, SummaryInfo};
 use crate::schedule::{Picker, Profile};
-use crate::{EventFn, LoadEvent, MAX_USERS, MetricsSummary, Plan, RequestSource, RunPhase, Summary};
+use crate::{EventFn, LoadEvent, MAX_USERS, MetricsSummary, Plan, Render, RequestSource, RunPhase, Summary};
 
 const SNAPSHOT_EVERY: Duration = Duration::from_millis(250);
 /// Samples waiting for the aggregator; when it is full, senders record directly.
@@ -31,8 +32,6 @@ const RENDER_BACKOFF: Duration = Duration::from_millis(100);
 /// How often virtual users are added or removed to follow the stages.
 const USER_TICK: Duration = Duration::from_millis(50);
 
-type Render = Arc<dyn Fn() -> Result<HttpRequest, String> + Send + Sync>;
-
 enum Source {
     Fixed(Box<PooledRequest>),
     Dynamic(Render),
@@ -44,31 +43,42 @@ pub(crate) struct Prepared {
     client: PooledClient,
     /// Per target; `None` for targets with weight 0 (never sent).
     sources: Vec<Option<Source>>,
+    /// Per target.
+    captures: Vec<Vec<Capture>>,
+    /// Where rendered requests may go (see [`crate::hosts`]).
+    hosts: Vec<String>,
 }
 
-/// Build the client and each target's request, so a broken URL, header or
-/// certificate file is reported before anything is sent.
+/// Build the client and each target's request, so a broken URL, header,
+/// certificate file or capture is reported before anything is sent.
 pub(crate) fn prepare(plan: Plan) -> Result<Prepared, String> {
     let client = PooledClient::new(plan.options.clone(), plan.keep_alive).map_err(|e| e.message)?;
+    let first = UserVars::new(plan.rows.first().cloned());
     let mut sources = Vec::with_capacity(plan.targets.len());
+    let mut captures = Vec::with_capacity(plan.targets.len());
     for target in &plan.targets {
+        let problem = |message: String| format!("{}: {message}", target.name);
         if target.weight == 0 {
             sources.push(None);
+            captures.push(Vec::new());
             continue;
         }
-        let problem = |message: String| format!("{}: {message}", target.name);
+        let list = target.captures.iter().map(Capture::new).collect::<Result<Vec<_>, _>>().map_err(problem)?;
+        let keep = |req: PooledRequest| if list.is_empty() { req } else { req.keep_response(CAPTURE_BODY) };
         let source = match &target.source {
             RequestSource::Fixed(req) => {
-                Source::Fixed(Box::new(client.prepare(req.clone()).map_err(|e| problem(e.message))?))
+                Source::Fixed(Box::new(keep(client.prepare(req.clone()).map_err(|e| problem(e.message))?)))
             }
             RequestSource::Dynamic(render) => {
-                client.prepare(render().map_err(problem)?).map_err(|e| problem(e.message))?;
+                client.prepare(render(&first).map_err(problem)?).map_err(|e| problem(e.message))?;
                 Source::Dynamic(render.clone())
             }
         };
         sources.push(Some(source));
+        captures.push(list);
     }
-    Ok(Prepared { plan, client, sources })
+    let hosts = crate::hosts(&plan);
+    Ok(Prepared { plan, client, sources, captures, hosts })
 }
 
 /// Start the run on its own thread. [`LoadEvent::Finished`] is sent exactly
@@ -134,7 +144,7 @@ fn run_thread(prepared: Prepared, on_event: EventFn, stop: CancellationToken) {
         Err(e) => return finish.send(failed(started_at, format!("Could not start the load generator: {e}"))),
     };
 
-    let Prepared { plan, client, sources } = prepared;
+    let Prepared { plan, client, sources, captures, hosts } = prepared;
     let profile = Profile::new(&plan.stages);
     let names = plan.targets.iter().map(|t| (t.name.clone(), t.request.clone())).collect();
     let recorder = Arc::new(Mutex::new(Recorder::new(
@@ -148,6 +158,11 @@ fn run_thread(prepared: Prepared, on_event: EventFn, stop: CancellationToken) {
     let shared = Arc::new(Shared {
         client,
         sources,
+        captures,
+        hosts,
+        in_order: plan.has_captures(),
+        next_row: AtomicUsize::new(0),
+        rows: plan.rows,
         picker: Picker::new(&weights),
         profile,
         model: plan.model,
@@ -237,6 +252,14 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 struct Shared {
     client: PooledClient,
     sources: Vec<Option<Source>>,
+    captures: Vec<Vec<Capture>>,
+    hosts: Vec<String>,
+    /// Each user goes through the targets in order (the plan has captures);
+    /// else every pick takes the next target of one shared order.
+    in_order: bool,
+    rows: Vec<DataRow>,
+    /// Open model: the next request's row.
+    next_row: AtomicUsize,
     picker: Picker,
     profile: Profile,
     model: LoadModel,
@@ -288,23 +311,44 @@ impl Shared {
         }
     }
 
-    /// One iteration of `target`; latency counts from `started`.
-    async fn send(&self, target: usize, started: Instant) -> Outcome {
+    /// Row `i` of the data file (wrapping around), if there is one.
+    fn row(&self, i: usize) -> Option<DataRow> {
+        (!self.rows.is_empty()).then(|| self.rows[i % self.rows.len()].clone())
+    }
+
+    /// One iteration of `target` for a user with `vars`; latency counts from
+    /// `started`. The target's captures update `vars` from the response.
+    async fn send(&self, target: usize, started: Instant, vars: &mut UserVars) -> Outcome {
+        let captures = self.captures.get(target).map_or(&[][..], Vec::as_slice);
         let exchange = match self.sources.get(target).and_then(Option::as_ref) {
             Some(Source::Fixed(req)) => self.client.send(req, started).await,
-            Some(Source::Dynamic(render)) => {
-                match render().map_err(EngineError::invalid).and_then(|req| self.client.prepare(req)) {
-                    Ok(req) => self.client.send(&req, started).await,
-                    Err(e) => {
-                        tracing::debug!("load test request could not be built: {}", e.message);
-                        tokio::time::sleep(RENDER_BACKOFF).await;
-                        return failure(ErrorKind::InvalidRequest, None);
-                    }
+            Some(Source::Dynamic(render)) => match self.build(render, vars, !captures.is_empty()) {
+                Ok(req) => self.client.send(&req, started).await,
+                Err(e) => {
+                    tracing::debug!("load test request could not be built: {}", e.message);
+                    tokio::time::sleep(RENDER_BACKOFF).await;
+                    return failure(e.kind, None);
                 }
-            }
+            },
             None => return failure(ErrorKind::InvalidRequest, None),
         };
-        outcome(exchange)
+        let misses = match &exchange.response {
+            Some(response) if !captures.is_empty() => crate::capture::apply(captures, response, vars),
+            _ => 0,
+        };
+        outcome(exchange, misses)
+    }
+
+    /// Render a request for this user; it must go to a host the run was started for.
+    fn build(&self, render: &Render, vars: &UserVars, keep: bool) -> Result<PooledRequest, EngineError> {
+        let req = self.client.prepare(render(vars).map_err(EngineError::invalid)?)?;
+        if !self.hosts.iter().any(|h| h.eq_ignore_ascii_case(req.host())) {
+            return Err(EngineError::new(
+                ErrorKind::NotAllowed,
+                format!("{} is not a host this run was started for", req.host()),
+            ));
+        }
+        Ok(if keep { req.keep_response(CAPTURE_BODY) } else { req })
     }
 
     /// Open model: start one request scheduled for `due`, unless `maxInFlight`
@@ -316,13 +360,15 @@ impl Shared {
             self.record(target, Outcome::Dropped);
             return;
         }
+        // Each request is its own iteration: the next row, nothing captured yet.
+        let mut vars = UserVars::new(self.row(self.next_row.fetch_add(1, Ordering::Relaxed)));
         let shared = self.clone();
         self.tasks.spawn(async move {
             let _active = Active(&shared.active);
             let outcome = tokio::select! {
                 biased;
                 _ = shared.abort.cancelled() => failure(ErrorKind::Cancelled, Some(due)),
-                outcome = shared.send(target, due) => outcome,
+                outcome = shared.send(target, due, &mut vars) => outcome,
             };
             shared.record(target, outcome);
         });
@@ -347,10 +393,16 @@ fn failure(kind: ErrorKind, waited_since: Option<Instant>) -> Outcome {
         bytes_in: 0,
         bytes_out: 0,
         new_connection: false,
+        phases: Phases::default(),
+        capture_misses: 0,
     }
 }
 
-fn outcome(e: Exchange) -> Outcome {
+fn micros(d: Duration) -> u64 {
+    d.as_micros() as u64
+}
+
+fn outcome(e: Exchange, capture_misses: u32) -> Outcome {
     let kind = e.error.as_ref().map(|e| e.kind);
     if let Some(err) = &e.error {
         tracing::trace!("load test request failed: {}", err.message);
@@ -364,6 +416,13 @@ fn outcome(e: Exchange) -> Outcome {
         bytes_in: e.bytes_in,
         bytes_out: e.bytes_out,
         new_connection: e.new_connection,
+        phases: Phases {
+            connect_us: e.connect.map(micros),
+            ttfb_us: e.ttfb.map(micros),
+            transfer_us: e.transfer.map(micros),
+            server_us: e.server_timing.as_deref().and_then(server_timing_ms).map(|ms| (ms * 1000.0).round() as u64),
+        },
+        capture_misses,
     }
 }
 
@@ -455,6 +514,8 @@ async fn aggregate(
 /// Closed model: keep as many users running as the stage wants.
 async fn virtual_users(shared: Arc<Shared>) {
     let mut users: Vec<CancellationToken> = Vec::new();
+    // Users started so far: the next one's number (and data row).
+    let mut started = 0;
     let mut tick = tokio::time::interval(USER_TICK);
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
@@ -467,8 +528,9 @@ async fn virtual_users(shared: Arc<Shared>) {
         let wanted = wanted.min(MAX_USERS as usize);
         while users.len() < wanted {
             let retire = CancellationToken::new();
-            shared.tasks.spawn(user(shared.clone(), retire.clone()));
+            shared.tasks.spawn(user(shared.clone(), retire.clone(), started));
             users.push(retire);
+            started += 1;
         }
         // Retired users finish the request they are sending.
         while users.len() > wanted {
@@ -479,17 +541,21 @@ async fn virtual_users(shared: Arc<Shared>) {
     }
 }
 
-/// One virtual user: send, wait for the answer, think, repeat.
-async fn user(shared: Arc<Shared>, retire: CancellationToken) {
+/// Virtual user number `index`: send, wait for the answer, think, repeat.
+/// It keeps its data row and captured values for its whole life.
+async fn user(shared: Arc<Shared>, retire: CancellationToken, index: usize) {
     shared.active.fetch_add(1, Ordering::AcqRel);
     let _active = Active(&shared.active);
+    let mut vars = UserVars::new(shared.row(index));
+    let mut step = 0;
     while !retire.is_cancelled() && !shared.ending.is_cancelled() {
-        let target = shared.picker.next();
+        let target = if shared.in_order { shared.picker.at(step) } else { shared.picker.next() };
+        step += 1;
         let started = Instant::now();
         let outcome = tokio::select! {
             biased;
             _ = shared.abort.cancelled() => failure(ErrorKind::Cancelled, Some(started)),
-            outcome = shared.send(target, started) => outcome,
+            outcome = shared.send(target, started, &mut vars) => outcome,
         };
         shared.record(target, outcome);
         if shared.abort.is_cancelled() {

@@ -1,5 +1,5 @@
 // The results side of a load test tab: the live run, or the latest / an earlier
-// finished run, with its history, exports and deletion.
+// finished run, with its history, a comparison with another run, exports and deletion.
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { DropdownMenu } from "radix-ui";
 import { Activity, Check, ChevronDown, CircleAlert, CircleCheck, CircleDashed, CircleX, Cpu, Download, History, Loader2, Trash2 } from "lucide-react";
@@ -16,7 +16,7 @@ import { methodColor, methodLabel } from "../../lib/http";
 import { modKey, pickSavePath } from "../../lib/platform";
 import { api, errorMessage } from "../../lib/rpc";
 import { confirm } from "../../store/dialogs";
-import { forgetResult, type LiveRun, rememberResult, runFor, useLoadTests } from "../../store/loadtests";
+import { forgetResult, type LiveRun, rememberResult, runFor, setCompareRun, useLoadTests } from "../../store/loadtests";
 import { type LoadTestTab, updateLoadTestTab } from "../../store/tabs";
 import { toast } from "../../store/toasts";
 import { useWorkspace } from "../../store/workspace";
@@ -35,8 +35,10 @@ import {
   MODELS,
   nameFromPath,
 } from "./model";
+import { CompareMenu, ComparePanel } from "./CompareRuns";
 import { Panel, Stat, useTicker, Verdict } from "./parts";
 import { type ChartSeries, Legend, TimeChart } from "./TimeChart";
+import { TimingPanel } from "./TimingPanel";
 
 const NO_NODES: TreeNode[] = [];
 const cores = typeof navigator !== "undefined" ? Math.max(1, navigator.hardwareConcurrency || 1) : 1;
@@ -95,6 +97,7 @@ export function LoadResults({ tab }: { tab: LoadTestTab }) {
   const [runs, setRuns] = useState<LoadRunRecord[] | null>(null);
   const [cache, setCache] = useState<Record<string, Summary>>({});
   const selected = tab.runId ?? null;
+  const compareId = useLoadTests((s) => s.compare[testId] ?? null);
   // Until the first snapshot, the elapsed time comes from the clock.
   const tick = useTicker(!!live && !live.snapshot);
 
@@ -185,6 +188,7 @@ export function LoadResults({ tab }: { tab: LoadTestTab }) {
             {live ? "Back to the live run" : "Back to the latest run"}
           </button>
         )}
+        {data?.totals && <CompareMenu runs={runs} shown={shownRunId} selected={compareId} onSelect={(runId) => setCompareRun(testId, runId)} />}
         <RunsMenu runs={runs} selected={shownRunId} live={!!live} onSelect={select} />
         {shownRunId && data?.summary && (
           <>
@@ -208,7 +212,7 @@ export function LoadResults({ tab }: { tab: LoadTestTab }) {
       </div>
 
       {data ? (
-        <Dashboard data={data} model={model} />
+        <Dashboard data={data} model={model} testId={testId} compareId={compareId && compareId !== shownRunId ? compareId : null} />
       ) : selected || (runs === null && !latest) ? (
         <div className="flex flex-1 items-center justify-center p-8">
           <Loader2 size={18} className="zv-spin text-muted" />
@@ -321,10 +325,12 @@ async function exportRun(testId: string, runId: string, name: string, summary: S
 
 // ---- dashboard ----------------------------------------------------------------------------
 
-const Dashboard = memo(function Dashboard({ data, model }: { data: ViewData; model: LoadModel }) {
+const Dashboard = memo(function Dashboard({ data, model, testId, compareId }: { data: ViewData; model: LoadModel; testId: string; compareId: string | null }) {
   const tree = useWorkspace((s) => s.info?.tree ?? NO_NODES);
   const share = cpuShare(data.cpu, cores);
   const hot = share != null && share > CPU_WARNING;
+  const current = useMemo(() => (data.totals ? { totals: data.totals, targets: data.targets } : null), [data.totals, data.targets]);
+  const timing = data.totals?.timing;
   return (
     <div className="flex flex-col gap-3 p-4">
       {data.summary && <VerdictCard summary={data.summary} />}
@@ -339,8 +345,10 @@ const Dashboard = memo(function Dashboard({ data, model }: { data: ViewData; mod
           </div>
         </div>
       )}
+      {compareId && current && <ComparePanel testId={testId} runId={compareId} current={current} onClose={() => setCompareRun(testId, null)} />}
       {data.thresholds.length > 0 && <ThresholdsPanel thresholds={data.thresholds} live={!!data.live} />}
       <Charts points={data.points} plannedSecs={data.plannedSecs} model={model} />
+      {data.totals && timing && (timing.ttfb.count > 0 || timing.connect.count > 0) && <TimingPanel totals={data.totals} />}
       {data.targets.length > 0 && <TargetsTable targets={data.targets} tree={tree} />}
       {data.totals && (
         <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-3">
@@ -608,6 +616,8 @@ function TargetsTable({ targets, tree }: { targets: TargetSummary[]; tree: TreeN
   const td = "whitespace-nowrap px-1.5 py-1.5 text-right font-mono tabular-nums";
   // Narrow panes scroll the numbers sideways under the request names.
   const first = "sticky left-0 z-[1] bg-bg px-2 py-1.5";
+  const ttfb = targets.some((t) => (t.metrics.timing?.ttfb.count ?? 0) > 0);
+  const misses = targets.some((t) => (t.metrics.captureMisses ?? 0) > 0);
   return (
     <Panel title="Per request" testId="load-targets-table">
       <div className="-mx-1 overflow-x-auto">
@@ -622,6 +632,16 @@ function TargetsTable({ targets, tree }: { targets: TargetSummary[]; tree: TreeN
               <th className={th}>p95 ms</th>
               <th className={th}>p99 ms</th>
               <th className={th}>max ms</th>
+              {ttfb && (
+                <th className={th} title="Time to first byte: the server's time plus one network round trip">
+                  1st byte p95
+                </th>
+              )}
+              {misses && (
+                <th className={th} title="Captures that found nothing in a response (the variable kept its value)">
+                  Missed
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -645,6 +665,8 @@ function TargetsTable({ targets, tree }: { targets: TargetSummary[]; tree: TreeN
                   <td className={cx(td, "text-fg")}>{formatLatencyNumber(m.latency.p95)}</td>
                   <td className={cx(td, "text-fg")}>{formatLatencyNumber(m.latency.p99)}</td>
                   <td className={cx(td, "text-muted")}>{formatLatencyNumber(m.latency.max)}</td>
+                  {ttfb && <td className={cx(td, "text-fg")}>{m.timing?.ttfb.count ? formatLatencyNumber(m.timing.ttfb.p95) : "–"}</td>}
+                  {misses && <td className={cx(td, m.captureMisses ? "text-warning" : "text-muted")}>{formatCount(m.captureMisses ?? 0)}</td>}
                 </tr>
               );
             })}
@@ -717,6 +739,15 @@ function Errors({ totals, model }: { totals: MetricsSummary; model: LoadModel })
               </span>
             </div>
           )}
+        </div>
+      )}
+      {(totals.captureMisses ?? 0) > 0 && (
+        <div className="mt-2 flex items-start gap-1.5 text-[11.5px] text-warning" data-testid="load-capture-misses">
+          <CircleAlert size={13} className="mt-px shrink-0" />
+          <span>
+            {formatCount(totals.captureMisses)} capture {totals.captureMisses === 1 ? "miss" : "misses"}: a capture found nothing in a response, so the user's next
+            requests used the value it had before. These are not counted as errors.
+          </span>
         </div>
       )}
     </Panel>

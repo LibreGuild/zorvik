@@ -1,0 +1,9 @@
+id: data
+title: Sending data
+summary: Send exactly what a server expects, from query and path parameters to JSON, forms, files and content types.
+color: "#D99A2B"
+image: data
+badge:
+  id: payload-pro
+  name: Payload Pro
+  description: Sends exactly the data a server expects.

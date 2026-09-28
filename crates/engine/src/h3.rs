@@ -273,7 +273,7 @@ fn handshake_error(err: quinn::ConnectionError, host: &str, port: u16, addr: Soc
             let alert = u64::from(close.error_code) - 0x100;
             // 42 bad_certificate, 116 certificate_required.
             let hint = if matches!(alert, 42 | 116) {
-                " The server may require a client certificate (Settings > TLS)."
+                " The server may require a client certificate (Settings > Certificates)."
             } else {
                 ""
             };

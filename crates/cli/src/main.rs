@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use zorvik_api::runner::{self, RunPlan, RunResult, RunSummary};
 use zorvik_api::{ScriptVars, SendContext, values_of};
 use zorvik_engine::Client;
-use zorvik_load::{LoadEvent, Plan, PlanTarget, RequestSource, Summary};
+use zorvik_load::{DataRow, LoadEvent, PhaseSummary, Plan, PlanTarget, Render, RequestSource, Summary, UserVars};
 use zorvik_servers::{Reporter, ServerEvent, StartOptions, TrafficDirection, TrafficEntry, TrafficKind};
 use zorvik_workspace::formats::{LoadModel, LoadTest, RequestKind, RequestSettings, Server, ServerKind, Variable};
 use zorvik_workspace::oauth2::{TokenCache, ensure_token};
@@ -101,7 +101,7 @@ struct LoadArgs {
     /// Skip TLS certificate verification.
     #[arg(short = 'k', long)]
     insecure: bool,
-    /// Let requests send body files from outside the workspace folder.
+    /// Let requests send body files, and the data file be, outside the workspace folder.
     #[arg(long)]
     allow_outside_files: bool,
 }
@@ -299,6 +299,7 @@ async fn run(args: RunArgs) -> ExitCode {
     let client = Client::new();
     let tokens = TokenCache::in_memory();
     let jar = zorvik_engine::CookieJar::new();
+    let specs = zorvik_api::specs::SpecCache::default();
     let cx = SendContext {
         ws: &ws,
         meta: ws.meta(),
@@ -307,6 +308,7 @@ async fn run(args: RunArgs) -> ExitCode {
         tokens: &tokens,
         jar: Some(&jar),
         guard: None,
+        specs: Some(&specs),
     };
 
     // Ctrl+C stops the run; the summary so far is still printed (and saved).
@@ -392,7 +394,8 @@ fn kind_name(kind: RequestKind) -> &'static str {
 fn print_result(r: &RunResult, paint: &dyn Fn(&str, &str) -> String) {
     let name = printable(&r.name);
     if r.skipped {
-        let note = paint("2", "(skipped: only HTTP requests run)");
+        let reason = r.skip_reason.as_deref().unwrap_or("not a kind the runner sends");
+        let note = paint("2", &format!("(skipped: {reason})"));
         out(&format!("{} {:<7} {name}  {note}", paint("33", "–"), kind_name(r.kind)));
         return;
     }
@@ -479,13 +482,51 @@ fn find_load_test(ws: &Workspace, wanted: &str) -> Result<LoadTest, String> {
     ws.read_load_test(&node.id).map_err(|e| e.message)
 }
 
+/// `--var` values (above a user's data row and captured values) and the
+/// environment and workspace variables below them, as one layer each.
+fn load_variables(
+    ws: &Workspace,
+    env: Option<&str>,
+    values: &[String],
+) -> Result<(Vec<Variable>, Vec<Variable>), String> {
+    let set = overrides(values)?;
+    let env_vars = match env {
+        Some(wanted) => find_environment(ws, wanted)?.environment.variables,
+        None => Vec::new(),
+    };
+    let mut seen = std::collections::HashSet::new();
+    let base = without_blank_secrets(&env_vars)
+        .into_iter()
+        .chain(without_blank_secrets(&ws.meta().variables))
+        .filter(|v| v.enabled && !v.key.trim().is_empty() && seen.insert(v.key.trim().to_string()))
+        .collect();
+    Ok((set, base))
+}
+
+/// Variables for one user's request: `--var`, then the user's (captured
+/// values, its data row), then the environment and workspace variables.
+fn user_context(above: &[Variable], user: &UserVars, base: &[Variable]) -> VarContext {
+    let mut ctx = VarContext::new();
+    ctx.push_layer(above);
+    if !user.is_empty() {
+        let vars: Vec<Variable> = user
+            .iter()
+            .map(|(key, value)| Variable { key: key.into(), value: value.into(), enabled: true, secret: false })
+            .collect();
+        ctx.push_layer(&vars);
+    }
+    ctx.push_layer(base);
+    ctx
+}
+
 /// Resolve every enabled target once (variables, inherited headers/auth,
-/// OAuth2 token), like the app does; requests using dynamic variables
-/// (`{{$uuid}}`…) are rendered again for every iteration. Returns warnings too.
+/// OAuth2 token) and read the data file, like the app does; requests using
+/// dynamic variables (`{{$uuid}}`…), data file columns or captured values are
+/// rendered again for every iteration. Returns warnings too.
 async fn load_plan(
     ws: &Workspace,
     test: &LoadTest,
-    vars: &VarContext,
+    (above, base): (Vec<Variable>, Vec<Variable>),
     settings: &Settings,
     outside_files: bool,
 ) -> Result<(Plan, Vec<String>), String> {
@@ -494,6 +535,27 @@ async fn load_plan(
     let options = settings.request_options(&overrides).map_err(|e| e.message)?;
     let client = Client::new();
     let tokens = TokenCache::in_memory();
+    let (rows, columns): (Vec<DataRow>, Vec<String>) =
+        match test.data_file.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
+            Some(file) => {
+                let (data, _) = runner::read_data_file(file, ws.root(), outside_files)?;
+                let text = |v: &serde_json::Value| match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Null => String::new(),
+                    other => other.to_string(),
+                };
+                let rows = data
+                    .rows
+                    .iter()
+                    .map(|row| row.iter().map(|(k, v)| (k.clone(), text(v))).collect::<Vec<_>>().into())
+                    .collect();
+                (rows, data.columns)
+            }
+            None => (Vec::new(), Vec::new()),
+        };
+    let captured = test.targets.iter().flat_map(|t| &t.captures).map(|c| c.variable.trim().to_string());
+    let names: Vec<String> = columns.into_iter().chain(captured).filter(|n| !n.is_empty()).collect();
+    let (above, base) = (Arc::new(above), Arc::new(base));
     let mut targets = Vec::new();
     let mut warnings = Vec::new();
     for target in test.targets.iter().filter(|t| t.enabled && t.weight > 0) {
@@ -506,7 +568,9 @@ async fn load_plan(
         let folders = ws.ancestors(&target.request);
         let inherit = Inheritance { workspace: ws.meta(), folders: &folders, base_dir: ws.root(), outside_files };
         let problem = |message: String| format!("{}: {message}", request.name);
-        let mut resolved = resolve(&request, &inherit, vars).map_err(|e| problem(e.message))?;
+        // Checked with every user variable defined: a URL may use them.
+        let probe = user_context(&above, &UserVars::probe(&names), &base);
+        let mut resolved = resolve(&request, &inherit, &probe).map_err(|e| problem(e.message))?;
         check_url_variables(&resolved).map_err(|e| problem(e.message))?;
         if !resolved.unresolved.is_empty() {
             warnings.push(format!("{}: undefined variables: {}", request.name, resolved.unresolved.join(", ")));
@@ -524,20 +588,27 @@ async fn load_plan(
         };
         let dynamic = serde_json::to_string(&request).is_ok_and(|json| json.contains("{{$"));
         let name = request.name.clone();
-        let source = if dynamic {
-            let (meta, vars, base_dir) = (ws.meta().clone(), vars.clone(), ws.root().to_path_buf());
-            RequestSource::Dynamic(Arc::new(move || {
-                let inherit = Inheritance { workspace: &meta, folders: &folders, base_dir: &base_dir, outside_files };
-                let mut resolved = resolve(&request, &inherit, &vars).map_err(|e| e.message)?;
-                if let Some(token) = &token {
-                    apply_token(&mut resolved, token);
-                }
-                Ok(resolved.request)
-            }))
-        } else {
-            RequestSource::Fixed(resolved.request)
-        };
-        targets.push(PlanTarget { name, request: target.request.clone(), source, weight: target.weight });
+        let (meta, base_dir) = (ws.meta().clone(), ws.root().to_path_buf());
+        let (above, base) = (above.clone(), base.clone());
+        // Without user variables (no data file, nothing captured) the context is built once.
+        let plain = user_context(&above, &UserVars::default(), &base);
+        let render: Render = Arc::new(move |user: &UserVars| {
+            let inherit = Inheritance { workspace: &meta, folders: &folders, base_dir: &base_dir, outside_files };
+            let vars = if user.is_empty() { None } else { Some(user_context(&above, user, &base)) };
+            let mut resolved = resolve(&request, &inherit, vars.as_ref().unwrap_or(&plain)).map_err(|e| e.message)?;
+            if let Some(token) = &token {
+                apply_token(&mut resolved, token);
+            }
+            Ok(resolved.request)
+        });
+        let source = RequestSource::from_render(render, &names, dynamic).map_err(|e| format!("{name}: {e}"))?;
+        targets.push(PlanTarget {
+            name,
+            request: target.request.clone(),
+            source,
+            weight: target.weight,
+            captures: target.captures.clone(),
+        });
     }
     let plan = Plan {
         targets,
@@ -548,6 +619,7 @@ async fn load_plan(
         keep_alive: test.keep_alive,
         options,
         thresholds: test.thresholds.clone(),
+        rows,
     };
     zorvik_load::validate(&plan)?;
     Ok((plan, warnings))
@@ -564,7 +636,7 @@ async fn load(args: LoadArgs) -> ExitCode {
         Ok(test) => test,
         Err(e) => return fail(e),
     };
-    let vars = match variables(&ws, args.env.as_deref(), &args.vars) {
+    let vars = match load_variables(&ws, args.env.as_deref(), &args.vars) {
         Ok(vars) => vars,
         Err(e) => return fail(e),
     };
@@ -572,7 +644,7 @@ async fn load(args: LoadArgs) -> ExitCode {
     if args.insecure {
         settings.request.verify_tls = false;
     }
-    let (plan, warnings) = match load_plan(&ws, &test, &vars, &settings, args.allow_outside_files).await {
+    let (plan, warnings) = match load_plan(&ws, &test, vars, &settings, args.allow_outside_files).await {
         Ok(found) => found,
         Err(e) => return fail(printable(&e)),
     };
@@ -702,6 +774,26 @@ fn print_load_summary(name: &str, s: &Summary, paint: &dyn Fn(&str, &str) -> Str
         ms(l.p999),
         ms(l.max)
     ));
+    let tm = &t.timing;
+    if tm.ttfb.count > 0 {
+        out(&format!("  First byte {}  (request sent to first byte: server + network)", phase(&tm.ttfb)));
+    }
+    if tm.connect.count > 0 {
+        let share = if t.requests == 0 { 0.0 } else { t.connections as f64 * 100.0 / t.requests as f64 };
+        out(&format!("  Connect    {}  (new connections, {} % of requests)", phase(&tm.connect), fixed2(share)));
+    }
+    if tm.server.count > 0 {
+        out(&format!("  Server     {}  (reported in Server-Timing)", phase(&tm.server)));
+    }
+    if t.capture_misses > 0 {
+        out(&paint(
+            "33",
+            &format!(
+                "  Captures   {} missed (found nothing; the variable kept its value)",
+                thousands(t.capture_misses)
+            ),
+        ));
+    }
     let codes: Vec<String> = t.status_codes.iter().map(|(code, n)| format!("{code} × {}", thousands(*n))).collect();
     if !codes.is_empty() {
         out(&format!("  Status     {}", codes.join(", ")));
@@ -720,24 +812,35 @@ fn print_load_summary(name: &str, s: &Summary, paint: &dyn Fn(&str, &str) -> Str
     if let Some(cpu) = s.peak_cpu_percent {
         out(&format!("  CPU        {cpu:.0} % peak (100 % = one core)"));
     }
-    if s.targets.len() > 1 {
+    let misses = s.targets.iter().any(|t| t.metrics.capture_misses > 0);
+    if s.targets.len() > 1 || misses {
         let width = s.targets.iter().map(|t| printable(&t.name).chars().count()).max().unwrap_or(0).clamp(7, 40);
         out("");
-        out(&format!(
-            "  {:<width$}  {:>10}  {:>9}  {:>8}  {:>10}  {:>10}",
-            "Request", "Requests", "req/s", "Errors", "p95", "p99"
-        ));
+        let mut head = format!(
+            "  {:<width$}  {:>10}  {:>9}  {:>8}  {:>10}  {:>10}  {:>13}",
+            "Request", "Requests", "req/s", "Errors", "p95", "p99", "1st byte p95"
+        );
+        if misses {
+            head.push_str(&format!("  {:>8}", "Missed"));
+        }
+        out(&head);
         for target in &s.targets {
             let m = &target.metrics;
             let name: String = printable(&target.name).chars().take(width).collect();
-            out(&format!(
-                "  {name:<width$}  {:>10}  {:>9}  {:>6} %  {:>10}  {:>10}",
+            let ttfb = if m.timing.ttfb.count > 0 { ms(m.timing.ttfb.p95) } else { "–".into() };
+            let mut line = format!(
+                "  {name:<width$}  {:>10}  {:>9}  {:>6} %  {:>10}  {:>10}  {:>13}",
                 thousands(m.requests),
                 fixed1(m.rps),
                 fixed2(m.error_rate),
                 ms(m.latency.p95),
-                ms(m.latency.p99)
-            ));
+                ms(m.latency.p99),
+                ttfb
+            );
+            if misses {
+                line.push_str(&format!("  {:>8}", thousands(m.capture_misses)));
+            }
+            out(&line);
         }
     }
     if !s.thresholds.is_empty() {
@@ -772,6 +875,11 @@ fn thousands(n: u64) -> String {
 
 fn fixed1(v: f64) -> String {
     format!("{v:.1}")
+}
+
+/// `p50 1.20 ms  p95 3.40 ms  p99 8.00 ms` of a timing phase.
+fn phase(p: &PhaseSummary) -> String {
+    format!("p50 {}  p95 {}  p99 {}", ms(p.p50), ms(p.p95), ms(p.p99))
 }
 
 fn fixed2(v: f64) -> String {

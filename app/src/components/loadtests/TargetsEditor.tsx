@@ -1,12 +1,15 @@
-// Which saved requests a load test sends, and how often relative to each other.
+// Which saved requests a load test sends, how often relative to each other, and
+// the values each one captures from its responses.
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Plus, Search, TriangleAlert, X } from "lucide-react";
+import { Check, Plus, Search, TriangleAlert, Variable, X } from "lucide-react";
 import { Popover } from "radix-ui";
+import type { LoadModel } from "../../bindings/LoadModel";
 import type { LoadTarget } from "../../bindings/LoadTarget";
 import type { TreeNode } from "../../bindings/TreeNode";
 import { methodColor, methodLabel } from "../../lib/http";
 import { Button, Checkbox, cx, IconButton } from "../ui";
-import { flattenRequests, nameFromPath, type RequestEntry, targetShares } from "./model";
+import { CapturesEditor } from "./CapturesEditor";
+import { captureProblem, flattenRequests, nameFromPath, type RequestEntry, targetShares } from "./model";
 import { NumberInput } from "./parts";
 
 const MAX_WEIGHT = 1000;
@@ -14,10 +17,12 @@ const MAX_WEIGHT = 1000;
 export const TargetsEditor = memo(function TargetsEditor({
   targets,
   tree,
+  model = "virtualUsers",
   onChange,
 }: {
   targets: LoadTarget[];
   tree: TreeNode[];
+  model?: LoadModel;
   onChange: (fn: (targets: LoadTarget[]) => LoadTarget[]) => void;
 }) {
   const all = useMemo(() => flattenRequests(tree), [tree]);
@@ -41,6 +46,9 @@ export const TargetsEditor = memo(function TargetsEditor({
             <div className="flex h-7 items-center gap-2 border-b border-line bg-panel-2/60 px-2.5 text-[11px] font-medium text-faint">
               <span className="w-4" />
               <span className="min-w-0 flex-1">Request</span>
+              <span className="w-7 text-center" title="Values saved from the responses for the user's next requests">
+                <Variable size={12} className="inline" aria-label="Captures" />
+              </span>
               <span className="w-[60px] text-right" title="How often this request is picked, relative to the others">
                 Weight
               </span>
@@ -48,7 +56,15 @@ export const TargetsEditor = memo(function TargetsEditor({
               <span className="w-6" />
             </div>
             {targets.map((t, i) => (
-              <TargetRow key={`${t.request}:${i}`} target={t} entry={byPath.get(t.request)} share={shares[i]} onUpdate={(p) => update(i, p)} onRemove={() => remove(i)} />
+              <TargetRow
+                key={`${t.request}:${i}`}
+                target={t}
+                entry={byPath.get(t.request)}
+                share={shares[i]}
+                model={model}
+                onUpdate={(p) => update(i, p)}
+                onRemove={() => remove(i)}
+              />
             ))}
           </div>
           <div>
@@ -64,47 +80,72 @@ function TargetRow({
   target,
   entry,
   share,
+  model,
   onUpdate,
   onRemove,
 }: {
   target: LoadTarget;
   entry: RequestEntry | undefined;
   share: number;
+  model: LoadModel;
   onUpdate: (patch: Partial<LoadTarget>) => void;
   onRemove: () => void;
 }) {
   const enabled = target.enabled !== false;
   const name = entry?.name ?? nameFromPath(target.request);
   const problem = !entry ? "Not found in the collection" : entry.kind !== "http" ? "Only HTTP requests can be load tested" : entry.error ? "The request file can't be read" : null;
+  const captures = target.captures ?? [];
+  const [open, setOpen] = useState(false);
+  const broken = captures.some((c) => captureProblem(c));
   return (
-    <div className={cx("flex min-h-[40px] items-center gap-2 border-b border-line/60 px-2.5 py-1 last:border-b-0", problem && "bg-warning/6")} data-testid="load-target">
-      <Checkbox checked={enabled} onChange={(v) => onUpdate({ enabled: v })} label={`Send ${name}`} />
-      <div className={cx("flex min-w-0 flex-1 items-center gap-2", !enabled && "opacity-50")}>
-        {problem ? (
-          <TriangleAlert size={13} className="w-[34px] shrink-0 text-warning" />
-        ) : (
-          <span className="w-[34px] shrink-0 text-right font-mono text-[10px] font-bold" style={{ color: methodColor(entry?.method, entry?.kind) }}>
-            {methodLabel(entry?.method, entry?.kind)}
-          </span>
-        )}
-        <div className="min-w-0 flex-1" title={target.request}>
-          <div className="truncate text-[12.5px] text-fg">{name}</div>
-          <div className={cx("truncate text-[11px]", problem ? "text-warning" : "text-faint")}>{problem ?? (entry?.trail || "Collection")}</div>
+    <div className={cx("border-b border-line/60 last:border-b-0", problem && "bg-warning/6")} data-testid="load-target">
+      <div className="flex min-h-[40px] items-center gap-2 px-2.5 py-1">
+        <Checkbox checked={enabled} onChange={(v) => onUpdate({ enabled: v })} label={`Send ${name}`} />
+        <div className={cx("flex min-w-0 flex-1 items-center gap-2", !enabled && "opacity-50")}>
+          {problem ? (
+            <TriangleAlert size={13} className="w-[34px] shrink-0 text-warning" />
+          ) : (
+            <span className="w-[34px] shrink-0 text-right font-mono text-[10px] font-bold" style={{ color: methodColor(entry?.method, entry?.kind) }}>
+              {methodLabel(entry?.method, entry?.kind)}
+            </span>
+          )}
+          <div className="min-w-0 flex-1" title={target.request}>
+            <div className="truncate text-[12.5px] text-fg">{name}</div>
+            <div className={cx("truncate text-[11px]", problem ? "text-warning" : "text-faint")}>{problem ?? (entry?.trail || "Collection")}</div>
+          </div>
         </div>
+        <button
+          type="button"
+          aria-label={`Captures of ${name}`}
+          aria-expanded={open}
+          title={captures.length ? `${captures.length} ${captures.length === 1 ? "capture" : "captures"}` : "Capture values from the response"}
+          onClick={() => setOpen((o) => !o)}
+          className={cx(
+            "flex h-6 w-7 shrink-0 items-center justify-center gap-0.5 rounded-md text-[11px] tabular-nums hover:bg-hover",
+            open ? "bg-hover text-fg" : broken ? "text-warning" : captures.length ? "text-accent" : "text-faint",
+          )}
+        >
+          {captures.length ? captures.length : <Variable size={12} />}
+        </button>
+        <NumberInput
+          aria-label={`Weight of ${name}`}
+          value={target.weight ?? 1}
+          onChange={(v) => onUpdate({ weight: Math.min(MAX_WEIGHT, v ?? 0) })}
+          min={0}
+          max={MAX_WEIGHT}
+          className="h-7 w-[60px] text-right"
+          disabled={!enabled}
+        />
+        <span className="w-10 shrink-0 text-right text-[11.5px] tabular-nums text-muted">{share > 0 ? `${Math.round(share)}%` : "–"}</span>
+        <IconButton label={`Remove ${name}`} onClick={onRemove} size={24}>
+          <X size={13} />
+        </IconButton>
       </div>
-      <NumberInput
-        aria-label={`Weight of ${name}`}
-        value={target.weight ?? 1}
-        onChange={(v) => onUpdate({ weight: Math.min(MAX_WEIGHT, v ?? 0) })}
-        min={0}
-        max={MAX_WEIGHT}
-        className="h-7 w-[60px] text-right"
-        disabled={!enabled}
-      />
-      <span className="w-10 shrink-0 text-right text-[11.5px] tabular-nums text-muted">{share > 0 ? `${Math.round(share)}%` : "–"}</span>
-      <IconButton label={`Remove ${name}`} onClick={onRemove} size={24}>
-        <X size={13} />
-      </IconButton>
+      {open && (
+        <div className="border-t border-line/40 bg-panel-2/40 px-2.5 py-2 pl-9">
+          <CapturesEditor captures={captures} name={name} model={model} onChange={(list) => onUpdate({ captures: list.length ? list : undefined })} />
+        </div>
+      )}
     </div>
   );
 }

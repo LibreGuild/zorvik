@@ -41,7 +41,7 @@ export function RecordTypePicker({
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content align="start" sideOffset={6} className="zv-pop z-[90] w-72 rounded-xl border border-line bg-elev p-1.5 shadow-pop">
+        <DropdownMenu.Content align="start" sideOffset={6} collisionPadding={8} className="zv-pop z-[90] w-72 rounded-xl border border-line bg-elev p-1.5 shadow-pop max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto overscroll-contain">
           {DNS_RECORD_TYPES.map((t) => (
             <DropdownMenu.Item
               key={t}

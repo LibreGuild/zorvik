@@ -1,0 +1,9 @@
+id: http
+title: HTTP basics
+summary: The language of the web and of most APIs, from requests and methods to status codes, headers and timing.
+color: "#3A9A5B"
+image: http
+badge:
+  id: status-sage
+  name: Status Sage
+  description: Reads requests, responses and status codes like a pro.

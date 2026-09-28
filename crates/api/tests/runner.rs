@@ -183,6 +183,7 @@ async fn runs_a_folder_in_order_with_scripts_data_and_skips() {
     );
     assert_eq!(results[1]["skipped"], true);
     assert_eq!(results[1]["kind"], "websocket");
+    assert!(results[1]["skipReason"].as_str().unwrap().contains("live sessions"), "{}", results[1]);
     // Secret values never show in reported URLs; pm.variables carry through the run.
     let url = results[3]["url"].as_str().unwrap();
     assert!(url.ends_with("/echo?user=gr,ace&k={{key}}"), "{url}");
@@ -366,4 +367,111 @@ async fn stop_during_the_delay_and_secrets_set_by_scripts_stay_hidden() {
     assert_eq!(summary["stopped"], true);
     assert_eq!(h.results(&run_id).len(), 1);
     assert!(summary["durationMs"].as_f64().unwrap() < 4000.0, "{summary}");
+}
+
+/// A saved request with settings (repeat, stream) and a post-response script.
+async fn request_with(h: &Harness, name: &str, kind: &str, url: &str, settings: Value, post: &str) -> String {
+    let request = json!({ "name": name, "kind": kind, "method": "GET", "url": url, "settings": settings,
+                          "scripts": { "postResponse": post } });
+    h.ok("request.create", json!({ "parent": "", "request": request })).await.as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn repeat_until_polls_and_gives_up_in_time() {
+    let server = TestServer::start().await;
+    let h = Harness::new().await;
+    let count = "pm.variables.set('n', Number(pm.variables.get('n') || 0) + 1);";
+    // Holds on the third send.
+    let ready = request_with(
+        &h,
+        "Job status",
+        "http",
+        &server.url("/json"),
+        json!({ "repeat": { "condition": "Number(pm.variables.get('n')) >= 3", "intervalMs": 10, "timeoutMs": 5000 } }),
+        count,
+    )
+    .await;
+    // Never holds: fails once the time is up.
+    let never = request_with(
+        &h,
+        "Never",
+        "http",
+        &server.url("/json"),
+        json!({ "repeat": { "condition": "pm.response.code === 201", "intervalMs": 20, "timeoutMs": 120 } }),
+        "",
+    )
+    .await;
+    // Empty condition: until the request's own tests pass.
+    let tests = request_with(
+        &h,
+        "Tests",
+        "http",
+        &server.url("/json"),
+        json!({ "repeat": { "intervalMs": 10, "timeoutMs": 5000 } }),
+        "pm.variables.set('t', Number(pm.variables.get('t') || 0) + 1); pm.test('twice', () => pm.expect(Number(pm.variables.get('t'))).to.be.at.least(2));",
+    )
+    .await;
+    // A broken condition stops at once.
+    let broken = request_with(
+        &h,
+        "Broken",
+        "http",
+        &server.url("/json"),
+        json!({ "repeat": { "condition": "((", "intervalMs": 10, "timeoutMs": 5000 } }),
+        "",
+    )
+    .await;
+    let (_, results, summary) = h.run(json!({ "requests": [ready, never, tests, broken] })).await;
+
+    assert_eq!(
+        (results[0]["attempts"].as_u64(), results[0]["passed"].as_bool()),
+        (Some(3), Some(true)),
+        "{}",
+        results[0]
+    );
+    assert!(results[0]["tests"].as_array().unwrap().is_empty(), "the condition is not a test: {}", results[0]);
+    assert_eq!(results[1]["passed"], false);
+    assert!(results[1]["error"].as_str().unwrap().contains("Repeat until"), "{}", results[1]);
+    assert!(results[1]["attempts"].as_u64().unwrap() >= 2, "{}", results[1]);
+    assert_eq!(
+        (results[2]["attempts"].as_u64(), results[2]["passed"].as_bool()),
+        (Some(2), Some(true)),
+        "{}",
+        results[2]
+    );
+    assert_eq!(
+        (results[3]["attempts"].as_u64(), results[3]["passed"].as_bool()),
+        (Some(1), Some(false)),
+        "{}",
+        results[3]
+    );
+    assert_eq!(summary["failed"], 2);
+}
+
+#[tokio::test]
+async fn event_streams_run_and_scripts_see_the_events() {
+    let server = TestServer::start().await;
+    let h = Harness::new().await;
+    let sse = request_with(
+        &h,
+        "Progress",
+        "sse",
+        &server.url("/sse?count=5&interval=10"),
+        json!({ "stream": { "maxEvents": 3, "timeoutMs": 5000 } }),
+        "pm.test('three events', () => pm.expect(pm.response.events.length).to.equal(3));
+         pm.test('text has them', () => pm.expect(pm.response.text()).to.include('data: '));",
+    )
+    .await;
+    let (_, results, _) = h.run(json!({ "requests": [sse] })).await;
+    let r = &results[0];
+    assert_eq!(
+        (r["skipped"].as_bool(), r["passed"].as_bool(), r["status"].as_u64()),
+        (Some(false), Some(true), Some(200)),
+        "{r}"
+    );
+    assert!(r["tests"].as_array().unwrap().iter().all(|t| t["passed"] == true), "{r}");
+    assert!(
+        r["console"].as_array().unwrap().iter().any(|c| c["message"].as_str().unwrap().contains("Read 3 events")),
+        "{r}"
+    );
 }

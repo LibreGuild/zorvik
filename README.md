@@ -37,6 +37,7 @@
 - **Local first.** No account, no cloud sync, no tracking. It works offline and behind corporate proxies and TLS inspection.
 - **Scriptable and automatable.** Postman-compatible scripts and tests, a collection runner with data files, and the `zorvik` command line for CI.
 - **Built for AI agents.** Claude Code, Codex, Gemini CLI, Cursor and others can drive Zorvik over MCP while you watch and approve.
+- **Learn it inside the app.** The Training Bootcamp teaches networks and APIs from zero, with hands-on labs in the real workbench.
 
 <p align="center">
   <img src=".github/assets/banner.webp" width="760" alt="">
@@ -59,12 +60,15 @@
 - **Scripts:** pre-request and post-response JavaScript with a Postman-compatible `pm` API, so imported collections run as they are.
 - **Tests:** `pm.test` and `pm.expect`, with results next to the response.
 - **Collection runner:** run a folder in order, repeat it, drive it with CSV or JSON data, stop on the first failure, export JSON or JUnit reports.
+- **Polling and streams in runs:** send a request again until a condition holds (wait for a job to finish), and test Server-Sent Events streams (`pm.response.events`).
+- **Contract checks:** requests imported from an OpenAPI document are checked against it on every send and run: an undocumented status or a field of the wrong type fails a test.
 - **CI:** `zorvik run` runs the same collections in any pipeline.
 
 ### Mock and serve
 - **Mock APIs** from scratch, from a folder of requests, from an OpenAPI spec, or from a response you just received. Routes with `:params`, templated bodies, delays, fault injection, CORS, and forwarding to a real backend.
 - **Servers:** WebSocket, SSE, TCP, UDP and DNS servers, plus a TCP relay that shows both directions. Every server logs its traffic live.
 - **Headless:** `zorvik serve` runs any of them in CI next to your tests.
+- **Busy port?** The error names the program holding it.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/assets/mock-dark.webp">
@@ -75,6 +79,8 @@
 - **Virtual users or arrival rate,** with stages (ramp up, hold, spike), weighted requests and think time.
 - **Live dashboard:** requests per second, latency percentiles up to p99.9, errors, status codes and the load generator's own CPU.
 - **Thresholds** such as "p95 under 200 ms" pass or fail a run; run history and HTML/JSON reports.
+- **Realistic traffic:** a data file gives each virtual user its own row, and captures pass values from one response (a new order's id) to that user's next requests.
+- **Where the time goes:** time to first byte, transfer and connect per request, the server's own time from `Server-Timing`, and a side-by-side comparison with an earlier run.
 - **In CI:** `zorvik load` exits with an error when a threshold fails.
 
 <picture>
@@ -82,11 +88,18 @@
   <img alt="A finished load test: settings on the left, results and thresholds on the right" src=".github/assets/loadtest-light.webp">
 </picture>
 
+### Learn: the Training Bootcamp
+- **A course built in,** from "what is a network?" to load testing: 16 units on networks, DNS, HTTP, sending data, auth and JWT, TLS, environments, testing, GraphQL and gRPC, WebSocket and SSE, TCP and UDP, mocking, performance and automation, plus a capstone project.
+- **Hands-on labs** in the real workbench: **Start lab** runs practice servers on your computer and fills in a Lab environment, and the **Lab Guide** ticks each step off the moment you get it right. Hints go from a nudge to the exact clicks.
+- **Plain words and diagrams:** short readings with sequence, flow and layer diagrams, and a quick check after each lesson.
+- **Rewards:** XP, levels and ranks, daily streaks, 24 badges, and a *Zorvik Bootcamp Graduate* certificate. Open it from **Training Bootcamp**, pinned at the top of the workspace menu and on the welcome screen; inside it, a *Workbench | Academy* switch moves between the lessons and the labs. Its workspace is always there and resets in one click.
+
 ### Inspect the network
 TLS inspector (chain, expiry, protocol versions, cipher suites), DNS lookup, port check, ping, network interfaces, HTTP/3 check, and encoders for Base64, URL, hex, JWT, hashes and timestamps.
 
 ### Work your way
-- **Import** Postman collections and environments, OpenAPI 3 and Swagger 2, and cURL commands; **export** any request as cURL.
+- **Import** Postman collections and environments, OpenAPI 3 and Swagger 2 (realistic examples, path parameters as variables), and cURL commands. When the API changes, **update from the spec**: new operations come in, your edits stay.
+- **Export** any request as cURL, or as Kotlin (OkHttp), Swift, JavaScript or Python code.
 - **Built-in docs** for every feature (the book icon in the left rail), a command palette (<kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>K</kbd>) and keyboard shortcuts.
 - **Light and dark themes,** zoom (<kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>+</kbd> <kbd>−</kbd> <kbd>0</kbd>), and your choice of interface and code fonts.
 
@@ -126,7 +139,7 @@ zorvik mcp                                                 # the MCP server for 
 Secrets are not in workspace files; pass them with `--var token=$TOKEN`. Run `zorvik <command> --help` for every option.
 
 ## AI agents
-Coding agents can map the APIs in your code into a collection, send requests, run collections and load tests, and set up mocks, all through Zorvik's MCP server. You see every action in the app as it happens, and anything risky asks you first: deleting, load testing, starting servers, or sending requests to hosts outside your computer.
+Coding agents can map the APIs in your code into a collection, send requests, read event streams, run collections and load tests, build mock servers and read what they received, and export requests as code, all through Zorvik's MCP server. You see every action in the app as it happens, and anything risky asks you first: deleting, load testing, starting servers, or sending requests to hosts outside your computer.
 
 Connect your agent once (Settings → AI agents shows these with the right path for your computer):
 
@@ -164,6 +177,7 @@ You need Rust (stable) and Node.js 22+; [CONTRIBUTING.md](CONTRIBUTING.md) lists
 ## Documentation
 - In the app: the **Docs** section covers every feature.
 - [Architecture](docs/architecture.md): how the pieces fit together.
+- [Training Bootcamp](docs/academy.md): how the Academy works, and how to write a lesson.
 - [Testing](docs/testing.md): the test suites and how to run them.
 - [CI and releases](docs/ci-release.md): how builds and releases are made.
 

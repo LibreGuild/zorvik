@@ -497,3 +497,132 @@ async fn standalone_sends_ignore_workspace_headers_and_history() {
     let history = h.ok("history.list", json!({})).await;
     assert_eq!(history.as_array().unwrap().len(), 1, "standalone sends are not recorded");
 }
+
+#[tokio::test]
+async fn openapi_without_a_server_asks_for_the_base_url() {
+    let h = Harness::new().await;
+    let api = &h.api;
+    let doc = r#"{"openapi": "3.0.0", "info": {"title": "Sessions", "version": "1"}, "servers": [{"url": "/v1"}],
+        "paths": {"/sessions/{session_id}": {"get": {"parameters": [{"name": "session_id", "in": "path", "required": true,
+        "schema": {"type": "string"}, "example": "s-42"}], "responses": {"200": {"description": "ok"}}}}}}"#;
+    let err = api.call("import.file", serde_json::json!({ "text": doc })).await.unwrap_err();
+    assert_eq!(err.code, "needsBaseUrl", "{}", err.message);
+    assert!(err.message.contains("/v1"), "{}", err.message);
+    // Nothing was written by the refused import.
+    assert!(api.call("env.list", serde_json::Value::Null).await.unwrap().as_array().unwrap().is_empty());
+
+    let summary =
+        api.call("import.file", serde_json::json!({ "text": doc, "baseUrl": "http://localhost:8080/" })).await.unwrap();
+    assert_eq!(summary["requests"], 1);
+    let envs = api.call("env.list", serde_json::Value::Null).await.unwrap();
+    let vars = &envs[0]["environment"]["variables"];
+    let get = |k: &str| vars.as_array().unwrap().iter().find(|v| v["key"] == k).map(|v| v["value"].clone());
+    assert_eq!(get("baseUrl"), Some(serde_json::json!("http://localhost:8080/v1")));
+    assert_eq!(get("sessionId"), Some(serde_json::json!("s-42")));
+}
+
+/// A small OpenAPI document for the test server's `/json` (`{"id": 42, "name": "Zorvik", …}`).
+fn slides_spec(version: u32) -> String {
+    let (extra_path, required) = match version {
+        1 => ("", r#"["id", "name"]"#),
+        _ => (
+            r#", "/status/{code}": {"get": {"summary": "Status", "parameters": [{"name": "code", "in": "path", "required": true, "schema": {"type": "integer"}, "example": 204}], "responses": {"204": {"description": "empty"}}}}"#,
+            r#"["id", "name", "missing"]"#,
+        ),
+    };
+    let gone = if version == 1 {
+        r#", "/old": {"get": {"summary": "Old", "responses": {"200": {"description": "ok"}}}}"#
+    } else {
+        ""
+    };
+    format!(
+        r#"{{"openapi": "3.0.0", "info": {{"title": "Slides", "version": "{version}"}}, "servers": [{{"url": "http://localhost:1"}}],
+          "paths": {{
+            "/json": {{"get": {{"summary": "Get slides", "description": "Docs v{version}", "responses": {{"200": {{"content": {{"application/json": {{"schema": {{
+              "type": "object", "required": {required}, "properties": {{"id": {{"type": "integer"}}, "name": {{"type": "string"}}}}}}}}}}}}}}}}}}{extra_path}{gone}
+          }}}}"#
+    )
+}
+
+#[tokio::test]
+async fn imported_requests_are_checked_and_updated_from_the_spec() {
+    let server = TestServer::start().await;
+    let h = Harness::new().await;
+    let summary = h.ok("import.file", json!({ "text": slides_spec(1) })).await;
+    let folder = summary["folderPath"].as_str().unwrap().to_string();
+    // The document is kept, and the folder knows it.
+    let meta = h.ok("folder.read", json!({ "path": folder })).await;
+    let spec = meta["openapi"]["spec"].as_str().unwrap().to_string();
+    assert!(spec.starts_with("specs/") && h.ws_dir.path().join(&spec).is_file(), "{meta}");
+
+    // Point the requests at the test server and send: the response matches the spec.
+    let env = h.ok("env.list", Value::Null).await;
+    let env_id = env[0]["id"].as_str().unwrap().to_string();
+    let mut environment = env[0]["environment"].clone();
+    environment["variables"][0]["value"] = json!(server.url(""));
+    h.ok("env.save", json!({ "id": env_id, "environment": environment })).await;
+    h.ok("env.setActive", json!({ "id": env_id })).await;
+    let tree = h.ok("workspace.tree", Value::Null).await;
+    let get = find_request(&tree, "Get slides").expect("imported request");
+    let request = h.ok("request.read", json!({ "path": get })).await;
+    assert_eq!(request["openapi"]["operation"], "GET /json");
+    let sent = h.ok("http.send", json!({ "requestId": "s1", "request": request, "path": get })).await;
+    let test = &sent["scripts"]["tests"][0];
+    assert_eq!(test["name"], "Matches the API spec (GET /json → 200)");
+    assert_eq!(test["passed"], true, "{test}");
+
+    // The user edits the docs; then the document changes the docs, adds an operation, drops one,
+    // and now requires a field the response doesn't have.
+    let mut edited = request.clone();
+    edited["docs"] = json!("My notes");
+    h.ok("request.save", json!({ "path": get, "request": edited })).await;
+    let preview = h.ok("import.updatePreview", json!({ "folder": folder, "text": slides_spec(2) })).await;
+    assert_eq!(preview["applied"], false);
+    assert_eq!(preview["added"][0]["operation"], "GET /status/{code}");
+    assert_eq!(preview["removed"][0]["operation"], "GET /old");
+    assert_eq!(preview["changed"][0]["kept"], json!(["docs"]), "{preview}");
+    // `{code}` is generic: named after the segment before it.
+    assert_eq!(preview["variables"], json!(["statusCode"]));
+    // A preview writes nothing.
+    assert!(find_request(&h.ok("workspace.tree", Value::Null).await, "Status").is_none());
+
+    let applied = h.ok("import.update", json!({ "folder": folder, "text": slides_spec(2) })).await;
+    assert_eq!(applied["applied"], true);
+    let tree = h.ok("workspace.tree", Value::Null).await;
+    assert!(find_request(&tree, "Status").is_some());
+    let old = find_request(&tree, "Old").expect("kept");
+    assert_eq!(h.ok("request.read", json!({ "path": old })).await["openapi"]["removed"], true);
+    assert_eq!(node(&tree, &old).unwrap()["removedFromSpec"], true);
+    let request = h.ok("request.read", json!({ "path": get })).await;
+    assert_eq!(request["docs"], "My notes", "the user's docs stay");
+    // The kept document is the new one: the response no longer matches.
+    let sent = h.ok("http.send", json!({ "requestId": "s2", "request": request, "path": get })).await;
+    let test = &sent["scripts"]["tests"][0];
+    assert_eq!(test["passed"], false);
+    assert!(test["error"].as_str().unwrap().contains("required field `missing`"), "{test}");
+    // The new path variable is in the environment, with the spec's example.
+    let env = h.ok("env.list", Value::Null).await;
+    let code =
+        env[0]["environment"]["variables"].as_array().unwrap().iter().find(|v| v["key"] == "statusCode").cloned();
+    assert_eq!(code.map(|v| v["value"].clone()), Some(json!("204")));
+    // Switching the check off in the folder stops it.
+    let mut meta = h.ok("folder.read", json!({ "path": folder })).await;
+    meta["openapi"]["validate"] = json!(false);
+    h.ok("folder.save", json!({ "path": folder, "meta": meta })).await;
+    let sent = h.ok("http.send", json!({ "requestId": "s3", "request": request, "path": get })).await;
+    assert!(sent["scripts"].is_null() || sent["scripts"]["tests"].as_array().unwrap().is_empty(), "{sent}");
+}
+
+fn node<'a>(nodes: &'a Value, path: &str) -> Option<&'a Value> {
+    nodes.as_array()?.iter().find_map(|n| if n["path"] == path { Some(n) } else { node(&n["children"], path) })
+}
+
+fn find_request(nodes: &Value, name: &str) -> Option<String> {
+    nodes.as_array()?.iter().find_map(|n| {
+        if n["kind"] == "request" && n["name"] == name {
+            n["path"].as_str().map(str::to_string)
+        } else {
+            find_request(&n["children"], name)
+        }
+    })
+}

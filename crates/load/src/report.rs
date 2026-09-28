@@ -19,6 +19,40 @@ pub struct LatencySummary {
     pub max: f64,
 }
 
+/// One phase of the requests (milliseconds): how many were measured and
+/// their percentiles.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PhaseSummary {
+    /// Requests measured (0: no data, the other numbers are 0).
+    #[ts(type = "number")]
+    pub count: u64,
+    pub avg: f64,
+    pub p50: f64,
+    pub p95: f64,
+    pub p99: f64,
+    pub max: f64,
+}
+
+/// Where the time of the requests went.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TimingSummary {
+    /// Opening a new connection: DNS, TCP, proxy tunnel and TLS. Only requests
+    /// that opened one are measured.
+    pub connect: PhaseSummary,
+    /// Request sent until the first byte of the response: the server's time
+    /// plus one network round trip.
+    pub ttfb: PhaseSummary,
+    /// First byte until the last byte of the response.
+    pub transfer: PhaseSummary,
+    /// What servers reported in a `Server-Timing` header (its `total`, else
+    /// the sum of its durations); `count` 0 when no response had one.
+    pub server: PhaseSummary,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -50,6 +84,13 @@ pub struct MetricsSummary {
     /// New connections opened (each new connection pays DNS/TCP/TLS).
     #[ts(type = "number")]
     pub connections: u64,
+    /// Connect, time to first byte, transfer and server-reported time.
+    #[serde(default)]
+    pub timing: TimingSummary,
+    /// Captures that found nothing in a response (the variable kept its value).
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub capture_misses: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]

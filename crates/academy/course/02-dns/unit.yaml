@@ -1,0 +1,9 @@
+id: dns
+title: "DNS: the internet's address book"
+summary: How names like api.example.com become addresses, which records a name holds, and who answers your lookups.
+color: "#7A5CC4"
+image: dns
+badge:
+  id: dns-detective
+  name: DNS Detective
+  description: Tracked names down to addresses.

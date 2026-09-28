@@ -40,7 +40,7 @@ pub struct TlsInspectOptions {
     pub sni: Option<String>,
     /// HTTP proxy settings; a CONNECT tunnel is used when one applies to the host.
     pub proxy: ProxySettings,
-    /// Extra trusted root CA certificates (PEM), like Settings > TLS.
+    /// Extra trusted root CA certificates (PEM), like Settings > Certificates.
     pub ca_cert_path: Option<PathBuf>,
     /// TCP connect + first handshake.
     pub connect_timeout: Duration,

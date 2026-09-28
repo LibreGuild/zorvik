@@ -1,0 +1,9 @@
+id: performance
+title: Performance & load testing
+summary: Measure how fast your API answers and how much traffic it can take, before your users find out the hard way.
+color: "#C4453A"
+image: performance
+badge:
+  id: load-legend
+  name: Load Legend
+  description: Finds the breaking point before users do.

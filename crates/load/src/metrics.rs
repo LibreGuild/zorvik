@@ -1,7 +1,9 @@
 //! Aggregation: every finished request becomes a [`Sample`]; the [`Recorder`]
 //! keeps HdrHistograms (µs, 1 µs – 1 h, 3 significant digits) per target and
 //! in total, counters, and one-second buckets for the charts. Memory is fixed
-//! except for the chart points (one per second: 86,400 for a day).
+//! except for the chart points (one per second: 86,400 for a day). The phases
+//! (connect, first byte, transfer, server-reported) have histograms too, made
+//! when their first value arrives.
 //!
 //! Latency includes every request that got an answer (any status), plus
 //! timed-out requests and requests cut off by a stop, as the time waited (a
@@ -16,7 +18,8 @@ use zorvik_engine::ErrorKind;
 use zorvik_formats::{Threshold, ThresholdMetric};
 
 use crate::report::{
-    LatencySummary, MetricsSummary, RunPhase, Snapshot, Summary, TargetSummary, ThresholdResult, TimePoint,
+    LatencySummary, MetricsSummary, PhaseSummary, RunPhase, Snapshot, Summary, TargetSummary, ThresholdResult,
+    TimePoint, TimingSummary,
 };
 use crate::schedule::Profile;
 
@@ -82,17 +85,68 @@ pub(crate) enum Outcome {
         bytes_in: u64,
         bytes_out: u64,
         new_connection: bool,
+        phases: Phases,
+        /// Captures that found nothing in this response.
+        capture_misses: u32,
     },
     /// Open model: not started because `maxInFlight` requests were running.
     Dropped,
+}
+
+/// Parts of one request's time (µs); `None` when not measured.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Phases {
+    /// Only when it opened a new connection.
+    pub connect_us: Option<u64>,
+    pub ttfb_us: Option<u64>,
+    pub transfer_us: Option<u64>,
+    /// From a `Server-Timing` header.
+    pub server_us: Option<u64>,
 }
 
 fn histogram() -> Histogram<u64> {
     Histogram::new_with_bounds(1, MAX_LATENCY_US, 3).expect("valid histogram bounds")
 }
 
+/// One phase's numbers; the histogram is made when the first value arrives.
+#[derive(Default)]
+struct Phase {
+    hist: Option<Histogram<u64>>,
+    sum_us: u128,
+    max_us: u64,
+}
+
+impl Phase {
+    fn record(&mut self, us: Option<u64>) {
+        let Some(us) = us else { return };
+        let us = us.min(MAX_LATENCY_US);
+        self.hist.get_or_insert_with(histogram).saturating_record(us);
+        self.sum_us += u128::from(us);
+        self.max_us = self.max_us.max(us);
+    }
+
+    fn summary(&self) -> PhaseSummary {
+        let Some(hist) = self.hist.as_ref().filter(|h| !h.is_empty()) else { return PhaseSummary::default() };
+        let n = hist.len();
+        let q: Vec<f64> = hist.value_at_quantiles([0.5, 0.95, 0.99]).map(|v| ms(v.min(self.max_us))).collect();
+        PhaseSummary {
+            count: n,
+            avg: round3(self.sum_us as f64 / n as f64 / 1000.0),
+            p50: q[0],
+            p95: q[1],
+            p99: q[2],
+            max: ms(self.max_us),
+        }
+    }
+}
+
 struct Stats {
     latency: Histogram<u64>,
+    connect: Phase,
+    ttfb: Phase,
+    transfer: Phase,
+    server: Phase,
+    capture_misses: u64,
     sum_us: u128,
     min_us: u64,
     max_us: u64,
@@ -110,6 +164,11 @@ impl Stats {
     fn new() -> Self {
         Self {
             latency: histogram(),
+            connect: Phase::default(),
+            ttfb: Phase::default(),
+            transfer: Phase::default(),
+            server: Phase::default(),
+            capture_misses: 0,
             sum_us: 0,
             min_us: u64::MAX,
             max_us: 0,
@@ -125,7 +184,9 @@ impl Stats {
     }
 
     fn record(&mut self, outcome: &Outcome) {
-        let Outcome::Done { latency_us, status, error, bytes_in, bytes_out, new_connection } = outcome else {
+        let Outcome::Done { latency_us, status, error, bytes_in, bytes_out, new_connection, phases, capture_misses } =
+            outcome
+        else {
             self.dropped += 1;
             return;
         };
@@ -149,6 +210,11 @@ impl Stats {
         self.bytes_in += bytes_in;
         self.bytes_out += bytes_out;
         self.connections += u64::from(*new_connection);
+        self.connect.record(phases.connect_us);
+        self.ttfb.record(phases.ttfb_us);
+        self.transfer.record(phases.transfer_us);
+        self.server.record(phases.server_us);
+        self.capture_misses += u64::from(*capture_misses);
     }
 
     fn summary(&self, elapsed_secs: f64) -> MetricsSummary {
@@ -173,6 +239,13 @@ impl Stats {
             error_kinds,
             dropped: self.dropped,
             connections: self.connections,
+            timing: TimingSummary {
+                connect: self.connect.summary(),
+                ttfb: self.ttfb.summary(),
+                transfer: self.transfer.summary(),
+                server: self.server.summary(),
+            },
+            capture_misses: self.capture_misses,
         }
     }
 
@@ -507,6 +580,13 @@ mod tests {
                 bytes_in: 100,
                 bytes_out: 10,
                 new_connection: false,
+                phases: Phases {
+                    connect_us: None,
+                    ttfb_us: Some(latency_ms * 800),
+                    transfer_us: Some(latency_ms * 200),
+                    server_us: None,
+                },
+                capture_misses: 0,
             },
         }
     }
@@ -541,6 +621,8 @@ mod tests {
                 bytes_in: 0,
                 bytes_out: 0,
                 new_connection: false,
+                phases: Phases::default(),
+                capture_misses: 0,
             },
         });
         rec.record(&Sample { target: 1, at_us: 1_700_000, outcome: Outcome::Dropped });
@@ -559,6 +641,14 @@ mod tests {
         assert_eq!(snap.totals.status_codes, vec![(200, 100), (500, 1)]);
         assert_eq!(snap.totals.error_kinds, vec![("connect".to_string(), 1)]);
         assert_eq!(snap.targets[1].metrics.error_rate, 100.0);
+        // Phases: first byte is 80 % of each latency here; no connects, no Server-Timing.
+        let timing = &snap.totals.timing;
+        assert_eq!(
+            (timing.ttfb.count, timing.transfer.count, timing.connect.count, timing.server.count),
+            (101, 101, 0, 0)
+        );
+        assert!((timing.ttfb.p50 - 40.0).abs() < 0.1 && timing.ttfb.max == 80.0, "{timing:?}");
+        assert_eq!(timing.connect, PhaseSummary::default());
         assert_eq!(snap.thresholds.len(), 3);
         assert_eq!(snap.thresholds[0].label, "p95 < 300 ms");
         assert!(snap.thresholds[0].passed);
@@ -569,6 +659,14 @@ mod tests {
 
         // Finished just after the end: counted, not charted.
         rec.record(&done(0, 2050, 1, 200));
+        let mut fresh = done(1, 2060, 3, 200);
+        if let Outcome::Done { phases, capture_misses, new_connection, .. } = &mut fresh.outcome {
+            phases.connect_us = Some(1500);
+            phases.server_us = Some(700);
+            *capture_misses = 2;
+            *new_connection = true;
+        }
+        rec.record(&fresh);
         let summary = rec.summary(SummaryInfo {
             started_at: 0.0,
             elapsed: Duration::from_millis(2100),
@@ -579,8 +677,15 @@ mod tests {
         // Whole seconds only: 0 and 1.
         assert_eq!(summary.points.iter().map(|p| p.second).collect::<Vec<_>>(), [0, 1]);
         assert_eq!(summary.points[1].rps, 12.0);
-        assert_eq!(summary.totals.requests, 103);
+        assert_eq!(summary.totals.requests, 104);
         assert_eq!(summary.points[1].errors, 2);
+        let timing = &summary.totals.timing;
+        assert_eq!(
+            (timing.connect.count, timing.connect.p95, timing.server.count, timing.server.max),
+            (1, 1.5, 1, 0.7)
+        );
+        assert_eq!((summary.totals.capture_misses, summary.targets[1].metrics.capture_misses), (2, 2));
+        assert_eq!(summary.targets[0].metrics.capture_misses, 0);
         assert!(!summary.passed);
         assert_eq!(number(0.5), "0.5");
         assert_eq!(number(300.0), "300");

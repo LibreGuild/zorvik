@@ -298,8 +298,11 @@ export interface MenuItem {
 }
 export type MenuEntry = MenuItem | { separator: true };
 
+// Long menus stay inside the window and scroll (Radix measures the room left on the side they open).
 const menuContent =
-  "zv-pop z-[90] min-w-[190px] overflow-hidden rounded-xl border border-line bg-elev p-1.5 text-[12.5px] shadow-pop";
+  "zv-pop z-[90] min-w-[190px] overflow-y-auto overscroll-contain rounded-xl border border-line bg-elev p-1.5 text-[12.5px] shadow-pop";
+/** Gap kept between a menu and the window's edges. */
+const MENU_EDGE = 8;
 const menuItem =
   "flex h-8 cursor-default items-center gap-2 rounded-lg px-2 outline-none data-[highlighted]:bg-hover data-[disabled]:opacity-40";
 
@@ -329,7 +332,12 @@ export function Menu({ trigger, entries, align = "start" }: { trigger: ReactNode
     <DropdownMenu.Root modal={false}>
       <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content align={align} sideOffset={4} className={menuContent}>
+        <DropdownMenu.Content
+          align={align}
+          sideOffset={4}
+          collisionPadding={MENU_EDGE}
+          className={cx(menuContent, "max-h-[var(--radix-dropdown-menu-content-available-height)]")}
+        >
           {renderEntries(entries, DropdownMenu.Item, DropdownMenu.Separator)}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
@@ -342,7 +350,10 @@ export function ContextMenu({ children, entries }: { children: ReactNode; entrie
     <RContextMenu.Root modal={false}>
       <RContextMenu.Trigger asChild>{children}</RContextMenu.Trigger>
       <RContextMenu.Portal>
-        <RContextMenu.Content className={menuContent}>
+        <RContextMenu.Content
+          collisionPadding={MENU_EDGE}
+          className={cx(menuContent, "max-h-[var(--radix-context-menu-content-available-height)]")}
+        >
           {renderEntries(entries, RContextMenu.Item as unknown as typeof DropdownMenu.Item, RContextMenu.Separator as unknown as typeof DropdownMenu.Separator)}
         </RContextMenu.Content>
       </RContextMenu.Portal>

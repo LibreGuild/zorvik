@@ -1,0 +1,9 @@
+id: mocking
+title: Mocking APIs
+summary: Build stand-in servers that answer like the real API, so you can build and test before the back end is ready.
+color: "#8A4F9E"
+image: mocking
+badge:
+  id: mock-master
+  name: Mock Master
+  description: Builds stand-in servers that behave like the real thing.

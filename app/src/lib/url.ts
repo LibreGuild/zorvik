@@ -39,14 +39,21 @@ function buildQuery(params: KeyValue[]): string {
   return params.map((p) => (p.value === "" ? escapeKey(p.key) : `${escapeKey(p.key)}=${escapeValue(p.value)}`)).join("&");
 }
 
-/** Table rows: enabled params parsed from the URL, then disabled ones. */
-export function paramRows(url: string, disabled: KeyValue[] | undefined): KeyValue[] {
-  const enabled = parseQuery(splitUrl(url).query);
+/** Table rows: enabled params parsed from the URL (with their saved descriptions), then disabled ones. */
+export function paramRows(url: string, disabled: KeyValue[] | undefined, descriptions?: KeyValue[]): KeyValue[] {
+  const described = (key: string) => descriptions?.find((d) => d.key === key)?.description;
+  const enabled = parseQuery(splitUrl(url).query).map((p) => {
+    const description = described(p.key);
+    return description ? { ...p, description } : p;
+  });
   return [...enabled, ...(disabled ?? []).map((d) => ({ ...d, enabled: false }))];
 }
 
-/** Rebuild the URL and disabled list from edited table rows. */
-export function applyParamRows(url: string, rows: KeyValue[]): { url: string; disabledParams: KeyValue[] } {
+/** Rebuild the URL, the disabled list and the descriptions of enabled params from edited table rows. */
+export function applyParamRows(
+  url: string,
+  rows: KeyValue[],
+): { url: string; disabledParams: KeyValue[]; paramDescriptions: KeyValue[] } {
   const { base, hash } = splitUrl(url);
   const on = rows.filter((r) => r.enabled !== false && (r.key !== "" || r.value !== ""));
   const off = rows.filter((r) => r.enabled === false && (r.key !== "" || r.value !== ""));
@@ -54,6 +61,7 @@ export function applyParamRows(url: string, rows: KeyValue[]): { url: string; di
   return {
     url: `${base}${on.length ? `?${query}` : ""}${hash}`,
     disabledParams: off.map(({ key, value, description }) => ({ key, value, enabled: false, ...(description ? { description } : {}) })),
+    paramDescriptions: on.filter((r) => r.description).map(({ key, description }) => ({ key, value: "", description })),
   };
 }
 

@@ -204,9 +204,14 @@ impl Workspace {
                 let file_type = entry.file_type().ok()?;
                 if file_type.is_dir() {
                     let meta = read_folder_meta(&path);
-                    let (name, seq, error) = match meta {
-                        Ok(m) => (if m.name.trim().is_empty() { file_name.clone() } else { m.name }, m.seq, None),
-                        Err(e) => (file_name.clone(), 0, Some(e.message)),
+                    let (name, seq, from_spec, error) = match meta {
+                        Ok(m) => (
+                            if m.name.trim().is_empty() { file_name.clone() } else { m.name },
+                            m.seq,
+                            m.openapi.is_some(),
+                            None,
+                        ),
+                        Err(e) => (file_name.clone(), 0, false, Some(e.message)),
                     };
                     Some(TreeNode {
                         kind: NodeKind::Folder,
@@ -217,20 +222,23 @@ impl Workspace {
                         request_kind: None,
                         graphql: false,
                         error,
+                        removed_from_spec: false,
+                        from_spec,
                         children: if levels > 0 { self.scan(&path, levels - 1) } else { Vec::new() },
                     })
                 } else if file_type.is_file() && is_request_file(&path) {
                     let stem = file_name[..file_name.len() - EXT.len()].to_string();
-                    let (name, seq, method, kind, graphql, error) = match read_yaml::<Request>(&path) {
+                    let (name, seq, method, kind, graphql, removed, error) = match read_yaml::<Request>(&path) {
                         Ok(r) => (
                             if r.name.trim().is_empty() { stem } else { r.name },
                             r.seq,
                             Some(r.method),
                             Some(r.kind),
                             r.kind == RequestKind::Http && r.body.body_type == BodyType::Graphql,
+                            r.openapi.is_some_and(|o| o.removed),
                             None,
                         ),
-                        Err(e) => (stem, u32::MAX, None, None, false, Some(e.message)),
+                        Err(e) => (stem, u32::MAX, None, None, false, false, Some(e.message)),
                     };
                     Some(TreeNode {
                         kind: NodeKind::Request,
@@ -241,6 +249,8 @@ impl Workspace {
                         request_kind: kind,
                         graphql,
                         error,
+                        removed_from_spec: removed,
+                        from_spec: false,
                         children: Vec::new(),
                     })
                 } else {
@@ -454,6 +464,8 @@ impl Workspace {
             request_kind: None,
             graphql: false,
             error: None,
+            removed_from_spec: false,
+            from_spec: false,
             children: Vec::new(),
         };
         let at = index.unwrap_or(siblings.len()).min(siblings.len());
@@ -753,6 +765,16 @@ impl Workspace {
 
     pub fn delete_server(&self, id: &str) -> Result<()> {
         self.flat_delete::<Server>(id)
+    }
+
+    /// Delete a server file for good, not to the trash: for servers Zorvik saved itself
+    /// (a Training Bootcamp lab's). A missing file is fine.
+    pub fn remove_server(&self, id: &str) -> Result<()> {
+        let file = self.flat_file::<Server>(id)?;
+        match std::fs::remove_file(&file) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(Error::io("Could not remove the server", e)),
+            _ => Ok(()),
+        }
     }
 
     /// Put the servers in the order of `ids` (sidebar drag and drop).

@@ -1,0 +1,9 @@
+id: automate
+title: "Automate: CLI, CI and AI agents"
+summary: Run your API tests from a terminal, gate every pipeline on them, and let AI agents work in Zorvik while you stay in charge.
+color: "#4E6A8C"
+image: automate
+badge:
+  id: automation-ace
+  name: Automation Ace
+  description: Runs API tests without clicking a button.

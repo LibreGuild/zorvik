@@ -258,7 +258,7 @@ mod tests {
         );
         // Responses include read-only properties and leave write-only ones out.
         let list: serde_json::Value = serde_json::from_str(&routes[0].body).unwrap();
-        assert_eq!(list, serde_json::json!([{"id": 0, "name": "Tom"}]));
+        assert_eq!(list, serde_json::json!([{"id": 1, "name": "Tom"}]));
         assert_eq!(serde_json::from_str::<serde_json::Value>(&routes[1].body).unwrap()["name"], "Rex");
         assert!(routes[2].body.is_empty() && routes[2].headers.is_empty());
         assert!(routes[3].body.contains("\"Tom\""), "{}", routes[3].body);

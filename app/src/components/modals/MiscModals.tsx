@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Cookie, FileJson, Globe, ListChecks, Search, Terminal, Trash2 } from "lucide-react";
+import { Cookie, FileJson, Globe, GraduationCap, ListChecks, Search, Terminal, Trash2 } from "lucide-react";
 import type { CookieInfo } from "../../bindings/CookieInfo";
 import type { CurlFlavor } from "../../bindings/CurlFlavor";
+import type { SnippetLanguage } from "../../bindings/SnippetLanguage";
+import type { SpecUpdate } from "../../bindings/SpecUpdate";
 import type { FolderMeta } from "../../bindings/FolderMeta";
 import type { ImportSummary } from "../../bindings/ImportSummary";
 import type { TreeNode } from "../../bindings/TreeNode";
 import type { WorkspaceMeta } from "../../bindings/WorkspaceMeta";
 import { GRAPHQL_BADGE, methodColor, methodLabel } from "../../lib/http";
 import { copyText, pickFile } from "../../lib/platform";
-import { api, errorMessage } from "../../lib/rpc";
+import { api, errorMessage, RpcError } from "../../lib/rpc";
 import { confirm } from "../../store/dialogs";
 import { useLoadTests } from "../../store/loadtests";
 import { useServers } from "../../store/servers";
@@ -17,6 +19,7 @@ import { formatDuration, MODELS } from "../loadtests/model";
 import { SERVER_KINDS } from "../servers/kinds";
 import { TOOLS } from "../tools/registry";
 import { toast } from "../../store/toasts";
+import { openAcademy } from "../../store/academy";
 import { closeModal, toggleExpanded } from "../../store/ui";
 import { refreshEnvironments, refreshTree, reloadWorkspace, useWorkspace } from "../../store/workspace";
 import { CodeEditor } from "../CodeEditor";
@@ -60,6 +63,9 @@ export function ImportModal({ parent: initialParent }: { parent?: string }) {
   const [busy, setBusy] = useState(false);
   const [summary, setSummary] = useState<ImportSummary | null>(null);
   const [dragging, setDragging] = useState(false);
+  // An OpenAPI document without a full server URL: the import again, once the user gives one.
+  const [needsBase, setNeedsBase] = useState<{ message: string; retry: (baseUrl: string) => Promise<ImportSummary> } | null>(null);
+  const [baseUrl, setBaseUrl] = useState("");
 
   const finish = async (s: ImportSummary) => {
     setSummary(s);
@@ -78,6 +84,20 @@ export function ImportModal({ parent: initialParent }: { parent?: string }) {
       setBusy(false);
     }
   };
+
+  /** Import with `start`; when the API's base URL is missing, ask for it and retry with it. */
+  const importing = (start: (baseUrl?: string) => Promise<ImportSummary>) =>
+    run(async () => {
+      try {
+        await finish(await start());
+      } catch (e) {
+        if (e instanceof RpcError && e.code === "needsBaseUrl") {
+          setNeedsBase({ message: e.message, retry: (b) => start(b) });
+          return;
+        }
+        throw e;
+      }
+    });
 
   return (
     <Modal
@@ -114,10 +134,26 @@ export function ImportModal({ parent: initialParent }: { parent?: string }) {
                 Open as new request
               </Button>
             )}
-            {tab === "url" && (
-              <Button variant="primary" loading={busy} disabled={!url.trim()} onClick={() => run(async () => finish(await api.importUrl(url.trim(), parent)))}>
+            {needsBase ? (
+              <Button
+                variant="primary"
+                loading={busy}
+                disabled={!baseUrl.trim().includes("://")}
+                onClick={() =>
+                  run(async () => {
+                    await finish(await needsBase.retry(baseUrl.trim()));
+                    setNeedsBase(null);
+                  })
+                }
+              >
                 Import
               </Button>
+            ) : (
+              tab === "url" && (
+                <Button variant="primary" loading={busy} disabled={!url.trim()} onClick={() => importing((b) => api.importUrl(url.trim(), parent, b))}>
+                  Import
+                </Button>
+              )
             )}
           </>
         )
@@ -153,6 +189,21 @@ export function ImportModal({ parent: initialParent }: { parent?: string }) {
             onChange={setTab}
           />
           <div className="flex flex-col gap-4 p-5">
+            {needsBase && (
+              <div className="rounded-lg border border-warning/30 bg-warning/10 p-3" data-testid="import-base-url">
+                <p className="text-[12.5px] text-fg">{needsBase.message}</p>
+                <div className="mt-2.5">
+                  <Input
+                    value={baseUrl}
+                    onChange={(e) => setBaseUrl(e.target.value)}
+                    placeholder="https://api.example.com"
+                    aria-label="Base URL"
+                    autoFocus
+                  />
+                </div>
+                <p className="mt-1.5 text-[11.5px] text-faint">It goes into the new environment as baseUrl; you can change it there later.</p>
+              </div>
+            )}
             {tab !== "curl" && (
               <Field label="Import into">
                 <FolderSelect value={parent} onChange={setParent} />
@@ -164,7 +215,7 @@ export function ImportModal({ parent: initialParent }: { parent?: string }) {
                 onClick={() =>
                   run(async () => {
                     const path = await pickFile("Choose a file to import", ["json", "yaml", "yml", "txt", "sh"]);
-                    if (path) await finish(await api.importFile(path, parent));
+                    if (path) await importing((b) => api.importFile(path, parent, b));
                   })
                 }
                 onDragOver={(e) => {
@@ -176,7 +227,7 @@ export function ImportModal({ parent: initialParent }: { parent?: string }) {
                   e.preventDefault();
                   setDragging(false);
                   const file = e.dataTransfer.files[0];
-                  if (file) void run(async () => finish(await api.importText(await file.text(), parent)));
+                  if (file) void file.text().then((text) => importing((b) => api.importText(text, parent, b)));
                 }}
                 className={cx(
                   "flex h-36 flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed text-muted transition-colors hover:border-accent hover:text-fg",
@@ -207,12 +258,15 @@ export function ImportModal({ parent: initialParent }: { parent?: string }) {
 
 // ---- Export (cURL) ---------------------------------------------------------------
 
+const CURL_FLAVORS: CurlFlavor[] = ["bash", "cmd", "powerShell"];
+type ExportFormat = CurlFlavor | SnippetLanguage;
+
 export function ExportModal({ tabId }: { tabId: string }) {
   const tab = useTabs((s) => {
     const t = s.tabs.find((x) => x.id === tabId);
     return isRequestTab(t) ? t : undefined;
   });
-  const [flavor, setFlavor] = useState<CurlFlavor>(navigator.userAgent.includes("Windows") ? "cmd" : "bash");
+  const [format, setFormat] = useState<ExportFormat>(navigator.userAgent.includes("Windows") ? "cmd" : "bash");
   const [resolveVars, setResolveVars] = useState(true);
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -223,8 +277,11 @@ export function ExportModal({ tabId }: { tabId: string }) {
   useEffect(() => {
     if (!draft) return;
     let alive = true;
-    api
-      .exportCurl(draft, path, flavor, resolveVars)
+    const isCurl = CURL_FLAVORS.includes(format as CurlFlavor);
+    (isCurl
+      ? api.exportCurl(draft, path, format as CurlFlavor, resolveVars)
+      : api.exportSnippet(draft, path, format as SnippetLanguage, resolveVars)
+    )
       .then((t) => {
         if (!alive) return;
         setText(t);
@@ -238,13 +295,13 @@ export function ExportModal({ tabId }: { tabId: string }) {
     return () => {
       alive = false;
     };
-  }, [draft, path, flavor, resolveVars]);
+  }, [draft, path, format, resolveVars]);
   if (!tab) return null;
   return (
     <Modal
       open
       onClose={closeModal}
-      title="Copy as cURL"
+      title="Copy as cURL or code"
       width={760}
       footer={
         <>
@@ -267,10 +324,18 @@ export function ExportModal({ tabId }: { tabId: string }) {
       }
     >
       <div className="mb-3 flex items-center gap-4">
-        <Select value={flavor} onChange={(e) => setFlavor(e.target.value as CurlFlavor)} className="w-56">
-          <option value="bash">bash / zsh (macOS, Linux)</option>
-          <option value="cmd">Windows Command Prompt</option>
-          <option value="powerShell">Windows PowerShell</option>
+        <Select value={format} onChange={(e) => setFormat(e.target.value as ExportFormat)} className="w-64" aria-label="Format">
+          <optgroup label="cURL">
+            <option value="bash">cURL for bash / zsh (macOS, Linux)</option>
+            <option value="cmd">cURL for Windows Command Prompt</option>
+            <option value="powerShell">cURL for Windows PowerShell</option>
+          </optgroup>
+          <optgroup label="Code">
+            <option value="kotlin">Kotlin (OkHttp, Android)</option>
+            <option value="swift">Swift (URLSession)</option>
+            <option value="javascript">JavaScript (fetch)</option>
+            <option value="python">Python (requests)</option>
+          </optgroup>
         </Select>
         <Switch checked={resolveVars} onChange={setResolveVars} label="Substitute variables" />
       </div>
@@ -278,7 +343,7 @@ export function ExportModal({ tabId }: { tabId: string }) {
         <div className="rounded-md border border-danger/30 bg-danger/10 p-3 text-[12.5px] text-danger">{error}</div>
       ) : (
         <div className="h-72 overflow-hidden rounded-md border border-line bg-panel-2">
-          <CodeEditor value={text} readOnly lineNumbers={false} />
+          <CodeEditor value={text} readOnly lineNumbers={false} language={format === "javascript" ? "javascript" : "text"} />
         </div>
       )}
       {resolveVars && <p className="mt-2 text-[11.5px] text-faint">Contains resolved values — including secrets — so be careful where you paste it.</p>}
@@ -550,7 +615,7 @@ export function WorkspaceSettingsModal() {
 export function FolderSettingsModal({ path }: { path: string }) {
   const [meta, setMeta] = useState<FolderMeta | null>(null);
   const [loaded, setLoaded] = useState<FolderMeta | null>(null);
-  const [tab, setTab] = useState<"auth" | "headers" | "scripts" | "docs">("auth");
+  const [tab, setTab] = useState<"auth" | "headers" | "scripts" | "docs" | "spec">("auth");
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     api
@@ -605,11 +670,35 @@ export function FolderSettingsModal({ path }: { path: string }) {
           { id: "headers", label: "Headers" },
           { id: "scripts", label: <ScriptsTabLabel scripts={meta.scripts} /> },
           { id: "docs", label: "Docs" },
+          ...(meta.openapi ? [{ id: "spec" as const, label: "API spec" }] : []),
         ]}
         value={tab}
         onChange={setTab}
       />
       <div className="h-[380px] overflow-auto">
+        {tab === "spec" && meta.openapi && (
+          <div className="flex flex-col gap-4 p-5 text-[12.5px]">
+            <p className="text-muted">
+              This folder was imported from an OpenAPI document, kept at <code className="font-mono text-fg">{meta.openapi.spec}</code>
+              {meta.openapi.source ? (
+                <>
+                  {" "}
+                  (from <span className="break-all font-mono text-fg">{meta.openapi.source}</span>)
+                </>
+              ) : null}
+              .
+            </p>
+            <Switch
+              checked={meta.openapi.validate !== false}
+              onChange={(on) => setMeta({ ...meta, openapi: { ...meta.openapi!, validate: on ? undefined : false } })}
+              label="Check responses against the spec"
+            />
+            <p className="-mt-2 text-[11.5px] text-faint">
+              Each response to a request imported from it gets a test, “Matches the API spec”: is the status documented, and does a JSON body match the
+              documented schema?
+            </p>
+          </div>
+        )}
         {tab === "auth" && <AuthEditor auth={meta.auth ?? { type: "inherit" }} onChange={(auth) => setMeta({ ...meta, auth })} path={`${path}/_`} />}
         {tab === "headers" && (
           <div className="pt-2">
@@ -620,6 +709,157 @@ export function FolderSettingsModal({ path }: { path: string }) {
         {tab === "docs" && <CodeEditor value={meta.docs ?? ""} onChange={(docs) => setMeta({ ...meta, docs })} placeholder="Notes about this folder" lineNumbers={false} />}
       </div>
     </Modal>
+  );
+}
+
+// ---- Update from an API spec ---------------------------------------------------------------
+
+export function SpecUpdateModal({ folder, name }: { folder: string; name: string }) {
+  const [source, setSource] = useState<{ kind: "url" | "file" | "text"; value: string }>({ kind: "url", value: "" });
+  const [plan, setPlan] = useState<SpecUpdate | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<SpecUpdate | null>(null);
+  useEffect(() => {
+    api
+      .readFolder(folder)
+      .then((m) => {
+        const from = m.openapi?.source ?? "";
+        if (from) setSource({ kind: /^https?:\/\//.test(from) ? "url" : "file", value: from });
+      })
+      .catch(() => {});
+  }, [folder]);
+  const from = () =>
+    source.kind === "url" ? { url: source.value.trim() } : source.kind === "file" ? { path: source.value.trim() } : { text: source.value };
+  const run = async (apply: boolean) => {
+    setBusy(true);
+    try {
+      const result = await api.specUpdate(folder, from(), apply);
+      if (apply) {
+        setDone(result);
+        await refreshTree();
+        await refreshEnvironments();
+      } else setPlan(result);
+    } catch (e) {
+      toast("error", apply ? "Could not update" : "Could not read the document", errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const result = done ?? plan;
+  const nothing = result && !result.added.length && !result.changed.length && !result.removed.length && !result.restored.length && !result.variables.length;
+  return (
+    <Modal
+      open
+      onClose={closeModal}
+      title={`Update “${name}” from its API spec`}
+      description="New operations are added. Changed ones are updated where you haven't edited them; your docs, scripts and edits stay. Operations the spec no longer has are kept and marked."
+      width={680}
+      footer={
+        done ? (
+          <Button variant="primary" onClick={closeModal}>
+            Done
+          </Button>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={closeModal}>
+              Cancel
+            </Button>
+            {plan && !nothing ? (
+              <Button variant="primary" loading={busy} onClick={() => void run(true)} data-testid="spec-update-apply">
+                Update
+              </Button>
+            ) : (
+              <Button variant="primary" loading={busy} disabled={!source.value.trim()} onClick={() => void run(false)} data-testid="spec-update-preview">
+                Preview changes
+              </Button>
+            )}
+          </>
+        )
+      }
+    >
+      {!result && (
+        <div className="flex flex-col gap-3">
+          <Tabs
+            items={[
+              { id: "url", label: "URL" },
+              { id: "file", label: "File" },
+              { id: "text", label: "Paste" },
+            ]}
+            value={source.kind}
+            onChange={(kind) => setSource({ kind, value: kind === source.kind ? source.value : "" })}
+          />
+          {source.kind === "url" && (
+            <Input value={source.value} onChange={(e) => setSource({ ...source, value: e.target.value })} placeholder="https://api.example.com/openapi.json" autoFocus />
+          )}
+          {source.kind === "file" && (
+            <div className="flex gap-2">
+              <Input value={source.value} onChange={(e) => setSource({ ...source, value: e.target.value })} placeholder="openapi.yaml" />
+              <Button
+                onClick={async () => {
+                  const p = await pickFile("Choose the new OpenAPI document", ["json", "yaml", "yml"]);
+                  if (p) setSource({ kind: "file", value: p });
+                }}
+              >
+                Choose…
+              </Button>
+            </div>
+          )}
+          {source.kind === "text" && (
+            <div className="h-56 overflow-hidden rounded-md border border-line bg-input">
+              <CodeEditor value={source.value} onChange={(value) => setSource({ kind: "text", value })} placeholder="openapi: 3.0.0 …" lineNumbers={false} />
+            </div>
+          )}
+        </div>
+      )}
+      {result && (
+        <div className="flex flex-col gap-3 text-[12.5px]" data-testid="spec-update-plan">
+          <div className="font-medium text-fg">
+            {done ? "Updated. " : ""}
+            {nothing
+              ? "Nothing to change: the folder already matches this version."
+              : `${result.added.length} added · ${result.changed.length + result.restored.length} changed · ${result.removed.length} removed · ${result.unchanged} unchanged`}
+          </div>
+          {result.warnings.map((w, i) => (
+            <p key={i} className="rounded-md border border-warning/30 bg-warning/10 p-2.5 text-[12px] text-fg">
+              {w}
+            </p>
+          ))}
+          <SpecList title="Added" tone="text-success" items={result.added.map((c) => ({ key: c.operation, text: c.operation, note: c.name }))} />
+          <SpecList
+            title="Changed"
+            tone="text-accent"
+            items={[...result.changed, ...result.restored].map((c) => ({
+              key: c.operation,
+              text: c.operation,
+              note: [c.fields.length ? `updates ${c.fields.join(", ")}` : "", c.kept.length ? `keeps your ${c.kept.join(", ")}` : ""].filter(Boolean).join(" · "),
+            }))}
+          />
+          <SpecList
+            title="No longer in the spec (kept, marked)"
+            tone="text-danger"
+            items={result.removed.map((c) => ({ key: c.operation, text: c.operation, note: c.path ?? "" }))}
+          />
+          {result.variables.length > 0 && <p className="text-muted">New environment variables: {result.variables.join(", ")}</p>}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function SpecList({ title, tone, items }: { title: string; tone: string; items: { key: string; text: string; note: string }[] }) {
+  if (!items.length) return null;
+  return (
+    <div>
+      <div className={cx("mb-1 text-[11.5px] font-semibold uppercase tracking-wide", tone)}>{title}</div>
+      <ul className="max-h-40 overflow-auto rounded-md border border-line bg-panel-2 py-1">
+        {items.map((i) => (
+          <li key={i.key} className="flex gap-3 px-3 py-1">
+            <span className="shrink-0 font-mono text-[12px] text-fg">{i.text}</span>
+            <span className="min-w-0 truncate text-faint">{i.note}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -660,6 +900,15 @@ export function CommandPalette() {
         trail: "Runner",
         terms: "runner run collection tests",
         open: () => openRunner("", workspaceName),
+      },
+      {
+        key: "academy",
+        badge: <GraduationCap size={13} />,
+        color: "var(--accent)",
+        name: "Open the Academy",
+        trail: "Training Bootcamp",
+        terms: "academy bootcamp learn course lessons training tutorial",
+        open: () => void openAcademy(),
       },
       ...flatten(tree).map(({ node, trail }) => ({
         key: `r:${node.path}`,

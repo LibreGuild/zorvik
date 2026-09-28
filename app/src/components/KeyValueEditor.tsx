@@ -1,9 +1,9 @@
 // Editable key/value table with an always-present empty row and bulk edit.
 import { useState } from "react";
-import { GripVertical, Trash2 } from "lucide-react";
+import { GripVertical, Info, Trash2 } from "lucide-react";
 import type { KeyValue } from "../bindings/KeyValue";
 import { VarInput } from "./VarInput";
-import { Checkbox, cx } from "./ui";
+import { Checkbox, cx, Tooltip } from "./ui";
 
 export interface KvRow extends KeyValue {
   /** Rendered after the value (e.g. a secret toggle). */
@@ -83,17 +83,26 @@ export function KeyValueEditor({
             <div role="cell" className="flex w-6 justify-center">
               {allowDisable && !isNew && <Checkbox checked={enabled} onChange={(v) => update(i, { enabled: v })} title={enabled ? "Disable" : "Enable"} />}
             </div>
-            <div role="cell" className="w-[38%] min-w-0 border-r border-line/70">
-              {fixedKeys ? (
-                <div className="truncate px-2 font-mono text-[12.5px] leading-7 text-muted">{row.key}</div>
-              ) : (
-                <VarInput
-                  value={row.key}
-                  onChange={(v) => update(i, { key: v })}
-                  placeholder={keyPlaceholder}
-                  suggestions={keySuggestions}
-                  onEnter={onEnter}
-                />
+            <div role="cell" className="flex w-[38%] min-w-0 items-center border-r border-line/70">
+              <div className="min-w-0 flex-1">
+                {fixedKeys ? (
+                  <div className="truncate px-2 font-mono text-[12.5px] leading-7 text-muted">{row.key}</div>
+                ) : (
+                  <VarInput
+                    value={row.key}
+                    onChange={(v) => update(i, { key: v })}
+                    placeholder={keyPlaceholder}
+                    suggestions={keySuggestions}
+                    onEnter={onEnter}
+                  />
+                )}
+              </div>
+              {row.description && (
+                <Tooltip content={<span className="block max-w-[320px] whitespace-pre-wrap">{row.description}</span>}>
+                  <span aria-label={row.description} className="mr-1.5 shrink-0 text-faint hover:text-muted" data-testid="kv-description">
+                    <Info size={12} />
+                  </span>
+                </Tooltip>
               )}
             </div>
             <div role="cell" className="min-w-0 flex-1">

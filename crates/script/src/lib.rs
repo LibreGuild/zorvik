@@ -92,6 +92,18 @@ pub struct ScriptResponse {
     pub response_time: f64,
     /// Body size in bytes.
     pub response_size: u64,
+    /// Server-Sent Events read from the response (`pm.response.events`), for event streams.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub events: Option<Vec<ScriptEvent>>,
+}
+
+/// One Server-Sent Event as scripts see it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ScriptEvent {
+    pub event: String,
+    pub data: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
 /// Variable scopes, highest precedence first: `pm.variables.get` looks through

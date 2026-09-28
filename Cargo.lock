@@ -4637,6 +4637,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_ignored"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "115dffd5f3853e06e746965a20dcbae6ee747ae30b543d91b0e089668bb07798"
+dependencies = [
+ "serde",
+ "serde_core",
+]
+
+[[package]]
 name = "serde_json"
 version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7331,14 +7341,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 
 [[package]]
+name = "zorvik-academy"
+version = "0.1.1"
+dependencies = [
+ "indexmap 2.14.2",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "ts-rs",
+ "zorvik-formats",
+]
+
+[[package]]
 name = "zorvik-api"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "notify",
  "notify-debouncer-full",
  "serde",
+ "serde_ignored",
  "serde_json",
+ "strsim",
  "tempfile",
  "thiserror 2.0.21",
  "time",
@@ -7348,6 +7373,7 @@ dependencies = [
  "ts-rs",
  "url",
  "uuid",
+ "zorvik-academy",
  "zorvik-engine",
  "zorvik-load",
  "zorvik-script",
@@ -7358,7 +7384,7 @@ dependencies = [
 
 [[package]]
 name = "zorvik-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "serde",
@@ -7377,7 +7403,7 @@ dependencies = [
 
 [[package]]
 name = "zorvik-desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "objc2-app-kit",
  "serde_json",
@@ -7396,7 +7422,7 @@ dependencies = [
 
 [[package]]
 name = "zorvik-devbridge"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "clap",
@@ -7412,7 +7438,7 @@ dependencies = [
 
 [[package]]
 name = "zorvik-engine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "brotli-decompressor 6.0.1",
@@ -7463,7 +7489,7 @@ dependencies = [
 
 [[package]]
 name = "zorvik-formats"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "indexmap 2.14.2",
@@ -7478,10 +7504,11 @@ dependencies = [
 
 [[package]]
 name = "zorvik-load"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "hdrhistogram",
+ "regex",
  "rlimit",
  "serde",
  "serde_json",
@@ -7498,7 +7525,7 @@ dependencies = [
 
 [[package]]
 name = "zorvik-mcp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dirs 7.0.0",
  "serde",
@@ -7517,7 +7544,7 @@ dependencies = [
 
 [[package]]
 name = "zorvik-script"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rquickjs",
  "serde",
@@ -7527,7 +7554,7 @@ dependencies = [
 
 [[package]]
 name = "zorvik-servers"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -7558,7 +7585,7 @@ dependencies = [
 
 [[package]]
 name = "zorvik-testkit"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -7591,7 +7618,7 @@ dependencies = [
 
 [[package]]
 name = "zorvik-workspace"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "bytes",

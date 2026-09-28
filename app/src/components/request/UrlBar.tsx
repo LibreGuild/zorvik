@@ -86,7 +86,7 @@ export function UrlBar({ tab }: { tab: Tab }) {
           </button>
         }
         entries={[
-          ...(kind === "http" ? [{ label: "Copy as cURL…", icon: <Terminal size={14} />, onSelect: () => openModal({ type: "export", tabId: tab.id }) }] : []),
+          ...(kind === "http" ? [{ label: "Copy as cURL or code…", icon: <Terminal size={14} />, onSelect: () => openModal({ type: "export", tabId: tab.id }) }] : []),
           ...(kind === "http" ? [{ label: "Load test this request…", icon: <Activity size={14} />, onSelect: () => void loadTestThis(tab) }] : []),
           { label: "Save as…", icon: <Save size={14} />, onSelect: () => openModal({ type: "saveAs", tabId: tab.id }) },
         ]}
@@ -122,7 +122,7 @@ function MethodPicker({ value, onChange }: { value: string; onChange: (m: string
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content align="start" sideOffset={6} className="zv-pop z-[90] w-44 rounded-xl border border-line bg-elev p-1.5 shadow-pop">
+        <DropdownMenu.Content align="start" sideOffset={6} collisionPadding={8} className="zv-pop z-[90] w-44 rounded-xl border border-line bg-elev p-1.5 shadow-pop max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto overscroll-contain">
           {METHODS.map((m) => (
             <DropdownMenu.Item
               key={m}

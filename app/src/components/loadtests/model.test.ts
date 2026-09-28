@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { LoadStage } from "../../bindings/LoadStage";
+import type { MetricsSummary } from "../../bindings/MetricsSummary";
+import type { PhaseSummary } from "../../bindings/PhaseSummary";
 import type { TreeNode } from "../../bindings/TreeNode";
 import {
+  captureProblem,
   changeMetric,
   compactNumber,
+  compareRuns,
   cpuShare,
   decimate,
   defaultThreshold,
   flattenRequests,
+  formatChange,
   formatDuration,
   formatLatency,
   formatPercent,
@@ -16,6 +21,7 @@ import {
   httpRequestsUnder,
   matchPreset,
   nameFromPath,
+  newConnectionShare,
   niceMax,
   peakTarget,
   presetStages,
@@ -224,5 +230,77 @@ describe("chart helpers", () => {
     expect(compactNumber(1250)).toBe("1.25k");
     expect(compactNumber(0)).toBe("0");
     expect(compactNumber(0.25)).toBe("0.25");
+  });
+
+  it("checks captures before a run", () => {
+    expect(captureProblem({ variable: "id", from: "json", path: "$.items[0].id" })).toBeNull();
+    for (const path of ["$", "$.id", "id", "data.items[-1].id", "$['odd key'][\"a.b\"]", "$.a[ 2 ]"]) expect(captureProblem({ variable: "id", from: "json", path })).toBeNull();
+    for (const path of ["$..id", "$.*", "$.a[", "$.a[x]", "$a", "$."]) expect(captureProblem({ variable: "id", from: "json", path })).toBe("Use a JSON path like $.items[0].id");
+    expect(captureProblem({ variable: " ", from: "json", path: "$.id" })).toBe("Name the variable");
+    expect(captureProblem({ variable: "order id", from: "json", path: "$.id" })).toBe("No spaces or braces in a variable name");
+    expect(captureProblem({ variable: "{{id}}", from: "json", path: "$.id" })).toBe("No spaces or braces in a variable name");
+    expect(captureProblem({ variable: "etag", from: "header", path: "" })).toBe("Give the header name");
+    expect(captureProblem({ variable: "t", from: "regex", path: " " })).toBe("Give a regular expression");
+    // Regular expressions are checked by the generator (its syntax differs from JavaScript's).
+    expect(captureProblem({ variable: "t", from: "regex", path: "(?P<t>\\w+)" })).toBeNull();
+  });
+
+  it("compares a run with an earlier one", () => {
+    const phase = (p95: number, count = 10): PhaseSummary => ({ count, avg: p95 / 2, p50: p95 / 2, p95, p99: p95, max: p95 });
+    const metrics = (rps: number, errorRate: number, p95: number, ttfb: PhaseSummary): MetricsSummary => ({
+      requests: 1000,
+      errors: errorRate * 10,
+      errorRate,
+      rps,
+      bytesIn: 0,
+      bytesOut: 0,
+      latency: { min: 1, avg: p95 / 2, p50: p95 / 2, p90: p95 * 0.9, p95, p99: p95 * 2, p999: p95 * 3, max: p95 * 4 },
+      statusCodes: [],
+      errorKinds: [],
+      dropped: 0,
+      connections: 10,
+      timing: { connect: phase(1), ttfb, transfer: phase(1), server: phase(0, 0) },
+      captureMisses: 0,
+    });
+    const current = {
+      totals: metrics(220, 0.5, 90, phase(40)),
+      targets: [
+        { name: "List", request: "list.yaml", metrics: metrics(100, 0, 100, phase(40)) },
+        { name: "New", request: "new.yaml", metrics: metrics(120, 1, 80, phase(40)) },
+      ],
+    };
+    const baseline = {
+      totals: metrics(200, 0, 100, phase(0, 0)),
+      targets: [
+        { name: "List", request: "list.yaml", metrics: metrics(100, 0, 100.5, phase(40)) },
+        { name: "Old", request: "old.yaml", metrics: metrics(100, 0, 50, phase(40)) },
+      ],
+    };
+    const rows = compareRuns(current, baseline);
+    const by = (key: string) => rows.find((r) => r.key === key)!;
+    // More throughput is better; lower latency is better.
+    expect(by("rps")).toMatchObject({ current: 220, baseline: 200, change: 10, better: true });
+    expect(by("p95")).toMatchObject({ current: 90, baseline: 100, change: -10, better: true });
+    expect(by("max")).toMatchObject({ current: 360, baseline: 400, better: true });
+    // Errors from none: no percentage, but worse.
+    expect(by("errorRate")).toMatchObject({ change: null, better: false });
+    expect(formatChange(by("errorRate"))).toBe("new");
+    // An earlier run saved without timing has no first-byte number.
+    expect(by("ttfb")).toMatchObject({ current: 40, baseline: null, change: null, better: null });
+    expect(formatChange(by("ttfb"))).toBe("–");
+    // Per request, matched by path; a change under 1% is noise.
+    const list = by("target:list.yaml");
+    expect(list.target).toBe(true);
+    expect(list.label).toBe("List p95");
+    expect(list.better).toBeNull();
+    expect(by("target:new.yaml")).toMatchObject({ baseline: null, better: null });
+    expect(by("target:old.yaml")).toMatchObject({ current: null, baseline: 50, label: "Old p95" });
+    expect(rows.map((r) => r.key).slice(0, 8)).toEqual(["rps", "errorRate", "p50", "p90", "p95", "p99", "max", "ttfb"]);
+
+    expect(formatChange({ current: 110, baseline: 100, change: 10 })).toBe("+10%");
+    expect(formatChange({ current: 96.6, baseline: 100, change: -3.4 })).toBe("−3.4%");
+    expect(formatChange({ current: 0, baseline: 0, change: null })).toBe("0%");
+    expect(formatChange({ current: 100, baseline: 100, change: 0.01 })).toBe("0%");
+    expect(newConnectionShare(current.totals)).toBe(1);
   });
 });

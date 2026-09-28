@@ -8,6 +8,8 @@ pub mod model;
 pub mod openapi;
 pub mod postman;
 pub mod server;
+pub mod snippet;
+pub mod spec_check;
 
 pub use import::{ImportError, ImportSummary, ImportedCollection, ImportedItem};
 pub use loadtest::*;

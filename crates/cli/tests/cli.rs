@@ -68,7 +68,7 @@ async fn runs_workspace_requests_and_sets_exit_code() {
     let (code, out) =
         tokio::task::spawn_blocking(move || run(&["run", &p, "--env", "Local", "--allow-http-errors"])).await.unwrap();
     assert_eq!(code, 0, "{out}");
-    assert!(out.contains("WS      Socket  (skipped: only HTTP requests run)"), "{out}");
+    assert!(out.contains("WS      Socket  (skipped: WebSocket connections are live sessions"), "{out}");
 
     let (code, out) = tokio::task::spawn_blocking(move || run(&["run", &path, "--env", "nope"])).await.unwrap();
     assert_eq!(code, 2, "{out}");

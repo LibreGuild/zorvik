@@ -8,6 +8,7 @@ export type ModalState =
   | { type: "cookies" }
   | { type: "workspaceSettings" }
   | { type: "folderSettings"; path: string }
+  | { type: "specUpdate"; folder: string; name: string }
   | { type: "export"; tabId: string }
   | { type: "saveAs"; tabId: string }
   | { type: "move"; path: string; name: string }

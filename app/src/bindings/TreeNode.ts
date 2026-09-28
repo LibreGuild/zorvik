@@ -17,4 +17,12 @@ graphql?: boolean,
 /**
  * Set when the file could not be parsed.
  */
-error?: string, children: Array<TreeNode>, };
+error?: string, 
+/**
+ * An imported request whose operation is no longer in its OpenAPI document.
+ */
+removedFromSpec?: boolean, 
+/**
+ * A folder imported from an OpenAPI document the workspace keeps (it can be updated from it).
+ */
+fromSpec?: boolean, children: Array<TreeNode>, };

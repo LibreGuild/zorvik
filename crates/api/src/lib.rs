@@ -2,6 +2,7 @@
 //! shared by the Tauri shell (IPC) and the dev bridge (HTTP), so both run the
 //! exact same code. The methods are the arms of the `match` in `Api::dispatch`.
 
+pub mod academy;
 pub mod agents;
 mod batch;
 mod dns;
@@ -14,6 +15,9 @@ pub mod runner;
 mod scripting;
 mod servers;
 mod sockets;
+pub mod spec_update;
+pub mod specs;
+pub mod sse_read;
 mod state;
 mod tools;
 mod watcher;
@@ -157,11 +161,34 @@ struct Inner {
     sse_streams: Mutex<HashMap<String, (u64, CancellationToken)>>,
     generation: std::sync::atomic::AtomicU64,
     responses: Mutex<ResponseStore>,
+    /// OpenAPI documents of the workspace, parsed, for checking responses.
+    specs: specs::SpecCache,
+    /// The last responses to history entries, in memory only (history on disk keeps the
+    /// requests): what an agent reads with `read_history`.
+    recent_responses: Mutex<VecDeque<RecentResponse>>,
     watcher: Mutex<Option<watcher::Watcher>>,
     /// Network tool runs (TLS inspect, port check, ping) by run id, for `tools.cancel`.
     tool_runs: Mutex<HashMap<String, (u64, CancellationToken)>>,
     /// AI agents connected over MCP (`agent.*`).
     agents: agents::AgentHub,
+    /// Training Bootcamp labs and progress (`academy.*`).
+    academy: academy::AcademyState,
+}
+
+/// Responses kept in memory for `read_history`, and body characters kept of each.
+const RECENT_RESPONSES: usize = 50;
+const RECENT_BODY_CHARS: usize = 64 * 1024;
+
+/// A history entry's response, as it came back.
+#[derive(Debug, Clone)]
+pub(crate) struct RecentResponse {
+    pub history_id: i64,
+    pub status: u16,
+    pub status_text: String,
+    pub headers: Vec<zorvik_engine::Header>,
+    /// Text of the body (the first 64 K characters), `None` for binary bodies.
+    pub body: Option<String>,
+    pub body_cut: bool,
 }
 
 /// A WebSocket by caller id. Registered before connecting (`session` is `None`
@@ -348,20 +375,37 @@ impl Api {
             runner: Default::default(),
             sse_streams: Mutex::new(HashMap::new()),
             responses: Mutex::new(ResponseStore::default()),
+            specs: Default::default(),
+            recent_responses: Mutex::new(VecDeque::new()),
             watcher: Mutex::new(None),
             tool_runs: Mutex::new(HashMap::new()),
             agents: Default::default(),
+            academy: Default::default(),
             generation: Default::default(),
         };
         Self { inner: Arc::new(inner) }
     }
 
     /// Dispatch one RPC call.
-    pub async fn call(&self, method: &str, p: Value) -> ApiResult<Value> {
-        // The dispatch future holds the state of every method (tens of KB).
-        // Boxed, callers' futures stay small; unoptimized builds copy a future
-        // onto the stack at each await, which overflowed test threads.
-        Box::pin(self.dispatch(method, p)).await
+    ///
+    /// The dispatch future holds the state of every method (tens of KB). Boxed, callers'
+    /// futures stay small (unoptimized builds copy a future onto the stack at each await,
+    /// which overflowed test threads); named as `Send`, methods that call back into the API
+    /// (Bootcamp "Do it for me") stay `Send` too.
+    pub fn call<'a>(
+        &'a self,
+        method: &'a str,
+        p: Value,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ApiResult<Value>> + Send + 'a>> {
+        Box::pin(async move {
+            // A running Bootcamp lab checks its steps against what the app does.
+            let watched = self.academy_watching(method).then(|| p.clone());
+            let result = self.dispatch(method, p).await;
+            if let Some(params) = watched {
+                self.academy_observe(method, params, &result);
+            }
+            result
+        })
     }
 
     async fn dispatch(&self, method: &str, p: Value) -> ApiResult<Value> {
@@ -376,6 +420,7 @@ impl Api {
             "grpc" => return self.call_grpc(method, p).await,
             "runner" => return self.call_runner(method, p).await,
             "agent" => return self.call_agent(method, p).await,
+            "academy" => return self.call_academy(method, p).await,
             _ => {}
         }
         match method {
@@ -796,7 +841,10 @@ impl Api {
             }
             "import.file" => ok(self.import_file(params(p)?).await?),
             "import.url" => ok(self.import_url(params(p)?).await?),
+            "import.updatePreview" => ok(self.spec_update(params(p)?, false).await?),
+            "import.update" => ok(self.spec_update(params(p)?, true).await?),
             "export.curl" => ok(self.export_curl(params(p)?)?),
+            "export.snippet" => ok(self.export_snippet(params(p)?)?),
 
             other => Err(ApiError::new("notFound", format!("Unknown method '{other}'"))),
         }
@@ -1074,6 +1122,7 @@ impl Api {
                 tokens: &self.inner.tokens,
                 jar: jar.as_deref(),
                 guard: agents::scope_guard(),
+                specs: Some(&self.inner.specs),
             };
             let scripted = tokio::select! {
                 // Boxed: the whole pipeline is a big future (debug builds would overflow the stack).
@@ -1115,7 +1164,7 @@ impl Api {
                 if let Some(jar) = jar {
                     self.save_jar(&ws, &jar);
                 }
-                self.record_history(
+                let history_id = self.record_history(
                     &workspace_key,
                     &p,
                     &self.history_url(&ws, history_url.as_deref().unwrap_or(&url)),
@@ -1125,7 +1174,11 @@ impl Api {
                     Some(response.body.len() as i64),
                     settings.history_limit,
                 );
-                Ok(SendResult { scripts: report, ..self.send_result(response, unresolved) })
+                let result = SendResult { scripts: report, ..self.send_result(response, unresolved) };
+                if let Some(id) = history_id {
+                    self.keep_response(id, &result);
+                }
+                Ok(result)
             }
             Err(err) => {
                 // A pre-request script error means nothing was sent.
@@ -1161,6 +1214,48 @@ impl Api {
         url
     }
 
+    /// The response to history entry `history_id`, while it is among the last ones.
+    pub(crate) fn recent_response(&self, history_id: i64) -> Option<RecentResponse> {
+        lock(&self.inner.recent_responses).iter().find(|r| r.history_id == history_id).cloned()
+    }
+
+    fn keep_response(&self, history_id: i64, result: &SendResult) {
+        let text = result.body.pretty.as_ref().or(result.body.text.as_ref());
+        let (body, body_cut) = match text {
+            Some(t) => match t.char_indices().nth(RECENT_BODY_CHARS) {
+                Some((at, _)) => (Some(t[..at].to_string()), true),
+                None => (Some(t.clone()), result.body.display_truncated || result.body.download_truncated),
+            },
+            None => (None, false),
+        };
+        let response = RecentResponse {
+            history_id,
+            status: result.meta.status,
+            status_text: result.meta.status_text.clone(),
+            headers: result.meta.headers.clone(),
+            body,
+            body_cut,
+        };
+        let mut recent = lock(&self.inner.recent_responses);
+        recent.push_back(response);
+        while recent.len() > RECENT_RESPONSES {
+            recent.pop_front();
+        }
+    }
+
+    /// Write an OpenAPI document into `specs/` under a free name; its path from the workspace root.
+    fn keep_spec(&self, ws: &Workspace, name: &str, text: &str) -> ApiResult<String> {
+        let dir = ws.root().join(specs::SPECS_DIR);
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| ApiError::new("io", format!("Could not create {}: {e}", dir.display())))?;
+        let ext = if text.trim_start_matches('\u{feff}').trim_start().starts_with('{') { ".json" } else { ".yaml" };
+        let stem = zorvik_workspace::fsutil::sanitize_file_stem(if name.trim().is_empty() { "api" } else { name });
+        let file = zorvik_workspace::fsutil::unique_name(&dir, &stem, ext, None);
+        zorvik_workspace::fsutil::atomic_write(&dir.join(&file), text.as_bytes())?;
+        Ok(format!("{}/{file}", specs::SPECS_DIR))
+    }
+
+    /// Adds the entry; its id, when it was written.
     #[allow(clippy::too_many_arguments)]
     fn record_history(
         &self,
@@ -1172,8 +1267,8 @@ impl Api {
         duration_ms: Option<f64>,
         size: Option<i64>,
         limit: u32,
-    ) {
-        let Some(history) = &self.inner.history else { return };
+    ) -> Option<i64> {
+        let Some(history) = &self.inner.history else { return None };
         let entry = NewEntry {
             workspace,
             request_path: p.path.as_deref(),
@@ -1184,8 +1279,12 @@ impl Api {
             size,
             request: &p.request,
         };
-        if let Err(e) = history.add(entry, limit) {
-            tracing::warn!("history write failed: {}", e.message);
+        match history.add(entry, limit) {
+            Ok(id) => Some(id),
+            Err(e) => {
+                tracing::warn!("history write failed: {}", e.message);
+                None
+            }
         }
     }
 
@@ -1262,30 +1361,13 @@ impl Api {
 
     async fn sse_connect(&self, p: StreamParams) -> ApiResult<StreamOpened> {
         let ws = self.ws()?;
-        let settings = self.settings();
         let cancel = CancellationToken::new();
         let generation = self.next_generation();
         if let Some((_, old)) = lock(&self.inner.sse_streams).insert(p.conn_id.clone(), (generation, cancel.clone())) {
             old.cancel();
         }
         let opened = tokio::select! {
-            r = async {
-                let mut resolved = self.prepare(&ws, &p.request, p.path.as_deref())?;
-                let opts = request_options(&settings, &p.request.settings)?;
-                self.authorize(&ws, &mut resolved, &opts).await?;
-                if !resolved.request.headers.iter().any(|h| h.name.eq_ignore_ascii_case("accept")) {
-                    resolved.request.headers.push(zorvik_engine::Header::new("Accept", "text/event-stream"));
-                }
-                if !resolved.request.headers.iter().any(|h| h.name.eq_ignore_ascii_case("cache-control")) {
-                    resolved.request.headers.push(zorvik_engine::Header::new("Cache-Control", "no-cache"));
-                }
-                let jar = settings.cookie_jar.then(|| self.jar(&ws));
-                let stream = self.inner.client.open_stream(resolved.request, &opts, jar.as_deref()).await?;
-                if let Some(jar) = &jar {
-                    self.save_jar(&ws, jar);
-                }
-                Ok::<_, ApiError>((stream, resolved.unresolved))
-            } => r,
+            r = self.open_event_stream(&ws, &p.request, p.path.as_deref()) => r,
             _ = cancel.cancelled() => Err(EngineError::cancelled().into()),
         };
         let (stream, unresolved) = match opened {
@@ -1409,7 +1491,15 @@ impl Api {
             }
             (None, None) => return Err(ApiError::invalid("Nothing to import")),
         };
-        self.import_text(text, p.parent).await
+        // Remembered for "Update from OpenAPI" only when inside the workspace (a path on this
+        // computer would mean nothing to teammates).
+        let source = p.path.as_deref().and_then(|path| {
+            let ws = self.try_ws()?;
+            let root = std::fs::canonicalize(ws.root()).ok()?;
+            let file = std::fs::canonicalize(path).ok()?;
+            Some(file.strip_prefix(&root).ok()?.to_string_lossy().replace('\\', "/"))
+        });
+        self.import_text_from(text, p.parent, p.base_url, source).await
     }
 
     async fn import_url(&self, p: ImportUrlParams) -> ApiResult<ImportSummary> {
@@ -1431,10 +1521,33 @@ impl Api {
         if resp.body_truncated {
             return Err(ApiError::invalid("The download is larger than 50 MB"));
         }
-        self.import_text(String::from_utf8_lossy(&resp.body).into_owned(), p.parent).await
+        // A relative server URL in an OpenAPI document is relative to where the document is.
+        let base_url = p.base_url.or_else(|| url::Url::parse(&p.url).ok().map(|u| u.origin().ascii_serialization()));
+        self.import_text_from(String::from_utf8_lossy(&resp.body).into_owned(), p.parent, base_url, Some(p.url.clone()))
+            .await
     }
 
-    async fn import_text(&self, text: String, parent: String) -> ApiResult<ImportSummary> {
+    /// Import `text` under folder `parent`. An OpenAPI document that doesn't say where the API
+    /// runs (no server URL, or a relative one) needs `base_url`; without it the import is
+    /// refused with code `needsBaseUrl`, so the caller can ask for it.
+    pub(crate) async fn import_text(
+        &self,
+        text: String,
+        parent: String,
+        base_url: Option<String>,
+    ) -> ApiResult<ImportSummary> {
+        self.import_text_from(text, parent, base_url, None).await
+    }
+
+    /// [`Self::import_text`]; `source` is where an OpenAPI document came from (a URL or a
+    /// file in the workspace), kept for updating the folder from it later.
+    async fn import_text_from(
+        &self,
+        text: String,
+        parent: String,
+        base_url: Option<String>,
+        source: Option<String>,
+    ) -> ApiResult<ImportSummary> {
         let ws = self.ws()?;
         let key = ws.local_key();
         let text = text.trim_start_matches('\u{feff}').to_string();
@@ -1464,6 +1577,7 @@ impl Api {
                 folder_path: None,
             });
         }
+        let spec_text = (kind == ImportKind::OpenApi).then(|| text.clone());
         let collection = match kind {
             // Parsing a big spec is CPU-bound: keep it off the async workers.
             ImportKind::Postman | ImportKind::OpenApi => tokio::task::spawn_blocking(move || match kind {
@@ -1493,9 +1607,12 @@ impl Api {
                 ));
             }
         };
+        let mut collection = collection;
+        if kind == ImportKind::OpenApi {
+            apply_base_url(&mut collection, base_url.as_deref())?;
+        }
         // Collection variables become an environment. Secret values go to the secret store,
         // never into the workspace file (not even briefly).
-        let mut collection = collection;
         let variables = collection.variables.clone();
         for v in collection.variables.iter_mut().filter(|v| v.secret) {
             v.value.clear();
@@ -1504,6 +1621,24 @@ impl Api {
         let ws2 = ws.clone();
         let mut summary =
             tokio::task::spawn_blocking(move || ws2.write_imported(&parent, &collection)).await.map_err(join_err)??;
+        // The document is kept beside the requests: their responses are checked against it,
+        // and the folder can be updated from a new version.
+        if let (Some(spec_text), Some(folder)) = (spec_text, summary.folder_path.clone()) {
+            match self.keep_spec(&ws, &summary.name, &spec_text) {
+                Ok(spec) => {
+                    let mut meta = ws.read_folder(&folder)?;
+                    meta.openapi = Some(zorvik_workspace::formats::OpenApiSource {
+                        spec,
+                        source: source.unwrap_or_default(),
+                        validate: true,
+                    });
+                    ws.save_folder(&folder, &meta)?;
+                }
+                Err(e) => {
+                    summary.warnings.push(format!("The document could not be kept in the workspace: {}", e.message))
+                }
+            }
+        }
         if summary.environments > 0
             && variables.iter().any(|v| v.secret && !v.value.is_empty())
             && let Ok(envs) = ws.list_environments()
@@ -1550,21 +1685,38 @@ impl Api {
     }
 
     fn export_curl(&self, p: ExportCurlParams) -> ApiResult<String> {
+        let request = self.request_for_export(&p.request, p.path.as_deref(), p.resolve_variables)?;
+        Ok(to_curl(&request, p.flavor))
+    }
+
+    fn export_snippet(&self, p: ExportSnippetParams) -> ApiResult<String> {
+        let request = self.request_for_export(&p.request, p.path.as_deref(), p.resolve_variables)?;
+        Ok(zorvik_workspace::formats::snippet::to_snippet(&request, p.language))
+    }
+
+    /// `request` as it would be sent, for copying as cURL or code. Without resolving,
+    /// `{{variables}}` stay as written; an OAuth 2.0 token is the cached one or a placeholder.
+    pub(crate) fn request_for_export(
+        &self,
+        request: &Request,
+        path: Option<&str>,
+        resolve_variables: bool,
+    ) -> ApiResult<zorvik_engine::HttpRequest> {
         let ws = self.ws()?;
-        let mut resolved = if p.resolve_variables {
-            self.resolve_only(&ws, &p.request, p.path.as_deref())?
+        let mut resolved = if resolve_variables {
+            self.resolve_only(&ws, request, path)?
         } else {
-            let folders = p.path.as_deref().map(|x| ws.ancestors(x)).unwrap_or_default();
+            let folders = path.map(|x| ws.ancestors(x)).unwrap_or_default();
             let meta = ws.meta().clone();
             let outside_files = self.settings().files_outside_workspace;
             let inherit = Inheritance { workspace: &meta, folders: &folders, base_dir: ws.root(), outside_files };
-            resolve(&p.request, &inherit, &VarContext::new())?
+            resolve(request, &inherit, &VarContext::new())?
         };
         if let Some(config) = &resolved.oauth2 {
             let token = self.inner.tokens.get(&oauth2::cache_key(&ws.local_key(), config)).map(|t| t.access_token);
             apply_token(&mut resolved, token.as_deref().unwrap_or("<access-token>"));
         }
-        Ok(to_curl(&resolved.request, p.flavor))
+        Ok(resolved.request)
     }
 }
 
@@ -1583,6 +1735,8 @@ struct ImportFileParams {
     text: Option<String>,
     #[serde(default)]
     parent: String,
+    /// Where the API runs, for an OpenAPI document that doesn't say (or says it relatively).
+    base_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1591,6 +1745,41 @@ struct ImportUrlParams {
     url: String,
     #[serde(default)]
     parent: String,
+    base_url: Option<String>,
+}
+
+/// The imported `baseUrl` made absolute with `base_url`, or the refusal that asks for it.
+fn apply_base_url(
+    collection: &mut zorvik_workspace::formats::import::ImportedCollection,
+    base_url: Option<&str>,
+) -> ApiResult<()> {
+    let Some(var) = collection.variables.iter_mut().find(|v| v.key == "baseUrl") else { return Ok(()) };
+    let current = var.value.trim().to_string();
+    if current.contains("://") || current.starts_with("{{") {
+        return Ok(());
+    }
+    let given = base_url.map(|b| b.trim().trim_end_matches('/').to_string()).filter(|b| !b.is_empty());
+    let Some(given) = given else {
+        let message = if current.is_empty() {
+            "This API document doesn't say where the API runs. Give its base URL (for example \
+             https://api.example.com) and import again."
+                .to_string()
+        } else {
+            format!(
+                "This API document gives only a relative server URL (\"{current}\"). Give the API's base URL \
+                 (for example https://api.example.com) and import again."
+            )
+        };
+        return Err(ApiError::new("needsBaseUrl", message));
+    };
+    if !given.contains("://") {
+        return Err(ApiError::invalid(format!("\"{given}\" is not a URL; give one like https://api.example.com")));
+    }
+    // A relative server path goes after the host, unless the given URL already has a path.
+    let has_path = url::Url::parse(&given).is_ok_and(|u| u.path() != "/");
+    var.value = if current.starts_with('/') && !has_path { format!("{given}{current}") } else { given };
+    collection.warnings.retain(|w| !w.contains("baseUrl"));
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -1603,6 +1792,16 @@ struct ExportCurlParams {
     resolve_variables: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportSnippetParams {
+    request: Request,
+    path: Option<String>,
+    language: zorvik_workspace::formats::snippet::SnippetLanguage,
+    #[serde(default = "yes")]
+    resolve_variables: bool,
+}
+
 fn yes() -> bool {
     true
 }
@@ -1611,7 +1810,7 @@ pub(crate) fn join_err(e: tokio::task::JoinError) -> ApiError {
     ApiError::new("internal", format!("Background task failed: {e}"))
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ImportKind {
     Postman,
     PostmanEnvironment,

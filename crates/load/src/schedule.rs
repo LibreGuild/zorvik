@@ -159,7 +159,11 @@ impl Picker {
     }
 
     pub(crate) fn next(&self) -> usize {
-        let i = self.next.fetch_add(1, Ordering::Relaxed);
+        self.at(self.next.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// The `i`-th pick of the order (a user going through it on its own).
+    pub(crate) fn at(&self, i: usize) -> usize {
         self.order[i % self.order.len()] as usize
     }
 }
@@ -218,6 +222,8 @@ mod tests {
         assert_eq!(picks, [0, 0, 1, 0, 0, 0, 1, 0]);
         let p = Picker::new(&[0, 2, 2]);
         assert!((0..10).map(|_| p.next()).all(|i| i != 0));
+        let p = Picker::new(&[2, 1]);
+        assert_eq!((0..6).map(|i| p.at(i)).collect::<Vec<_>>(), [0, 1, 0, 0, 1, 0]);
         let big = Picker::new(&[u32::MAX, 1]);
         assert!(big.order.len() <= MAX_CYCLE as usize + 1 && big.order.contains(&1));
     }

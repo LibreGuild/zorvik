@@ -18,6 +18,8 @@ serde_json.workspace = true
 ts-rs.workspace = true
 tracing.workspace = true
 hdrhistogram.workspace = true
+# Load test captures that match the body with a regular expression.
+regex.workspace = true
 # Generator CPU for the dashboard (this process only).
 sysinfo = { workspace = true, features = ["system"] }
 

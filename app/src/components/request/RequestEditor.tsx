@@ -8,7 +8,7 @@ import { applyParamRows, paramRows, syncPathParams } from "../../lib/url";
 import { send, type Tab, updateDraft, updateTab } from "../../store/tabs";
 import { CodeEditor } from "../CodeEditor";
 import { KeyValueEditor } from "../KeyValueEditor";
-import { Button, cx, Input, Select, Tabs } from "../ui";
+import { Button, cx, Input, Select, Switch, Tabs } from "../ui";
 import { AuthEditor } from "./AuthEditor";
 import { BodyEditor } from "./BodyEditor";
 import { KIND_EDITOR_TABS } from "./kinds";
@@ -39,7 +39,7 @@ export function RequestEditor({ tab, toolbar }: { tab: Tab; toolbar?: React.Reac
   const req = tab.draft;
   const kind = req.kind ?? "http";
   const update = (fn: (r: Request) => Request) => updateDraft(tab.id, fn);
-  const params = paramRows(req.url, req.disabledParams);
+  const params = paramRows(req.url, req.disabledParams, req.paramDescriptions);
   // Derived from the URL so `:name` segments always get a row, even in imported files.
   const pathParams = syncPathParams(req.url, req.pathParams);
   const submit = () => send(tab.id);
@@ -107,6 +107,7 @@ export function RequestEditor({ tab, toolbar }: { tab: Tab; toolbar?: React.Reac
         {current === "settings" && (
           <SettingsTab settings={req.settings ?? {}} onChange={(settings) => update((r) => ({ ...r, settings }))} httpOnly={kind === "http" || kind === "sse" || kind === "websocket"}
             timeout={kind !== "tcp" && kind !== "udp" && kind !== "mqtt"}
+            kind={kind}
           />
         )}
         {current === "scripts" && kind === "http" && (
@@ -181,11 +182,13 @@ function SettingsTab({
   onChange,
   httpOnly = true,
   timeout = true,
+  kind,
 }: {
   settings: RequestSettings;
   onChange: (s: RequestSettings) => void;
   httpOnly?: boolean;
   timeout?: boolean;
+  kind: string;
 }) {
   const set = (patch: Partial<RequestSettings>) => {
     const next: RequestSettings = { ...settings, ...patch };
@@ -250,7 +253,70 @@ function SettingsTab({
       </SettingRow>
         </>
       )}
+      {kind === "sse" && <StreamSettings settings={settings} set={set} />}
+      {(kind === "http" || kind === "sse") && <RepeatSettings settings={settings} set={set} />}
     </div>
+  );
+}
+
+/** When a collection run (or an AI agent) stops reading an event stream. */
+function StreamSettings({ settings, set }: { settings: RequestSettings; set: (p: Partial<RequestSettings>) => void }) {
+  const stream = settings.stream ?? { maxEvents: 100, timeoutMs: 10000 };
+  const change = (patch: Partial<typeof stream>) => set({ stream: { ...stream, ...patch } });
+  return (
+    <>
+      <h3 className="mt-2 text-[11.5px] font-semibold uppercase tracking-wide text-faint">In collection runs</h3>
+      <p className="-mt-2 text-[12px] text-muted">
+        A run reads events until the first of these, then its post-response scripts test them (<code className="font-mono">pm.response.events</code>).
+      </p>
+      <SettingRow label="Stop at event" hint="Event name; empty = any event may be the last.">
+        <Input className="w-56 font-mono" value={stream.event ?? ""} placeholder="e.g. done" onChange={(e) => change({ event: e.target.value || undefined })} data-testid="stream-event" />
+      </SettingRow>
+      <SettingRow label="Stop after" hint="Events; 0 = only the time limit.">
+        <Input type="number" min={0} className="w-44" value={stream.maxEvents} onChange={(e) => change({ maxEvents: Math.max(0, Math.trunc(Number(e.target.value)) || 0) })} />
+      </SettingRow>
+      <SettingRow label="Time limit" hint="Milliseconds.">
+        <Input type="number" min={100} className="w-44" value={stream.timeoutMs} onChange={(e) => change({ timeoutMs: Math.max(100, Math.trunc(Number(e.target.value)) || 0) })} />
+      </SettingRow>
+    </>
+  );
+}
+
+/** "Send again until…" for polling in collection runs. */
+function RepeatSettings({ settings, set }: { settings: RequestSettings; set: (p: Partial<RequestSettings>) => void }) {
+  const repeat = settings.repeat;
+  const change = (patch: Partial<NonNullable<RequestSettings["repeat"]>>) =>
+    set({ repeat: { condition: "", intervalMs: 1000, timeoutMs: 30000, ...repeat, ...patch } });
+  return (
+    <>
+      <h3 className="mt-2 text-[11.5px] font-semibold uppercase tracking-wide text-faint">Repeat until</h3>
+      <SettingRow label="Repeat in collection runs" hint="Send again until the condition holds, e.g. to wait for a job to finish.">
+        <Switch
+          checked={!!repeat}
+          onChange={(on) => (on ? change({}) : set({ repeat: undefined }))}
+          label={repeat ? "On" : "Off"}
+        />
+      </SettingRow>
+      {repeat && (
+        <>
+          <SettingRow label="Condition" hint="JavaScript checked after the post-response scripts. Empty: until this request's tests pass.">
+            <Input
+              className="w-full font-mono"
+              value={repeat.condition}
+              placeholder={'pm.response.json().status === "done"'}
+              onChange={(e) => change({ condition: e.target.value })}
+              data-testid="repeat-condition"
+            />
+          </SettingRow>
+          <SettingRow label="Every" hint="Milliseconds between sends.">
+            <Input type="number" min={0} className="w-44" value={repeat.intervalMs} onChange={(e) => change({ intervalMs: Math.max(0, Math.trunc(Number(e.target.value)) || 0) })} />
+          </SettingRow>
+          <SettingRow label="Give up after" hint="Milliseconds; then the request fails.">
+            <Input type="number" min={0} className="w-44" value={repeat.timeoutMs} onChange={(e) => change({ timeoutMs: Math.max(0, Math.trunc(Number(e.target.value)) || 0) })} />
+          </SettingRow>
+        </>
+      )}
+    </>
   );
 }
 

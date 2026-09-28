@@ -1338,6 +1338,15 @@
       return new ResponseAssertion(response);
     });
     define(response, 'cookies', unsupported('pm.response.cookies'));
+    // Event streams (collection runs): the events read, as {event, data, id}.
+    if (res.events) {
+      var events = res.events.map(function (e) {
+        return { event: e.event, data: e.data, id: e.id === undefined ? null : e.id };
+      });
+      define(response, 'events', function () {
+        return events;
+      });
+    }
     responses.add(response);
     return response;
   }

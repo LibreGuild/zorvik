@@ -28,9 +28,8 @@ use zorvik_workspace::formats::{NodeKind, Request, RequestKind, TreeNode};
 pub use data::{DataFile, DataPreview, DataRow, MAX_DATA_FILE, data_format, parse_data};
 pub use junit::junit_xml;
 
-use crate::{
-    Api, ApiError, ApiResult, Iteration, ScriptVars, SendContext, StreamEvent, lock, ok, params, send_scripted,
-};
+use crate::scripting::send_scripted_with;
+use crate::{Api, ApiError, ApiResult, Iteration, ScriptVars, SendContext, StreamEvent, lock, ok, params};
 
 /// Iterations per run at most.
 pub const MAX_ITERATIONS: u32 = 100_000;
@@ -116,8 +115,16 @@ pub struct RunResult {
     /// Variables that were referenced but not defined.
     pub unresolved: Vec<String>,
     pub passed: bool,
-    /// Not an HTTP request: not sent.
+    /// Not a kind the runner sends: not sent.
     pub skipped: bool,
+    /// Why it was skipped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub skip_reason: Option<String>,
+    /// Sends made for "repeat until" (the result is the last one's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub attempts: Option<u32>,
 }
 
 /// Counts of one iteration.
@@ -365,11 +372,14 @@ pub async fn run(
             }
             steps += 1;
             let request = match &item.request {
-                Ok(r) if r.kind == RequestKind::Http => r,
+                Ok(r) if matches!(r.kind, RequestKind::Http | RequestKind::Sse) => r,
                 other => {
                     let mut result = base_result(item, index);
                     match other {
-                        Ok(_) => result.skipped = true,
+                        Ok(r) => {
+                            result.skipped = true;
+                            result.skip_reason = Some(skip_reason(r.kind));
+                        }
                         Err(e) => result.error = Some(format!("The request can't be read: {e}")),
                     }
                     result.passed = verdict(&result, plan.allow_http_errors);
@@ -397,18 +407,64 @@ pub async fn run(
                 }
             }
             sent_any = true;
-            let t0 = Instant::now();
-            let scripted = tokio::select! {
-                // Boxed: the whole pipeline is a big future (debug builds would overflow the stack).
-                r = Box::pin(send_scripted(cx, request.clone(), Some(&item.path), vars, iteration)) => r,
-                _ = cancel.cancelled() => {
-                    stopped = true;
-                    iteration_times.push(iteration_started.elapsed());
-                    break 'run;
+            // "Repeat until": send again after a pause while the condition doesn't hold.
+            let repeat = request.settings.repeat.as_ref();
+            let condition = repeat.and_then(|r| condition_script(&r.condition));
+            let repeat_started = Instant::now();
+            let mut attempts = 0u32;
+            let (mut t0, mut scripted, repeat_failure) = loop {
+                attempts += 1;
+                let t0 = Instant::now();
+                let mut scripted = tokio::select! {
+                    // Boxed: the whole pipeline is a big future (debug builds would overflow the stack).
+                    r = Box::pin(send_scripted_with(cx, request.clone(), Some(&item.path), vars, iteration, condition.clone())) => r,
+                    _ = cancel.cancelled() => {
+                        stopped = true;
+                        iteration_times.push(iteration_started.elapsed());
+                        break 'run;
+                    }
+                };
+                let Some(repeat) = repeat else { break (t0, scripted, None) };
+                let check = take_condition(&mut scripted, &repeat.condition);
+                let waited = repeat_started.elapsed();
+                let interval = Duration::from_millis(repeat.interval_ms);
+                match check {
+                    Check::Met => break (t0, scripted, None),
+                    Check::Broken => break (t0, scripted, Some(String::new())),
+                    Check::NotYet(why) if waited + interval > Duration::from_millis(repeat.timeout_ms) => {
+                        let what = if repeat.condition.trim().is_empty() {
+                            "its tests didn't pass".to_string()
+                        } else {
+                            format!("`{}` didn't hold", repeat.condition.trim())
+                        };
+                        let why = why.map(|w| format!(" (last: {w})")).unwrap_or_default();
+                        let message = format!(
+                            "Repeat until: {what} after {} in {:.1} s{why}",
+                            plural(attempts as usize, "send"),
+                            waited.as_secs_f64()
+                        );
+                        break (t0, scripted, Some(message));
+                    }
+                    Check::NotYet(_) => {}
+                }
+                tokio::select! {
+                    _ = tokio::time::sleep(interval) => {}
+                    _ = cancel.cancelled() => {
+                        stopped = true;
+                        iteration_times.push(iteration_started.elapsed());
+                        break 'run;
+                    }
                 }
             };
+            if repeat.is_some() {
+                t0 = repeat_started.min(t0);
+            }
             let mut result = base_result(item, index);
-            let report = scripted.report.unwrap_or_default();
+            if repeat.is_some() {
+                result.attempts = Some(attempts);
+            }
+            let stream = scripted.result.as_ref().ok().and_then(|s| s.stream);
+            let report = scripted.report.take().unwrap_or_default();
             let described: Vec<String> = report.errors.iter().map(|e| e.describe()).collect();
             match scripted.result {
                 Ok(sent) => {
@@ -428,6 +484,14 @@ pub async fn run(
             }
             result.tests = report.tests;
             result.console = bounded_console(report.console);
+            if let Some((events, end)) = stream {
+                result.console.push(ConsoleEntry { level: ConsoleLevel::Info, message: stream_note(events, end) });
+            }
+            if let Some(message) = repeat_failure.filter(|m| !m.is_empty())
+                && result.error.is_none()
+            {
+                result.error = Some(message);
+            }
             at = match next_step(&plan.items, at.unwrap_or_default(), scripted.next_request.as_ref()) {
                 Ok(next) => next,
                 Err(name) => {
@@ -471,6 +535,83 @@ pub async fn run(
     summary.passed = summary.failed == 0 && error.is_none();
     summary.error = error;
     RunReport { summary, results }
+}
+
+/// The name of the test that carries a "repeat until" condition (never reported).
+const REPEAT_TEST: &str = "\u{0}repeat until";
+
+/// The condition as a test run after the post-response scripts; `None` when it is empty
+/// (then the request's own tests decide).
+fn condition_script(condition: &str) -> Option<(String, String)> {
+    let condition = condition.trim();
+    (!condition.is_empty()).then(|| {
+        let name = serde_json::to_string(REPEAT_TEST).unwrap_or_default();
+        let code =
+            format!("pm.test({name}, function () {{\n  if (!(\n{condition}\n  )) throw new Error('not yet');\n}});");
+        ("“repeat until” condition".to_string(), code)
+    })
+}
+
+enum Check {
+    Met,
+    /// Not yet, with why (a thrown error other than "not yet").
+    NotYet(Option<String>),
+    /// The condition itself failed to run (a syntax error): repeating can't help.
+    Broken,
+}
+
+/// Whether a "repeat until" condition holds after a send, taking its test out of the report.
+fn take_condition(scripted: &mut crate::ScriptedSend, condition: &str) -> Check {
+    let report = scripted.report.get_or_insert_with(Default::default);
+    let marker = report.tests.iter().position(|t| t.name == REPEAT_TEST).map(|i| report.tests.remove(i));
+    if report.errors.iter().any(|e| e.script.contains("repeat until")) {
+        return Check::Broken;
+    }
+    let sent = match &scripted.result {
+        Ok(sent) => sent,
+        Err(e) => return Check::NotYet(Some(e.message.clone())),
+    };
+    if !condition.trim().is_empty() {
+        return match marker {
+            Some(t) if t.passed => Check::Met,
+            Some(t) => Check::NotYet(t.error.filter(|e| !e.ends_with("not yet"))),
+            None => Check::NotYet(None),
+        };
+    }
+    let mut counted = report.tests.iter().filter(|t| !t.skipped).peekable();
+    let met = if counted.peek().is_some() { counted.all(|t| t.passed) } else { sent.response.meta.status < 400 };
+    if met { Check::Met } else { Check::NotYet(Some(format!("status {}", sent.response.meta.status))) }
+}
+
+/// What reading an event stream got, for the result's console.
+fn stream_note(events: usize, end: crate::sse_read::SseEnd) -> String {
+    use crate::sse_read::SseEnd;
+    let why = match end {
+        SseEnd::Event => "the awaited event arrived",
+        SseEnd::Count => "enough events arrived",
+        SseEnd::Timeout => "the time limit",
+        SseEnd::Closed => "the server ended the stream",
+        SseEnd::NotAStream => "the answer is not an event stream",
+    };
+    format!("Read {} (stopped: {why})", plural(events, "event"))
+}
+
+fn plural(n: usize, what: &str) -> String {
+    format!("{n} {what}{}", if n == 1 { "" } else { "s" })
+}
+
+/// Why the runner doesn't send a request of `kind`.
+fn skip_reason(kind: RequestKind) -> String {
+    let what = match kind {
+        RequestKind::Websocket => "WebSocket connections are live sessions",
+        RequestKind::Tcp => "TCP connections are live sessions",
+        RequestKind::Udp => "UDP sockets are live sessions",
+        RequestKind::Mqtt => "MQTT clients are live sessions",
+        RequestKind::Grpc => "gRPC calls don't run in the collection runner",
+        RequestKind::Dns => "DNS queries don't run in the collection runner",
+        RequestKind::Http | RequestKind::Sse => "not sent",
+    };
+    format!("{what}; the runner sends HTTP, GraphQL and SSE requests")
 }
 
 fn base_result(item: &RunItem, iteration: u32) -> RunResult {
@@ -673,6 +814,11 @@ impl Api {
         lock(&self.inner.runner.active).as_ref().is_some_and(|(id, _)| id == run_id)
     }
 
+    /// The finished runs still kept, oldest first.
+    pub(crate) fn finished_runs(&self) -> Vec<Arc<RunReport>> {
+        lock(&self.inner.runner.finished).iter().map(|(_, r)| r.clone()).collect()
+    }
+
     /// A finished run, while it is still kept.
     pub(crate) fn finished_run(&self, run_id: &str) -> Option<Arc<RunReport>> {
         lock(&self.inner.runner.finished).iter().find(|(id, _)| id == run_id).map(|(_, r)| r.clone())
@@ -775,6 +921,7 @@ impl Api {
             tokens: &self.inner.tokens,
             jar: jar.as_deref(),
             guard: agent.and_then(|a| a.guard),
+            specs: Some(&self.inner.specs),
         };
         let sink = self.inner.sink.clone();
         let report = Box::pin(run(&cx, &plan, &mut vars, &cancel, |result, vars| {

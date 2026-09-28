@@ -7,7 +7,7 @@
 use std::fmt::Write as _;
 
 use crate::metrics::number;
-use crate::{LatencySummary, MetricsSummary, Summary, TimePoint};
+use crate::{LatencySummary, MetricsSummary, PhaseSummary, Summary, TimePoint};
 
 /// Most columns a chart draws; longer runs are averaged into buckets
 /// (percentile lines keep each bucket's worst value).
@@ -104,8 +104,19 @@ pub(crate) fn report(title: &str, s: &Summary) -> String {
     tile(&mut out, "Errors", &format!("{} %", number2(t.error_rate)), &format!("{} failed", thousands(t.errors)));
     tile(&mut out, "p95 latency", &ms(t.latency.p95), &format!("p50 {}", ms(t.latency.p50)));
     tile(&mut out, "p99 latency", &ms(t.latency.p99), &format!("max {}", ms(t.latency.max)));
+    if t.timing.ttfb.count > 0 {
+        tile(&mut out, "p95 first byte", &ms(t.timing.ttfb.p95), "server + network");
+    }
     tile(&mut out, "Data", &bytes(t.bytes_in), &format!("{} sent", bytes(t.bytes_out)));
-    tile(&mut out, "Connections", &thousands(t.connections), "opened");
+    tile(
+        &mut out,
+        "Connections",
+        &thousands(t.connections),
+        &format!("opened by {} % of requests", number2(share(t.connections, t.requests))),
+    );
+    if t.capture_misses > 0 {
+        tile(&mut out, "Capture misses", &thousands(t.capture_misses), "found nothing");
+    }
     if t.dropped > 0 {
         tile(&mut out, "Dropped", &thousands(t.dropped), "not started: in-flight limit");
     }
@@ -138,14 +149,25 @@ pub(crate) fn report(title: &str, s: &Summary) -> String {
     let _ = writeln!(out, "<tr><td>milliseconds</td>{}</tr>", latency_cells(l));
     out.push_str("</table></div></section>\n");
 
+    timing_table(&mut out, t);
+
     if !s.targets.is_empty() {
+        let ttfb = s.targets.iter().any(|t| t.metrics.timing.ttfb.count > 0);
+        let misses = s.targets.iter().any(|t| t.metrics.capture_misses > 0);
         out.push_str("<section><h2>Requests</h2><div class=\"table\"><table>\n");
-        out.push_str("<tr><th>Request</th><th>Requests</th><th>req/s</th><th>Errors</th><th>p50</th><th>p95</th><th>p99</th><th>max</th><th>Data in</th></tr>\n");
+        out.push_str("<tr><th>Request</th><th>Requests</th><th>req/s</th><th>Errors</th><th>p50</th><th>p95</th><th>p99</th><th>max</th>");
+        if ttfb {
+            out.push_str("<th>p95 first byte</th>");
+        }
+        if misses {
+            out.push_str("<th>Capture misses</th>");
+        }
+        out.push_str("<th>Data in</th></tr>\n");
         for target in &s.targets {
             let m = &target.metrics;
-            let _ = writeln!(
+            let _ = write!(
                 out,
-                "<tr><td>{}<br><span class=\"muted\">{}</span></td><td>{}</td><td>{}</td><td>{} %</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                "<tr><td>{}<br><span class=\"muted\">{}</span></td><td>{}</td><td>{}</td><td>{} %</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>",
                 esc(&target.name),
                 esc(&target.request),
                 thousands(m.requests),
@@ -155,8 +177,15 @@ pub(crate) fn report(title: &str, s: &Summary) -> String {
                 ms(m.latency.p95),
                 ms(m.latency.p99),
                 ms(m.latency.max),
-                bytes(m.bytes_in)
             );
+            if ttfb {
+                let _ = write!(out, "<td>{}</td>", phase_ms(&m.timing.ttfb, m.timing.ttfb.p95));
+            }
+            if misses {
+                let class = if m.capture_misses > 0 { " class=\"fail\"" } else { "" };
+                let _ = write!(out, "<td{class}>{}</td>", thousands(m.capture_misses));
+            }
+            let _ = writeln!(out, "<td>{}</td></tr>", bytes(m.bytes_in));
         }
         out.push_str("</table></div></section>\n");
     }
@@ -178,6 +207,65 @@ fn tile(out: &mut String, label: &str, value: &str, sub: &str) {
         esc(value),
         esc(sub)
     );
+}
+
+/// Where the time went: connect, first byte, transfer and (when servers sent
+/// `Server-Timing`) what they reported. Nothing for runs saved without it.
+fn timing_table(out: &mut String, t: &MetricsSummary) {
+    let tm = &t.timing;
+    if tm.ttfb.count == 0 && tm.connect.count == 0 {
+        return;
+    }
+    out.push_str("<section><h2>Timing</h2><div class=\"table\"><table>\n");
+    out.push_str(
+        "<tr><th>Phase</th><th>Requests</th><th>avg</th><th>p50</th><th>p95</th><th>p99</th><th>max</th></tr>\n",
+    );
+    let new_share = number2(share(t.connections, t.requests));
+    let rows = [
+        ("Connect", format!("DNS, TCP and TLS of a new connection: {new_share} % of requests opened one"), &tm.connect),
+        (
+            "Time to first byte",
+            "request sent to first byte: server time plus one network round trip".to_string(),
+            &tm.ttfb,
+        ),
+        ("Transfer", "first byte to last byte".to_string(), &tm.transfer),
+        (
+            "Server-reported",
+            "from the Server-Timing header (total, or the sum of its durations)".to_string(),
+            &tm.server,
+        ),
+    ];
+    for (name, note, p) in rows {
+        if p.count == 0 && name == "Server-reported" {
+            continue;
+        }
+        let _ = writeln!(
+            out,
+            "<tr><td>{name}<br><span class=\"muted\">{}</span></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+            esc(&note),
+            thousands(p.count),
+            phase_ms(p, p.avg),
+            phase_ms(p, p.p50),
+            phase_ms(p, p.p95),
+            phase_ms(p, p.p99),
+            phase_ms(p, p.max),
+        );
+    }
+    out.push_str("</table></div>");
+    if tm.server.count == 0 {
+        out.push_str("<p class=\"muted\">No response had a Server-Timing header, so the server's own time is not known: the time to first byte includes the network.</p>");
+    }
+    out.push_str("</section>\n");
+}
+
+/// A phase value, or a dash when the phase has no data.
+fn phase_ms(p: &PhaseSummary, v: f64) -> String {
+    if p.count == 0 { "–".to_string() } else { ms(v) }
+}
+
+/// `part` of `whole` in percent.
+fn share(part: u64, whole: u64) -> f64 {
+    if whole == 0 { 0.0 } else { part as f64 * 100.0 / whole as f64 }
 }
 
 fn latency_cells(l: &LatencySummary) -> String {

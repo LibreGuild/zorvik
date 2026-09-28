@@ -31,6 +31,7 @@ use futures_util::FutureExt as _;
 use futures_util::future::BoxFuture;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
+use zorvik_engine::tools::{Protocol, port_owner};
 use zorvik_engine::{Client, RequestOptions};
 use zorvik_formats::{Server, ServerKind};
 use zorvik_workspace::vars::VarContext;
@@ -175,12 +176,22 @@ pub fn display_url(kind: ServerKind, tls: bool, addr: SocketAddr) -> String {
     format!("{scheme}://{host}")
 }
 
-fn bind_error(e: std::io::Error, host: &str, port: u16) -> ServerError {
+/// Why a listener couldn't bind, naming the program that holds a taken port when the
+/// OS says which one.
+async fn bind_error(e: std::io::Error, host: &str, port: u16, protocol: Protocol) -> ServerError {
     use std::io::ErrorKind as K;
+    let owner = match e.kind() {
+        K::AddrInUse => tokio::task::spawn_blocking(move || port_owner(port, protocol)).await.ok().flatten(),
+        _ => None,
+    };
     ServerError::new(match e.kind() {
-        K::AddrInUse => {
-            format!("Port {port} is already in use by another server or app. Stop it or pick another port.")
-        }
+        K::AddrInUse => match owner {
+            Some(owner) if owner.pid == std::process::id() => {
+                format!("Port {port} is already in use by another server in Zorvik. Stop it or pick another port.")
+            }
+            Some(owner) => format!("Port {port} is already in use by {owner}. Stop it or pick another port."),
+            None => format!("Port {port} is already in use by another server or app. Stop it or pick another port."),
+        },
         K::PermissionDenied => {
             format!("Not allowed to listen on port {port} (ports below 1024 may need administrator rights).")
         }
@@ -228,8 +239,10 @@ pub async fn start(
     };
     let (addr, run): (SocketAddr, BoxFuture<'static, Result<(), String>>) = match kind {
         ServerKind::Udp | ServerKind::Dns => {
-            let socket =
-                tokio::net::UdpSocket::bind((host.as_str(), port)).await.map_err(|e| bind_error(e, &host, port))?;
+            let socket = match tokio::net::UdpSocket::bind((host.as_str(), port)).await {
+                Ok(socket) => socket,
+                Err(e) => return Err(bind_error(e, &host, port, Protocol::Udp).await),
+            };
             let addr = socket.local_addr().map_err(|e| ServerError::new(e.to_string()))?;
             let run = match kind {
                 ServerKind::Udp => Box::pin(udp::run(socket, ctx)) as BoxFuture<'static, _>,
@@ -238,8 +251,10 @@ pub async fn start(
             (addr, run)
         }
         _ => {
-            let listener =
-                tokio::net::TcpListener::bind((host.as_str(), port)).await.map_err(|e| bind_error(e, &host, port))?;
+            let listener = match tokio::net::TcpListener::bind((host.as_str(), port)).await {
+                Ok(listener) => listener,
+                Err(e) => return Err(bind_error(e, &host, port, Protocol::Tcp).await),
+            };
             let addr = listener.local_addr().map_err(|e| ServerError::new(e.to_string()))?;
             let run = match kind {
                 ServerKind::Http => Box::pin(http::run(listener, ctx)) as BoxFuture<'static, _>,

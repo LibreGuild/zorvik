@@ -1,0 +1,9 @@
+id: tls
+title: Secure transport
+summary: See what HTTPS protects, read a certificate chain, fix trust errors the safe way, and meet HTTP/2 and HTTP/3.
+color: "#2F6F73"
+image: tls
+badge:
+  id: tls-guardian
+  name: TLS Guardian
+  description: Knows what HTTPS protects and how to fix trust errors.

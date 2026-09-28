@@ -220,7 +220,7 @@ pub(crate) fn handshake_error(err: std::io::Error, host: &str) -> EngineError {
 /// A TLS handshake failure described by rustls' error text (also used for QUIC).
 pub(crate) fn handshake_failure(detail: &str, host: &str) -> EngineError {
     let hint = if detail.contains("UnknownIssuer") || detail.contains("unknown issuer") {
-        " The certificate is not trusted. If this is a corporate or self-signed certificate, add its CA in Settings > TLS or turn off certificate verification."
+        " The certificate is not trusted. If it comes from a corporate or private certificate authority, add that authority's certificate in Settings > Certificates (Extra CA certificate)."
     } else if detail.contains("NotValidForName") || detail.contains("not valid for name") {
         " The certificate does not match the host name."
     } else if detail.contains("Expired") || detail.contains("expired") {
