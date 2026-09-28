@@ -11,6 +11,7 @@ import { isBootcampPath, openAcademy, setMode, useAcademy, useInBootcamp } from 
 import { disconnectAgent, useAgents } from "../../store/agents";
 import { stopLoadRun, useLoadTests } from "../../store/loadtests";
 import { saveSettings, useSettings } from "../../store/settings";
+import { newVersion, useUpdates } from "../../store/updates";
 import { stopAllServers, stopServer, useServers } from "../../store/servers";
 import { openLoadTest, openServer, resetTabs, restoreTabs } from "../../store/tabs";
 import { toast } from "../../store/toasts";
@@ -181,10 +182,23 @@ function RightTools() {
       <IconButton label="Keyboard shortcuts" onClick={() => openModal({ type: "shortcuts" })}>
         <Keyboard size={15} />
       </IconButton>
-      <IconButton label="Settings" onClick={() => openModal({ type: "settings" })}>
+      <SettingsButton />
+    </>
+  );
+}
+
+/** Settings, with a dot when a new version is out or ready to install. */
+function SettingsButton() {
+  const update = useUpdates((s) => newVersion(s.info));
+  const off = useSettings((s) => s.settings?.updates.mode === "off");
+  const dot = !!update && !off;
+  return (
+    <span className="relative">
+      <IconButton label={dot ? `Settings (Zorvik ${update} is available)` : "Settings"} onClick={() => openModal({ type: "settings" })}>
         <Settings size={15} />
       </IconButton>
-    </>
+      {dot && <span aria-hidden className="pointer-events-none absolute right-0.5 top-0.5 h-2 w-2 rounded-full border-2 border-panel bg-accent" data-testid="update-dot" />}
+    </span>
   );
 }
 

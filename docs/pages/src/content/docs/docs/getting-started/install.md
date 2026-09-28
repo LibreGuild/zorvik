@@ -10,7 +10,7 @@ Zorvik is a desktop app for Windows, macOS and Linux. Every download contains tw
 - **The app** (Zorvik), where you build, send, mock and load test requests.
 - **The `zorvik` command line**, which runs the same workspaces in a terminal or a CI pipeline.
 
-There is no account to create and nothing to sign in to. The app works offline.
+There is no account to create and nothing to sign in to. Every feature is free. The app works offline; the only connection it makes by itself is the [update check](../updates/) to GitHub.
 
 ## Downloads
 
@@ -23,10 +23,28 @@ Get the newest version from the [latest release](https://github.com/LibreGuild/z
 | macOS 11 or newer | `Zorvik-macOS-universal.dmg` | One build for Apple silicon and Intel. |
 | Ubuntu 22.04+, Debian 12+ | `Zorvik-Linux-amd64.deb` | Installs `zorvik` to `/usr/bin`. |
 | Fedora, RHEL, openSUSE | `Zorvik-Linux-x86_64.rpm` | Installs `zorvik` to `/usr/bin`. |
-| Any Linux (x86-64) | `Zorvik-Linux-x86_64.AppImage` | Runs anywhere, but has no `zorvik` command line. |
+| Any Linux (x86-64) | `Zorvik-Linux-x86_64.AppImage` | Runs anywhere, but has no `zorvik` command line (get it separately, below). |
+
+### Only the command line
+
+For CI machines, servers and containers, the `zorvik` command line comes on its own too. Each archive has the one program and its licenses:
+
+| System | File |
+|---|---|
+| Windows (x64) | `zorvik-cli-windows-x64.zip` (`zorvik.exe`) |
+| macOS 11+ (Apple silicon and Intel) | `zorvik-cli-macos-universal.tar.gz` |
+| Linux (x86-64, glibc 2.35+) | `zorvik-cli-linux-x86_64.tar.gz` |
+
+```bash title="Linux or macOS"
+curl -fsSL https://github.com/LibreGuild/zorvik/releases/latest/download/zorvik-cli-linux-x86_64.tar.gz \
+  | sudo tar -xz -C /usr/local/bin zorvik
+zorvik --version
+```
+
+On macOS, a `zorvik` downloaded with a browser is blocked the first time; `xattr -d com.apple.quarantine zorvik` allows it (`curl` downloads aren't blocked). See [Command line](../../cli/overview/) for pipelines.
 
 :::note[Nightly builds]
-Want the newest changes before a release? The [nightly build](https://github.com/LibreGuild/zorvik/releases/tag/nightly) is built from `main` after every merge and replaced each time. Settings shows it as "nightly N · commit" next to the version.
+Want the newest changes before a release? The [nightly build](https://github.com/LibreGuild/zorvik/releases/tag/nightly) is built from `main` once a day when it has changed, and replaced each time. Settings shows it as "nightly N · commit" next to the version; **Settings → Updates → Channel → Nightly builds** keeps you on it.
 :::
 
 ## Windows
@@ -109,7 +127,8 @@ The command line has four commands: `run` (collections and tests), `load` (load 
 | Windows portable zip | `zorvik.exe`, next to `zorvik-desktop.exe` |
 | macOS | Inside `Zorvik.app`; **Add zorvik to PATH…** links it to `/usr/local/bin` |
 | `.deb` and `.rpm` | `/usr/bin/zorvik` |
-| AppImage | Not available |
+| AppImage | Not included: use the standalone command line |
+| Standalone command line | Wherever you unpack it |
 
 **Settings → AI agents → Command-line tool** always shows where the app found its `zorvik`, and whether it is on your `PATH`.
 
@@ -139,7 +158,7 @@ Zorvik keeps two kinds of data apart:
 
 ## Updating
 
-Zorvik doesn't update itself. To update, download the newest release and install it the same way. Your workspaces and the app data folder are kept.
+The installed app updates itself from GitHub: it downloads new versions in the background and installs them when you restart or quit. The portable zip, `.deb` and `.rpm` tell you when a new version is out. See [Updates](../updates/) for what is sent (nothing about you) and how to turn it off. Your workspaces and the app data folder are kept.
 
 Versions follow [SemVer](https://semver.org). While Zorvik is `0.x`, a minor release may change behaviour; patch releases only fix bugs.
 

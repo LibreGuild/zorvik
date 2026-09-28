@@ -4,6 +4,7 @@
 
 #[cfg(target_os = "macos")]
 mod traffic_lights;
+mod updates;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -149,6 +150,8 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(updates::Updates::default())
         .setup(|app| {
             let handle = app.handle().clone();
             if let Ok(log_dir) = handle.path().app_log_dir()
@@ -167,6 +170,7 @@ pub fn run() {
                 Err(e) => tracing::warn!("AI agents can't connect: {e}"),
             }
             app.manage(api);
+            updates::start(app.handle());
             #[cfg(target_os = "macos")]
             for window in app.webview_windows().values() {
                 traffic_lights::center(&window.as_ref().window());
@@ -196,7 +200,14 @@ pub fn run() {
                 traffic_lights::center(window);
             }
         })
-        .invoke_handler(tauri::generate_handler![rpc, quit])
+        .invoke_handler(tauri::generate_handler![
+            rpc,
+            quit,
+            updates::update_info,
+            updates::update_check,
+            updates::update_download,
+            updates::update_install
+        ])
         .build(tauri::generate_context!())
         .expect("error while building Zorvik")
         .run(|app, event| match event {
@@ -205,6 +216,8 @@ pub fn run() {
                 if let Some(listener) = app.try_state::<zorvik_mcp::listener::AgentListener>() {
                     listener.shutdown();
                 }
+                // A downloaded update goes in now, so the next start is the new version.
+                updates::install_on_quit(app);
             }
             _ => {}
         });

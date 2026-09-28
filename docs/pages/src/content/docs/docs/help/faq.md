@@ -13,7 +13,11 @@ Yes. Zorvik is free and open source, licensed under either the MIT license or th
 
 ### Do I need an account? Does it work offline?
 
-No account, no sign-in, no cloud sync. Zorvik works fully offline; it only talks to the servers you send requests to (and the OAuth providers and proxies you configure). The app contains no tracking or telemetry, and it doesn't check for updates by itself: get new versions from [Releases](https://github.com/LibreGuild/zorvik/releases/latest).
+No account, no sign-in, no cloud sync. Zorvik works fully offline; it talks to the servers you send requests to (and the OAuth providers and proxies you configure). The only connection it makes by itself is the [update check](../../getting-started/updates/): it reads one file from the project's releases on GitHub and sends nothing about you, this computer or your work. There is no tracking or telemetry. You can turn the update check off in **Settings → Updates**.
+
+### Is every feature free? Will there be paid plans?
+
+Every feature is free, for everyone, and there is no paid plan, no "team edition" and no cloud sync on the roadmap. Your work stays in files you own; share it through Git.
 
 ### Which systems does it run on?
 

@@ -538,6 +538,7 @@ h1 {
 }
 h2 {
   margin: 0;
+  text-wrap: balance;
   font-size: clamp(2rem, 4.4vw, 3.25rem);
   line-height: 1.06;
   letter-spacing: -0.035em;
@@ -796,6 +797,115 @@ h3 {
 .tool .q {
   color: #e3b55e;
   font-weight: 700;
+}
+
+/* ---- ai agents ---- */
+.agents-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.1fr;
+  gap: 48px;
+  align-items: center;
+}
+.agents .eyebrow,
+.agents .sub {
+  text-align: left;
+}
+.agents .btn {
+  margin-top: 24px;
+}
+.agent-term .term .y {
+  color: #e3b55e;
+  font-weight: 700;
+}
+.agent-term .term .line {
+  white-space: pre-wrap;
+}
+
+/* ---- free ---- */
+.compare {
+  max-width: 900px;
+  margin: 0 auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.compare-row {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr 1.2fr;
+  gap: 16px;
+  padding: 14px 22px;
+  border-top: 1px solid var(--line);
+  font-size: 0.97rem;
+}
+.compare-row:first-child {
+  border-top: 0;
+}
+.compare-head {
+  background: var(--panel);
+  color: var(--faint);
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.compare-head .us {
+  color: var(--accent);
+}
+.compare [role="rowheader"] {
+  color: var(--text);
+  font-weight: 600;
+}
+.compare .them {
+  color: var(--faint);
+}
+.compare-row:not(.compare-head) .us {
+  position: relative;
+  padding-left: 24px;
+  color: var(--text);
+}
+.compare-row:not(.compare-head) .us::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 7px;
+  width: 12px;
+  height: 7px;
+  border-left: 2px solid var(--good);
+  border-bottom: 2px solid var(--good);
+  transform: rotate(-45deg);
+}
+.compare-row:not(.compare-head):hover {
+  background: rgb(255 255 255 / 0.02);
+}
+
+/* ---- cli download ---- */
+.cli-dl {
+  display: grid;
+  grid-template-columns: 1fr 1.6fr;
+  gap: 12px 28px;
+  align-items: center;
+  margin-top: 16px;
+  padding: 22px;
+  border-radius: var(--radius);
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+.cli-dl h3 {
+  margin: 0 0 4px;
+}
+.cli-dl p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+.cli-dl-links {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.cli-snippet {
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
 }
 
 /* ---- bootcamp ---- */
@@ -1263,7 +1373,9 @@ h3 {
   }
   .hero-inner,
   .bootcamp-inner,
-  .cli-grid {
+  .cli-grid,
+  .agents-grid,
+  .cli-dl {
     grid-template-columns: 1fr;
   }
   .hero-art {
@@ -1298,8 +1410,19 @@ h3 {
     grid-column: span 6;
   }
   .os-grid,
-  .principles {
+  .principles,
+  .cli-dl-links {
     grid-template-columns: 1fr;
+  }
+  .compare-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .compare-head {
+    display: none;
+  }
+  .compare .them::before {
+    content: "Typical: ";
   }
   .stats dd {
     font-size: 1.6rem;

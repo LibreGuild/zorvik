@@ -31,9 +31,43 @@ Every download of Zorvik contains the app **and** the command line. How it gets 
 | macOS 11+ | `Zorvik-macOS-universal.dmg` | `Zorvik.app/Contents/MacOS/zorvik` | After **Add zorvik to PATH…** (see below) |
 | Ubuntu 22.04+, Debian 12+ | `Zorvik-Linux-amd64.deb` | `/usr/bin/zorvik` | Yes |
 | Fedora, RHEL, openSUSE | `Zorvik-Linux-x86_64.rpm` | `/usr/bin/zorvik` | Yes |
-| Any Linux (x86-64) | `Zorvik-Linux-x86_64.AppImage` | Not included | Use the `.deb` or `.rpm` to get the command line |
+| Any Linux (x86-64) | `Zorvik-Linux-x86_64.AppImage` | Not included | Use the standalone command line below |
 
 Downloads are on the [releases page](https://github.com/LibreGuild/zorvik/releases/latest). See [Install Zorvik](../../getting-started/install/) for installing the app.
+
+### Only the command line (CI, servers, containers)
+
+When a machine only runs `zorvik`, download it on its own. Each archive holds the one program and its licenses, nothing else to install:
+
+| System | File |
+|---|---|
+| Windows (x64) | `zorvik-cli-windows-x64.zip` (`zorvik.exe`) |
+| macOS 11+ (Apple silicon and Intel) | `zorvik-cli-macos-universal.tar.gz` |
+| Linux (x86-64, glibc 2.35+: Ubuntu 22.04+, Debian 12+, Fedora 36+) | `zorvik-cli-linux-x86_64.tar.gz` |
+
+The `releases/latest/download/` links always give the newest version, which suits pipelines:
+
+```bash title="Linux (or macOS with the macos-universal file)"
+curl -fsSL https://github.com/LibreGuild/zorvik/releases/latest/download/zorvik-cli-linux-x86_64.tar.gz \
+  | sudo tar -xz -C /usr/local/bin zorvik
+zorvik --version
+```
+
+```yaml title=".github/workflows/api-tests.yml (a step)"
+- name: Install zorvik
+  run: |
+    curl -fsSL https://github.com/LibreGuild/zorvik/releases/latest/download/zorvik-cli-linux-x86_64.tar.gz \
+      | tar -xz -C "$RUNNER_TEMP" zorvik
+    echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+```
+
+```powershell title="Windows (PowerShell)"
+Invoke-WebRequest https://github.com/LibreGuild/zorvik/releases/latest/download/zorvik-cli-windows-x64.zip -OutFile zorvik.zip
+Expand-Archive zorvik.zip -DestinationPath "$env:LOCALAPPDATA\zorvik"
+& "$env:LOCALAPPDATA\zorvik\zorvik.exe" --version
+```
+
+To pin a version instead, use `releases/download/v0.1.2/…`. The standalone command line doesn't update itself.
 
 ### Windows
 

@@ -23,7 +23,7 @@ A pull request can merge only when all four pass. Pull requests from first-time 
 
 A push to `main` only runs the checks. The nightly workflow compares `main` with the `nightly` tag and, when they differ, starts CI on `main` by hand (`workflow_dispatch`), which builds and publishes. A maintainer can do the same at any time: **Actions → CI → Run workflow** on `main`.
 
-After the checks pass, `release-draft` creates a draft release for the run and checks that the tag matches the version in `Cargo.toml`, `app/package.json` and `tauri.conf.json`. Then three jobs build in parallel with `npm run package` (the app with the `zorvik` command line inside) and upload to the draft. Finally `publish` makes the draft public: as the tagged release with notes, or as the new nightly. If any build fails, nothing is published and the previous release stays.
+After the checks pass, `release-draft` creates a draft release for the run and checks that the tag matches the version in `Cargo.toml`, `app/package.json` and `tauri.conf.json`. Then three jobs build in parallel with `npm run package` (the app with the `zorvik` command line inside), pack the command line on its own, and upload to the draft. Then `sign-updates` signs the files the app's updater installs and adds `latest.json` (see [Updates](#updates)). Finally `publish` makes the draft public: as the tagged release with notes, or as the new nightly. If any build fails, nothing is published and the previous release stays.
 
 ## Cutting a release
 1. Make sure `main` is green and the nightly build works.
@@ -43,7 +43,7 @@ After the checks pass, `release-draft` creates a draft release for the run and c
 Only maintainers can push `v*` tags. Versions follow [SemVer](https://semver.org): while Zorvik is `0.x`, a minor bump may change behaviour; patch releases only fix.
 
 ## Downloads
-Every download has the app **and** the `zorvik` command line.
+Every app download has the app **and** the `zorvik` command line.
 
 | System | File | Notes |
 |---|---|---|
@@ -54,7 +54,47 @@ Every download has the app **and** the `zorvik` command line.
 | Fedora, RHEL, openSUSE | `Zorvik-Linux-x86_64.rpm` | `zorvik` goes to `/usr/bin` |
 | Any Linux (x86-64) | `Zorvik-Linux-x86_64.AppImage` | Runs anywhere; use the deb or rpm to get `zorvik` on PATH |
 
+The command line on its own, for CI machines and servers (each archive has `zorvik` and the licenses):
+
+| System | File |
+|---|---|
+| Windows (x64) | `zorvik-cli-windows-x64.zip` |
+| macOS (Apple silicon and Intel) | `zorvik-cli-macos-universal.tar.gz` |
+| Linux (x86-64, glibc 2.35+) | `zorvik-cli-linux-x86_64.tar.gz` |
+
 Linux packages are built on Ubuntu 22.04, the oldest supported system, so they run on newer ones.
+
+Two more files are for the updater, not for people: `latest.json` and `Zorvik-macOS-universal.app.tar.gz` (the macOS app the updater installs).
+
+## Updates
+The app updates itself from GitHub Releases (`app/src-tauri/src/updates.rs`, the Tauri updater). It reads one file:
+- stable: `releases/latest/download/latest.json`, which GitHub serves from the newest release;
+- nightly: `releases/download/nightly/latest.json`.
+
+`latest.json` lists, per platform, the file to install and its signature: the Windows installer, `Zorvik-macOS-universal.app.tar.gz` (packed by the macOS build, with `Zorvik.app` at its root) and the AppImage. For a nightly, `pub_date` is the build time, which the app also has built in (`ZORVIK_BUILT_AT`), so a nightly with the same version number is still recognised as newer.
+
+The app accepts an update only when its signature matches the public key built into `tauri.conf.json` (`plugins.updater.pubkey`), and only for the version the signature names. When an update can't be downloaded, verified or installed, the app doesn't show an error: it says the new version is out and links to its release page.
+
+### Signing
+The build jobs never see the private key. After they finish, the `sign-updates` job downloads the three update files from the draft, signs each with `tauri signer sign --app-version <version>` (the Tauri CLI, pinned to the app's version), writes `latest.json` with `.github/scripts/update-manifest.mjs`, and uploads it. Only this job gets the key: it runs in the GitHub environment **`release`**, whose secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` are only given to runs from `main` and from `v*` tags (Settings → Environments → release: deployment branches and tags, no admin bypass). A workflow on any other branch, and every pull request, gets nothing. Without the secrets, releases still publish, without automatic updates (the job warns).
+
+### The updater key
+The key pair is set up: the public key is in `tauri.conf.json`, the private key and its password are in the `release` environment, and the maintainers keep a backup. **Never lose it or replace it casually:** installed copies only accept updates signed with this key. With a new key, installed copies can't verify the next update, so they show "download it from GitHub" once instead of updating themselves. If it ever has to be replaced (lost or leaked):
+```bash
+cd app && npx tauri signer generate -w ~/.tauri/zorvik-updater.key   # choose a password
+gh secret set TAURI_SIGNING_PRIVATE_KEY --repo LibreGuild/zorvik --env release < ~/.tauri/zorvik-updater.key
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo LibreGuild/zorvik --env release   # paste the password
+```
+Then put the contents of `~/.tauri/zorvik-updater.key.pub` in `plugins.updater.pubkey` and release a new version with it.
+
+### Testing an update locally
+With a throwaway key (`npx tauri signer generate`):
+1. Build two versions with the throwaway public key: `npm run package -- --version 0.9.1 --bundles app --config '{"plugins":{"updater":{"pubkey":"<pub>","dangerousInsecureTransportProtocol":true}}}'`, and the same for `0.9.0`. Keep a copy of each `Zorvik.app`.
+2. Pack and sign the newer one as CI does: `COPYFILE_DISABLE=1 tar --no-mac-metadata -czf updates/Zorvik-macOS-universal.app.tar.gz -C <folder> Zorvik.app`, then `npx tauri signer sign --app-version 0.9.1 updates/Zorvik-macOS-universal.app.tar.gz` (with `TAURI_SIGNING_PRIVATE_KEY` and its password set).
+3. `node .github/scripts/update-manifest.mjs updates http://127.0.0.1:8000 0.9.1 <date> > updates/latest.json` and serve `updates/` with `python3 -m http.server 8000 --bind 127.0.0.1`.
+4. Start the older app with `ZORVIK_UPDATE_URL=http://127.0.0.1:8000/latest.json`. After about 20 seconds it downloads the update; quit it and it installs.
+
+Updates only install from release builds: debug builds check but never install.
 
 ## Signing
 The builds are not code-signed yet. Windows SmartScreen asks once (**More info → Run anyway**). On macOS the first open is blocked; allow it in System Settings → Privacy & Security → **Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/Zorvik.app`. The macOS app is ad-hoc signed so it runs on Apple silicon.
@@ -63,7 +103,7 @@ The builds are not code-signed yet. Windows SmartScreen asks once (**More info �
 The website lives in [`docs/pages`](pages/README.md): an Astro site with the home page and the developer docs (Starlight) under `/docs`. It is published to GitHub Pages at <https://libreguild.github.io/zorvik/> by `pages.yml`:
 - on pushes to `main` that change the site, its pictures or the course;
 - after every release (the release job starts it, so the version and sizes on the page update);
-- once a day, so the download count stays fresh.
+- once a day, so the release details on the page stay fresh.
 
 Pull requests that touch the site build it without publishing. Page views are counted by GoatCounter, without cookies.
 

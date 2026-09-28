@@ -32,7 +32,7 @@
     "category": "DeveloperTool",
     "shortDescription": "API client and network testing toolkit",
     "longDescription": "Zorvik is a desktop API client and network testing toolkit: HTTP, GraphQL, gRPC, WebSocket, SSE, TCP/UDP, load tests, mock servers and a command-line runner (zorvik), with Git-friendly collections. AI agents can control it over MCP.",
-    "copyright": "Copyright © 2026 The Zorvik contributors",
+    "copyright": "Copyright \u00a9 2026 The Zorvik contributors",
     "publisher": "Libre Guild",
     "homepage": "https://github.com/LibreGuild/zorvik",
     "license": "MIT OR Apache-2.0",
@@ -47,6 +47,18 @@
       "nsis": {
         "installMode": "currentUser",
         "installerHooks": "./windows/hooks.nsh"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU4MzlFNkIzRjY4ODJBRDUKUldUVktvajJzK1k1V09KTXhuSmlmWG9ocWl6V2xDR25LM3lTc0wzMjZ4VStOd2hGMzRJODBnMG0K",
+      "endpoints": [
+        "https://github.com/LibreGuild/zorvik/releases/latest/download/latest.json"
+      ],
+      "requireSignedVersion": true,
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

@@ -149,6 +149,15 @@ Two environment variables change where `zorvik mcp` looks, mainly for testing: `
 
 See [Connect an AI agent](../../agents/setup/) and [Permissions and safety](../../agents/permissions-and-safety/).
 
+## Updates
+
+- **Settings → Updates says "Could not reach GitHub"**: Zorvik is offline, or a proxy or firewall blocks `github.com`. Set the proxy in **Settings → Proxy** and click **Check for updates** again, or download the new version by hand from [Releases](https://github.com/LibreGuild/zorvik/releases/latest).
+- **"This copy doesn't update itself"**: the portable zip, the `.deb` and `.rpm` packages and a macOS copy opened from the disk image can't replace themselves. Install the new version the same way as the first one (on macOS, move Zorvik to `/Applications` first).
+- **The notice says a new version is out, with Open downloads, although automatic updates are on**: this time the update couldn't install itself (an interrupted download, a network filter, or a folder Zorvik can't write to). Download it from the release page it opens; the reason is in the [log file](../../reference/data-locations/#logs).
+- **An update was downloaded but nothing changed**: it installs when you quit Zorvik, or with **Restart now** in the notice or in **Settings → Updates**.
+
+See [Updates](../../getting-started/updates/) for how it works and what is sent.
+
 ## Still stuck?
 
 - The [log file](../../reference/data-locations/#logs), with `RUST_LOG=debug` for more detail.

@@ -2,7 +2,7 @@ name: Website
 
 # The website (docs/pages): the home page and the docs at /docs, on GitHub Pages. Rebuilt when
 # its sources change on main, after every release (ci.yml starts it) and once a day, so the
-# download count stays fresh. Pull requests only check that it builds.
+# release details stay fresh. Pull requests only check that it builds.
 on:
   push:
     branches: [main]

@@ -172,6 +172,18 @@ The **Academy** is a course inside the app, opened from the pinned Training Boot
 - **UI**: `app/src/components/academy/` (Academy view, lesson reader with diagrams, Lab Guide docked beside the workbench, celebrations, certificate), `app/src/store/academy.ts`.
 - **Every lab is tested**: `crates/api/tests/academy.rs` runs each step's solution and checks the step passes only after it.
 
+## Updates
+The desktop app updates itself from GitHub Releases; nothing else is contacted and nothing about the user is sent.
+- **`app/src-tauri/src/updates.rs`** wraps the Tauri updater: a check 20 seconds after start and every 6 hours, through the proxy from Settings. The state (`idle`, `checking`, `upToDate`, `available`, `downloading`, `ready`, `installing`, `failed`) goes to the UI as the `zv:update` event.
+- **Settings → Updates** (`updates.mode`, `updates.channel` in `settings.json`): automatic downloads in the background and installs on quit; notify only shows a notice; off never checks. Stable and nightly channels read different `latest.json` files.
+- **Only signed updates install**: the signature must match the public key in `tauri.conf.json` and name the version. Nightlies share a version number, so the build time decides (`ZORVIK_BUILT_AT`).
+- **Which copies install**: the Windows installer (NSIS), the macOS app in a writable folder, the AppImage. The portable zip, `.deb`, `.rpm`, a copy running from the disk image and debug builds only tell the user a new version is out.
+- **Never an error for a failed update**: when a download, its signature check or the install fails, the status becomes `available` with `byHand`, and the notice links to the release page; that version isn't downloaded again until the next start. The reason goes to the log.
+- **Restarting**: `update_install` stops servers and the agent listener, installs and restarts; the UI first lists what a restart would interrupt. Otherwise a downloaded update installs on exit (`RunEvent::Exit`).
+- **UI**: `app/src/store/updates.ts`, the notice in `app/src/components/UpdateNotice.tsx`, the Settings section in `app/src/components/modals/UpdateSettings.tsx`.
+
+See [ci-release.md](ci-release.md#updates) for how `latest.json` is made and the signing key.
+
 ## Data locations
 - **Workspace folder** (shared through Git): requests, folders, environments, servers, load tests, kept OpenAPI documents.
 - **App data folder** (per computer, `org.libreguild.zorvik` in the OS data directory): `settings.json`, `history.sqlite3`, `secrets.json`, `cookies/`, `oauth-tokens.json`, `local-values.json`, `state.json`, `trusted-servers.json`, `load-runs/`, `agent.json`, the Training Bootcamp workspace (`bootcamp/`) and progress (`academy-progress.json`). Logs go to the OS log folder for the app.

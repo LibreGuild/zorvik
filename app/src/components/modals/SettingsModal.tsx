@@ -5,15 +5,17 @@ import type { Settings } from "../../bindings/Settings";
 import { applyFonts, CODE_FONT_SIZES, CODE_FONTS, isFontInstalled, UI_FONTS, ZOOM_LEVELS } from "../../lib/appearance";
 import { modKey, pickFile } from "../../lib/platform";
 import type { AppInfo } from "../../bindings/AppInfo";
-import { api, errorMessage, RpcError } from "../../lib/rpc";
+import { api, errorMessage, isTauri, RpcError } from "../../lib/rpc";
 import { saveSettings, setZoom, useSettings, zoom } from "../../store/settings";
 import { toast } from "../../store/toasts";
 import { closeModal, useUi } from "../../store/ui";
 import { useWorkspace } from "../../store/workspace";
 import { AgentSetup } from "../agents/AgentSetup";
+import { UpdateStatusRow } from "./UpdateSettings";
+import { checkForUpdates } from "../../store/updates";
 import { Button, cx, IconButton, Input, Modal, Select, Switch } from "../ui";
 
-type Section = "general" | "requests" | "proxy" | "certificates" | "data" | "agents";
+type Section = "general" | "requests" | "proxy" | "certificates" | "data" | "updates" | "agents";
 
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "general", label: "General" },
@@ -21,6 +23,7 @@ const SECTIONS: { id: Section; label: string }[] = [
   { id: "proxy", label: "Proxy" },
   { id: "certificates", label: "Certificates" },
   { id: "data", label: "Data & privacy" },
+  { id: "updates", label: "Updates" },
   { id: "agents", label: "AI agents" },
 ];
 
@@ -222,6 +225,9 @@ export function SettingsModal() {
     setSaving(true);
     try {
       await saveSettings(s);
+      // Turned on, or a different channel: look now instead of in a few hours.
+      const was = original.updates;
+      if (isTauri && s.updates.mode !== "off" && (was.mode !== s.updates.mode || was.channel !== s.updates.channel)) void checkForUpdates();
       toast("success", "Settings saved");
       closeModal();
     } catch (e) {
@@ -443,6 +449,43 @@ export function SettingsModal() {
               </Row>
               <Row label="App data folder" hint="Settings, history, cookies, OAuth tokens and secret variable values.">
                 <div className="selectable break-all rounded-md border border-line bg-panel-2 px-2.5 py-1.5 font-mono text-[12px] text-muted">{appInfo?.dataDir}</div>
+              </Row>
+            </>
+          )}
+          {section === "updates" && (
+            <>
+              <Row label="This version" hint={isTauri ? undefined : "Updates are handled by the desktop app."}>
+                <UpdateStatusRow version={appInfo?.version ?? ""} build={appInfo?.build ?? null} />
+              </Row>
+              <Row label="Updates" hint="Automatic: new versions download in the background and install when you restart or quit Zorvik. Nothing restarts without asking.">
+                <Select
+                  value={s.updates.mode}
+                  onChange={(e) => setS({ ...s, updates: { ...s.updates, mode: e.target.value as Settings["updates"]["mode"] } })}
+                  className="w-60"
+                  aria-label="Updates"
+                >
+                  <option value="automatic">Automatic</option>
+                  <option value="notify">Tell me, don't download</option>
+                  <option value="off">Off</option>
+                </Select>
+              </Row>
+              <Row label="Channel" hint="Nightly: a build of the newest code every day there are changes. Less tested; use it to try what's coming.">
+                <Select
+                  value={s.updates.channel}
+                  onChange={(e) => setS({ ...s, updates: { ...s.updates, channel: e.target.value as Settings["updates"]["channel"] } })}
+                  className="w-60"
+                  aria-label="Update channel"
+                >
+                  <option value="stable">Stable releases</option>
+                  <option value="nightly">Nightly builds</option>
+                </Select>
+              </Row>
+              <Row label="What is sent" hint="The update check is the only connection Zorvik makes by itself.">
+                <p className="m-0 text-[12.5px] leading-relaxed text-muted">
+                  Zorvik reads one file, <span className="font-mono text-[11.5px]">latest.json</span>, from the project's releases on GitHub
+                  (github.com/LibreGuild/zorvik) and downloads new versions from there. No account, no ID, nothing about you, this computer or
+                  your work is sent, and no other server is involved. Downloads are checked against the project's signing key before they install.
+                </p>
               </Row>
             </>
           )}
