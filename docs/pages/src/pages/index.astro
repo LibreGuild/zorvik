@@ -4,7 +4,7 @@
 import { readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import "../styles/site.css";
-import { formatSize, latestRelease, REPO, type Os } from "../lib/releases";
+import { CLI_FILES, formatSize, latestRelease, REPO, type Os } from "../lib/releases";
 
 const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
 const docs = `${base}docs/`;
@@ -74,6 +74,17 @@ const TERMINAL = [
   '<span class="prompt">$</span> echo $?',
   '1',
 ];
+const AGENT_TOOLS = 37;
+const AGENT_SESSION = [
+  '<span class="prompt">$</span> claude mcp add --scope user zorvik -- zorvik mcp',
+  '<span class="d">Added stdio MCP server zorvik</span>',
+  ' ',
+  '<span class="prompt">&gt;</span> Map the checkout API in this repo to Zorvik and test it',
+  '<span class="g">✓</span> zorvik · save_requests <span class="d">5 requests in "Checkout"</span>',
+  '<span class="g">✓</span> zorvik · run_collection <span class="d">5 passed, 12 tests</span>',
+  '<span class="g">✓</span> zorvik · create_mock <span class="d">from openapi.yaml, port 4010</span>',
+  '<span class="y">?</span> zorvik · run_load_test <span class="d">waiting for your OK in Zorvik</span>',
+];
 const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-legend", "mock-master", "graduate"];
 ---
 
@@ -104,6 +115,7 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
         </a>
         <nav aria-label="Main">
           <a href="#features">Features</a>
+          <a href="#agents">AI agents</a>
           <a href="#bootcamp">Bootcamp</a>
           <a href="#cli">Command line</a>
           <a href={docs}>Docs</a>
@@ -140,8 +152,9 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
             </div>
             <p class="hero-meta" id="hero-meta">
               {version && <span>Version <span data-version>{version}</span></span>}
+              <span>Every feature free</span>
+              <span>No account, no cloud sync</span>
               <span>Windows · macOS · Linux</span>
-              <span>No account, works offline</span>
             </p>
           </div>
           <div class="hero-art">
@@ -319,6 +332,61 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
         </div>
       </section>
 
+      <!-- AI agents -->
+      <section class="section wrap agents" id="agents">
+        <div class="agents-grid">
+          <div class="agents-copy">
+            <p class="eyebrow">MCP built in</p>
+            <h2>Your coding agent drives it.</h2>
+            <p class="sub">
+              Connect Claude Code, Codex, Gemini CLI, Cursor or any MCP client with one command. The agent turns the APIs in your code into requests,
+              sends them, writes tests, runs collections, builds and starts mock servers, runs load tests and reads the traffic, all inside Zorvik,
+              where you watch every step.
+            </p>
+            <ul class="ticks">
+              <li>{AGENT_TOOLS} tools: requests, environments, runs, servers, load tests, history, code export</li>
+              <li>Deletes, load tests, servers and outside hosts wait for your OK</li>
+              <li>Secrets are masked in everything the agent sees</li>
+            </ul>
+            <a class="btn btn-ghost btn-lg" href={`${docs}agents/setup/`}>Connect an agent <span aria-hidden="true">→</span></a>
+          </div>
+          <div class="terminal agent-term" aria-label="Connecting Claude Code to Zorvik">
+            <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span><em>terminal</em></div>
+            <pre class="term"><code set:html={AGENT_SESSION.map((l) => `<span class="line">${l}</span>`).join("")} /></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- Free -->
+      <section class="section wrap free" id="free">
+        <div class="section-head">
+          <p class="eyebrow">Free, all of it</p>
+          <h2>No paid plans. No account. No cloud.</h2>
+          <p class="sub">Every feature is free for everyone, and it stays that way: no premium tier, no seat limits, no sign-in, and your work never leaves your computer unless you push it to your own Git.</p>
+        </div>
+        <div class="compare" role="table" aria-label="Zorvik compared with typical API clients">
+          <div class="compare-row compare-head" role="row">
+            <span role="columnheader"></span>
+            <span role="columnheader">Typical API clients</span>
+            <span role="columnheader" class="us">Zorvik</span>
+          </div>
+          {[
+            ["Features", "The best ones behind a paid plan", "Every feature, free"],
+            ["Account", "Sign in to start, or to keep your work", "None. Open it and work"],
+            ["Your collections", "Synced to the vendor's cloud", "Plain files in a folder you own"],
+            ["Sharing with your team", "Paid team workspaces", "Git: pull requests, reviews, history"],
+            ["AI agents", "Their assistant, their cloud", "Your own agent over MCP, on your computer"],
+            ["What the app sends home", "Usage analytics", "Nothing. Only the update check reads GitHub"],
+          ].map(([what, them, us]) => (
+            <div class="compare-row" role="row">
+              <span role="rowheader">{what}</span>
+              <span role="cell" class="them">{them}</span>
+              <span role="cell" class="us">{us}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
       <!-- Training Bootcamp -->
       <section class="section bootcamp" id="bootcamp">
         <div class="wrap bootcamp-inner">
@@ -375,7 +443,7 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
       <!-- Principles -->
       <section class="section wrap">
         <div class="principles">
-          <div><h3>Local first</h3><p>No account, no cloud sync, no tracking in the app. It works offline and behind corporate proxies.</p></div>
+          <div><h3>Local first</h3><p>No account, no cloud sync, no tracking. It works offline; the only connection it makes by itself is the update check to GitHub.</p></div>
           <div><h3>Files, not a database</h3><p>Plain YAML in a folder you own. Git is your sync, history and review.</p></div>
           <div><h3>Secrets stay home</h3><p>Secret values, cookies and tokens live on your computer, never in workspace files.</p></div>
           <div><h3>Open source</h3><p>MIT or Apache-2.0, built in the open by the LibreGuild community.</p></div>
@@ -422,11 +490,35 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
               </article>
             ))}
           </div>
+          <div class="cli-dl">
+            <div class="cli-dl-copy">
+              <h3>Only the command line</h3>
+              <p>For CI machines, servers and containers: <code>zorvik</code> on its own, one file to unpack.</p>
+            </div>
+            <div class="cli-dl-links">
+              {CLI_FILES.map((f) => (
+                <a class="dl" href={f.url} data-goatcounter-click={`download-${f.file}`} data-goatcounter-title={`Download ${f.file}`}>
+                  <span class="dl-main">
+                    <b>{f.label}</b>
+                    <small>{f.note}</small>
+                  </span>
+                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19h14"></path></svg>
+                </a>
+              ))}
+            </div>
+            <pre class="code cli-snippet"><code><span class="c"># In a pipeline: always the newest version</span>
+curl -fsSL {github}/releases/latest/download/zorvik-cli-linux-x86_64.tar.gz \
+  | sudo tar -xz -C /usr/local/bin zorvik</code></pre>
+          </div>
           <div class="dl-foot">
+            {/* The download count, hidden for now (the numbers are still small). To show it again, put
+                back this line; the build and the script below already fill it in:
             <p class="count" hidden={release.downloads == null} data-downloads-wrap>
               <b data-downloads>{release.downloads?.toLocaleString("en")}</b> downloads so far
             </p>
+            */}
             <p>
+              The app keeps itself up to date: it reads the newest version from this project's releases on GitHub, and sends nothing about you.
               Builds aren't code-signed yet: on Windows choose <b>More info → Run anyway</b>; on macOS allow it in <b>System Settings → Privacy &amp; Security</b>.
               Want the newest changes? Try the <a href={`${github}/releases/tag/nightly`}>nightly build</a>, or <a href={`${github}#build-from-source`}>build from source</a>.
             </p>
@@ -504,6 +596,7 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
             sessionStorage.setItem(key, JSON.stringify(data));
           }
           if (data.version !== bakedVersion) document.querySelectorAll("[data-version]").forEach((el) => (el.textContent = data.version));
+          // The download count shows only when its element is on the page (hidden for now).
           const count = document.querySelector("[data-downloads]");
           if (count) {
             count.textContent = data.downloads.toLocaleString("en");

@@ -115,6 +115,41 @@ impl Default for AgentSettings {
     }
 }
 
+/// How the app keeps itself up to date (Settings → Updates). The only thing it does is read
+/// the release list file on GitHub; nothing about the user or their work is sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum UpdateMode {
+    /// Check and download in the background; install on restart or when the app quits.
+    #[default]
+    Automatic,
+    /// Check and say a new version is out; download and install only when asked.
+    Notify,
+    /// Never check.
+    Off,
+}
+
+/// Which releases the app updates to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum UpdateChannel {
+    /// Versioned releases.
+    #[default]
+    Stable,
+    /// The daily build of `main`: newest changes, less tested.
+    Nightly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct UpdateSettings {
+    pub mode: UpdateMode,
+    pub channel: UpdateChannel,
+}
+
 /// Zoom and fonts of the app window (Settings → General).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
@@ -157,6 +192,7 @@ pub struct Settings {
     #[ts(type = "number")]
     pub script_timeout_ms: u64,
     pub agents: AgentSettings,
+    pub updates: UpdateSettings,
 }
 
 impl Default for Settings {
@@ -172,6 +208,7 @@ impl Default for Settings {
             files_outside_workspace: false,
             script_timeout_ms: 5_000,
             agents: AgentSettings::default(),
+            updates: UpdateSettings::default(),
         }
     }
 }
@@ -230,6 +267,7 @@ mod tests {
         let s: Settings = serde_json::from_str(r#"{"request":{"timeoutMs":0},"historyLimit":7}"#).unwrap();
         assert_eq!(s.history_limit, 7);
         assert_eq!(s.appearance, Appearance::default(), "older files have no appearance");
+        assert_eq!(s.updates, UpdateSettings { mode: UpdateMode::Automatic, channel: UpdateChannel::Stable });
         assert_eq!(s.script_timeout(), Duration::from_secs(5));
         assert!(s.request.follow_redirects);
         let o = s.request_options(&RequestSettings::default()).unwrap();

@@ -120,6 +120,7 @@ jobs:
     outputs:
       channel: ${{ steps.channel.outputs.channel }}
       version: ${{ steps.channel.outputs.version }}
+      built_at: ${{ steps.channel.outputs.built_at }}
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -149,13 +150,16 @@ jobs:
             echo "channel=nightly" >> "$GITHUB_OUTPUT"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          # One time for the whole run: the builds carry it and latest.json announces it, so a
+          # nightly never counts as newer than itself.
+          echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - name: Create the draft
         run: |
           gh release create "build-${{ github.run_number }}" --draft --target "$GITHUB_SHA" \
             --title "Zorvik build ${{ github.run_number }}" --notes "Building…"
 
   build-windows:
-    name: Build Windows (installer, portable)
+    name: Build Windows (installer, portable, CLI)
     needs: release-draft
     runs-on: windows-latest
     permissions:
@@ -163,6 +167,7 @@ jobs:
     env:
       # Shown in Settings next to the version (nightly builds only).
       ZORVIK_BUILD: ${{ needs.release-draft.outputs.channel == 'nightly' && format('nightly {0} · {1}', github.run_number, github.sha) || '' }}
+      ZORVIK_BUILT_AT: ${{ needs.release-draft.outputs.built_at }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -194,6 +199,10 @@ jobs:
           Copy-Item "target/release/zorvik-desktop.exe" "portable/zorvik-desktop.exe"
           Copy-Item "target/release/zorvik.exe" "portable/zorvik.exe"
           Compress-Archive -Path portable/* -DestinationPath dist/Zorvik-Windows-Portable-x64.zip
+          # The command line on its own, for CI machines and servers.
+          New-Item -ItemType Directory -Force cli | Out-Null
+          Copy-Item "target/release/zorvik.exe", "LICENSE-MIT", "LICENSE-APACHE" cli/
+          Compress-Archive -Path cli/* -DestinationPath dist/zorvik-cli-windows-x64.zip
           Get-ChildItem dist | Format-Table Name, Length
       - name: Upload to the draft
         shell: bash
@@ -203,13 +212,14 @@ jobs:
         run: gh release upload "build-${{ github.run_number }}" dist/* --clobber
 
   build-macos:
-    name: Build macOS (universal DMG)
+    name: Build macOS (universal DMG, CLI)
     needs: release-draft
     runs-on: macos-latest
     permissions:
       contents: write
     env:
       ZORVIK_BUILD: ${{ needs.release-draft.outputs.channel == 'nightly' && format('nightly {0} · {1}', github.run_number, github.sha) || '' }}
+      ZORVIK_BUILT_AT: ${{ needs.release-draft.outputs.built_at }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -235,6 +245,15 @@ jobs:
         run: |
           mkdir -p dist
           cp target/universal-apple-darwin/release/bundle/dmg/*.dmg dist/Zorvik-macOS-universal.dmg
+          # What the updater installs (signed later, in sign-updates): the app with Zorvik.app at
+          # the root, without macOS metadata files, which would break its code signature.
+          COPYFILE_DISABLE=1 tar --no-mac-metadata -czf dist/Zorvik-macOS-universal.app.tar.gz \
+            -C target/universal-apple-darwin/release/bundle/macos Zorvik.app
+          # The command line on its own (Apple silicon and Intel), for CI machines and servers.
+          mkdir -p cli
+          cp app/src-tauri/binaries/zorvik-universal-apple-darwin cli/zorvik
+          cp LICENSE-MIT LICENSE-APACHE cli/
+          tar -czf dist/zorvik-cli-macos-universal.tar.gz -C cli zorvik LICENSE-MIT LICENSE-APACHE
           ls -l dist
       - name: Upload to the draft
         env:
@@ -243,7 +262,7 @@ jobs:
         run: gh release upload "build-${{ github.run_number }}" dist/* --clobber
 
   build-linux:
-    name: Build Linux (deb, rpm, AppImage)
+    name: Build Linux (deb, rpm, AppImage, CLI)
     needs: release-draft
     # The oldest supported Ubuntu: packages built here run on newer systems (glibc).
     runs-on: ubuntu-22.04
@@ -251,6 +270,7 @@ jobs:
       contents: write
     env:
       ZORVIK_BUILD: ${{ needs.release-draft.outputs.channel == 'nightly' && format('nightly {0} · {1}', github.run_number, github.sha) || '' }}
+      ZORVIK_BUILT_AT: ${{ needs.release-draft.outputs.built_at }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -280,6 +300,10 @@ jobs:
           cp target/release/bundle/deb/*.deb dist/Zorvik-Linux-amd64.deb
           cp target/release/bundle/rpm/*.rpm dist/Zorvik-Linux-x86_64.rpm
           cp target/release/bundle/appimage/*.AppImage dist/Zorvik-Linux-x86_64.AppImage
+          # The command line on its own, for CI machines and servers (built on the oldest supported glibc).
+          mkdir -p cli
+          cp target/release/zorvik LICENSE-MIT LICENSE-APACHE cli/
+          tar -czf dist/zorvik-cli-linux-x86_64.tar.gz -C cli zorvik LICENSE-MIT LICENSE-APACHE
           ls -l dist
       - name: Upload to the draft
         env:
@@ -287,9 +311,69 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: gh release upload "build-${{ github.run_number }}" dist/* --clobber
 
+  # The updater key is used only here: a short job in the `release` environment, which only `main`
+  # and `v*` tags may use (Settings → Environments), with no build scripts or dependencies of the
+  # app running next to it. It signs the three files the app's updater installs and writes
+  # latest.json, the file the app reads (docs/ci-release.md, "Updates").
+  sign-updates:
+    name: Sign the updates
+    needs: [release-draft, build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      CHANNEL: ${{ needs.release-draft.outputs.channel }}
+      VERSION: ${{ needs.release-draft.outputs.version }}
+      BUILT_AT: ${{ needs.release-draft.outputs.built_at }}
+      DRAFT: build-${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Download what the updater installs
+        run: |
+          set -euo pipefail
+          mkdir -p updates
+          gh release download "$DRAFT" --dir updates \
+            --pattern Zorvik-Windows-Setup-x64.exe --pattern Zorvik-macOS-universal.app.tar.gz --pattern Zorvik-Linux-x86_64.AppImage
+          ls -l updates
+      - name: Sign and write latest.json
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # The signer, pinned to the version the app is built with; no install scripts run.
+          npm_config_ignore_scripts: "true"
+        run: |
+          set -euo pipefail
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::warning::No updater key in the release environment: this release has no automatic updates (docs/ci-release.md)."
+            exit 0
+          fi
+          for file in updates/*; do
+            # --app-version binds each signature to this version, so an old file can't pass as new.
+            npx --yes @tauri-apps/cli@2.12.0 signer sign --app-version "$VERSION" "$file" > /dev/null
+          done
+          if [ "$CHANNEL" = stable ]; then
+            base="https://github.com/$GH_REPO/releases/download/$GITHUB_REF_NAME"
+            notes="Zorvik $VERSION"
+          else
+            base="https://github.com/$GH_REPO/releases/download/nightly"
+            notes="Zorvik nightly (build $GITHUB_RUN_NUMBER)"
+          fi
+          node .github/scripts/update-manifest.mjs updates "$base" "$VERSION" "$BUILT_AT" "$notes" > latest.json
+          cat latest.json
+          gh release upload "$DRAFT" latest.json --clobber
+
   publish:
     name: Publish the release
-    needs: [release-draft, build-windows, build-macos, build-linux]
+    needs: [release-draft, sign-updates]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -332,6 +416,10 @@ jobs:
           | Ubuntu 22.04+ / Debian 12+ | `Zorvik-Linux-amd64.deb` | `sudo apt install ./Zorvik-Linux-amd64.deb` |
           | Fedora / RHEL / openSUSE | `Zorvik-Linux-x86_64.rpm` | `sudo dnf install ./Zorvik-Linux-x86_64.rpm` |
           | Any Linux (x86-64) | `Zorvik-Linux-x86_64.AppImage` | `chmod +x` and run |
+
+          **Only the command line** (for CI machines and servers): `zorvik-cli-windows-x64.zip`, `zorvik-cli-macos-universal.tar.gz`, `zorvik-cli-linux-x86_64.tar.gz`. Unpack and put `zorvik` on your PATH.
+
+          The installed app updates itself from here (Settings → Updates): it only reads this project's release list on GitHub and sends nothing about you. The portable zip, .deb and .rpm tell you when a new version is out.
 
           The builds are not code-signed yet. **Windows:** if SmartScreen appears, choose **More info → Run anyway**. **macOS:** the first open is blocked; open System Settings → Privacy & Security → **Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/Zorvik.app`.
           NOTES

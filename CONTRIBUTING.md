@@ -57,13 +57,14 @@ npm run e2e                    # Playwright against the real backend (see docs/t
 ```
 
 ## Guidelines
-- **Read [docs/architecture.md](docs/architecture.md) first.** It explains where things belong: networking in `crates/engine`, files in `crates/workspace`, the RPC surface in `crates/api`, the UI in `app/src`.
-- **Match the code around you:** naming, comments, error messages and structure. Keep changes focused; unrelated refactors belong in their own PR.
-- **Add tests** for behaviour you add or fix: Rust tests next to the code or in the crate's `tests/`, Vitest for UI logic, Playwright for user flows.
-- **Write for users.** Messages, labels and docs use plain words and say what to do next.
-- **Keep the docs true.** When a feature changes, update its topic in the in-app docs (`app/src/components/docs/content.ts`) and the README; when the design changes, update `docs/`. Note user-visible changes under `Unreleased` in [CHANGELOG.md](CHANGELOG.md).
-- **Generated files:** `app/src/bindings/*.ts` come from Rust (`cargo test`); don't edit them by hand.
-- **Security matters here.** Workspace files come from Git and are untrusted; requests may carry secrets. Keep secrets out of files, logs and error messages.
+The rules of the project (where code belongs, tests, docs, security, what Zorvik promises its users) are in **[PROJECT.md](PROJECT.md)**, for people and AI coding agents alike. In short:
+- **Read [docs/architecture.md](docs/architecture.md) first.** It explains where things belong.
+- **Match the code around you** and keep changes focused; unrelated refactors belong in their own PR.
+- **Add tests** for behaviour you add or fix.
+- **Keep the docs true** in the same PR, and note user-visible changes under `Unreleased` in [CHANGELOG.md](CHANGELOG.md).
+- **Keep every feature free and local.** No accounts, paid features, telemetry or new servers.
+
+Using an AI coding agent? `CLAUDE.md`, `AGENTS.md` and `GEMINI.md` point it at PROJECT.md. Add new rules to PROJECT.md only.
 
 ## Pull requests
 - Give the PR a clear title; it becomes the line in the release notes ("Add SOCKS5 proxy support", "Fix timing of redirected requests").

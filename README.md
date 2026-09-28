@@ -7,7 +7,8 @@
 <p align="center">
   <b>One workbench for every wire.</b><br>
   Build, test, mock and load test APIs, and see what really happens on the network.<br>
-  An open-source desktop app for Windows, macOS and Linux.
+  An open-source desktop app for Windows, macOS and Linux that your coding agent can drive.<br>
+  <b>Every feature free.</b> No paid plans, no account, no cloud sync.
 </p>
 
 <p align="center">
@@ -33,17 +34,41 @@
 </picture>
 
 ## Why Zorvik
+- **Your coding agent can drive it.** Claude Code, Codex, Gemini CLI, Cursor and any MCP client use Zorvik's 37 built-in tools to turn the APIs in your code into requests, test them, mock them and load test them, while you watch every step and approve anything risky. [More below](#ai-agents).
+- **Every feature is free, for good.** No paid plans, no "team" tier, no feature behind a login, and none planned. Open source under MIT or Apache-2.0.
 - **Everything in one place.** HTTP, GraphQL, gRPC, WebSocket, SSE, TCP, UDP, MQTT and DNS clients; mock servers; load tests; network tools. One app instead of five.
 - **Your API work is plain files.** A workspace is a folder of readable YAML. Commit it to Git, review it in pull requests, share it with your team. Secrets stay on your computer.
 - **Honest numbers.** Every request shows where its time went (DNS, connect, TLS, first byte, download), which certificate answered and the headers that really left your machine. Load tests measure latency without hiding a slow server's queue.
-- **Local first.** No account, no cloud sync, no tracking. It works offline and behind corporate proxies and TLS inspection.
+- **Local first.** No account, no cloud sync, no tracking, and none planned. It works offline and behind corporate proxies and TLS inspection. The only thing it connects to by itself is GitHub, to check for updates, and it sends nothing about you.
 - **Scriptable and automatable.** Postman-compatible scripts and tests, a collection runner with data files, and the `zorvik` command line for CI.
-- **Built for AI agents.** Claude Code, Codex, Gemini CLI, Cursor and others can drive Zorvik over MCP while you watch and approve.
 - **Learn it inside the app.** The Training Bootcamp teaches networks and APIs from zero, with hands-on labs in the real workbench.
 
 <p align="center">
   <img src=".github/assets/banner.webp" width="760" alt="">
 </p>
+
+## AI agents
+**Zorvik is built to be driven by coding agents.** Its MCP server ships in every install, so Claude Code, Codex, Gemini CLI, Cursor or any MCP client can work with your APIs the way you do in the app:
+- **Map your code to a collection:** the agent reads your routes and saves them as requests, with path and query parameters, bodies and auth.
+- **Send and test:** it sends requests (HTTP, GraphQL, gRPC, DNS, event streams), writes tests, runs folders and collections, and reads the results and history.
+- **Mock and serve:** it builds mock APIs and servers, starts them and reads the traffic they received.
+- **Load test:** it plans and runs load tests and reads the latency and errors.
+- **Hand you code:** it exports requests as cURL, Kotlin, Swift, JavaScript or Python.
+
+You see every action in the app as it happens. Deleting, load testing, starting servers and sending requests to hosts outside your computer ask you first, and secrets are masked in everything the agent sees.
+
+Connect your agent once (Settings → AI agents shows these with the right path for your computer):
+
+```bash
+claude mcp add --scope user zorvik -- zorvik mcp       # Claude Code
+codex mcp add zorvik -- zorvik mcp                     # Codex
+gemini mcp add --scope user zorvik zorvik mcp          # Gemini CLI
+```
+For Cursor, Windsurf, VS Code and other MCP clients, add this to their MCP settings:
+```json
+{ "mcpServers": { "zorvik": { "command": "zorvik", "args": ["mcp"] } } }
+```
+Then ask things like *"map the API routes in this repo to a Zorvik collection"* or *"run the Users folder in Zorvik and fix the failing tests"*.
 
 ## Features
 
@@ -108,6 +133,7 @@ TLS inspector (chain, expiry, protocol versions, cipher suites), DNS lookup, por
 - **Import** Postman collections and environments, OpenAPI 3 and Swagger 2 (realistic examples, path parameters as variables), and cURL commands. When the API changes, **update from the spec**: new operations come in, your edits stay.
 - **Export** any request as cURL, or as Kotlin (OkHttp), Swift, JavaScript or Python code.
 - **Built-in docs** for every feature (the book icon in the left rail), a command palette (<kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>K</kbd>) and keyboard shortcuts.
+- **Updates itself** from GitHub Releases: it downloads in the background and installs when you quit, or tells you and waits (Settings → Updates). Stable or nightly channel.
 - **Light and dark themes,** zoom (<kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>+</kbd> <kbd>−</kbd> <kbd>0</kbd>), and your choice of interface and code fonts.
 
 ## Download
@@ -122,9 +148,29 @@ Get the newest version from [**Releases**](https://github.com/LibreGuild/zorvik/
 | Fedora, RHEL, openSUSE | `Zorvik-Linux-x86_64.rpm` | `sudo dnf install ./Zorvik-Linux-x86_64.rpm` |
 | Any Linux (x86-64) | `Zorvik-Linux-x86_64.AppImage` | `chmod +x`, then run |
 
-The builds are not code-signed yet. On **Windows**, if SmartScreen appears, choose **More info → Run anyway**. On **macOS**, the first open is blocked: open System Settings → Privacy & Security → **Open Anyway**.
+Want the newest changes before a release? The [nightly build](https://github.com/LibreGuild/zorvik/releases/tag/nightly) is made from `main` once a day when it changed; choose the nightly channel in Settings → Updates to follow it.
 
-Want the newest changes before a release? The [nightly build](https://github.com/LibreGuild/zorvik/releases/tag/nightly) is made from `main` after every merge.
+### Only the command line
+For CI machines, servers and containers, each release also has the `zorvik` command on its own:
+
+| System | File |
+|---|---|
+| Windows (x64) | `zorvik-cli-windows-x64.zip` |
+| macOS (Apple silicon and Intel) | `zorvik-cli-macos-universal.tar.gz` |
+| Linux (x86-64, glibc 2.35+) | `zorvik-cli-linux-x86_64.tar.gz` |
+
+```bash
+curl -fsSL https://github.com/LibreGuild/zorvik/releases/latest/download/zorvik-cli-linux-x86_64.tar.gz | tar -xz zorvik
+./zorvik --version
+```
+
+### Updates
+The installer on Windows, the app on macOS and the AppImage on Linux update themselves: Zorvik checks GitHub Releases, downloads the new version in the background, and installs it when you quit (or when you choose **Restart now**). It asks first if a restart would stop a server, a load test or unsaved work. The portable zip, `.deb` and `.rpm` tell you a new version is out and link to it. Settings → Updates switches between automatic, notify only and off, and between the stable and nightly channels.
+
+The update check goes to GitHub only and sends nothing about you: no ID, no usage data, just the download request your computer makes to GitHub.
+
+### First launch
+The builds are not code-signed yet. On **Windows**, if SmartScreen appears, choose **More info → Run anyway**. On **macOS**, the first open is blocked: open System Settings → Privacy & Security → **Open Anyway**.
 
 ## Quick start
 1. Open Zorvik and **create a workspace**: pick an empty folder, or one inside your project's Git repository.
@@ -134,7 +180,7 @@ Want the newest changes before a release? The [nightly build](https://github.com
 Already on Postman? Choose **Import…** and drop in your collection export. Scripts and tests come along.
 
 ## Command line
-The `zorvik` command ships inside every install. On macOS, Settings → AI agents → **Add zorvik to PATH** makes it available in your terminal.
+The `zorvik` command ships inside every install, and on its own for CI ([Only the command line](#only-the-command-line)). On macOS, Settings → AI agents → **Add zorvik to PATH** makes it available in your terminal.
 
 ```bash
 zorvik run ./my-api --env Staging              # every request in the workspace, with scripts and tests
@@ -144,22 +190,6 @@ zorvik serve ./my-api "Payments mock" --port 3100          # run a saved mock or
 zorvik mcp                                                 # the MCP server for AI agents
 ```
 Secrets are not in workspace files; pass them with `--var token=$TOKEN`. Run `zorvik <command> --help` for every option.
-
-## AI agents
-Coding agents can map the APIs in your code into a collection, send requests, read event streams, run collections and load tests, build mock servers and read what they received, and export requests as code, all through Zorvik's MCP server. You see every action in the app as it happens, and anything risky asks you first: deleting, load testing, starting servers, or sending requests to hosts outside your computer.
-
-Connect your agent once (Settings → AI agents shows these with the right path for your computer):
-
-```bash
-claude mcp add --scope user zorvik -- zorvik mcp       # Claude Code
-codex mcp add zorvik -- zorvik mcp                     # Codex
-gemini mcp add --scope user zorvik zorvik mcp          # Gemini CLI
-```
-For Cursor, Windsurf, VS Code and other MCP clients, add this to their MCP settings:
-```json
-{ "mcpServers": { "zorvik": { "command": "zorvik", "args": ["mcp"] } } }
-```
-Then ask things like *"map the API routes in this repo to a Zorvik collection"* or *"run the Users folder in Zorvik and fix the failing tests"*.
 
 ## Your workspace
 ```
@@ -196,7 +226,7 @@ You need Rust (stable) and Node.js 22+; [CONTRIBUTING.md](CONTRIBUTING.md) lists
 - Contributions are welcome! Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
-Zorvik is free and open source, licensed under either of
+Zorvik is free and open source, and every feature stays free: there are no paid plans and none are planned. It is licensed under either of
 
 - [Apache License, Version 2.0](LICENSE-APACHE)
 - [MIT license](LICENSE-MIT)

@@ -75,6 +75,18 @@ See [TLS and certificates](../../requests/tls-and-certificates/).
 | History size | `historyLimit` | `500` | History entries kept per workspace (10 to 100,000 in the window). |
 | App data folder | (read only) | | Where settings, history, cookies, OAuth tokens and secret values are kept on this computer. |
 
+## Updates
+
+See [Updates](../../getting-started/updates/).
+
+| Setting | Key | Default | What it does |
+|---|---|---|---|
+| This version | (read only) | | The version, where the update stands, and **Check for updates**. |
+| Updates | `updates.mode` | `automatic` | `automatic` (check, download in the background, install on restart or quit), `notify` (check and tell you, download when you click) or `off` (never check by itself). |
+| Channel | `updates.channel` | `stable` | `stable` (versioned releases) or `nightly` (a daily build of the newest code). |
+
+The update check reads one file from the project's releases on GitHub and sends nothing about you.
+
 ## AI agents
 
 See [Connect an AI agent](../../agents/setup/) and [Permissions and safety](../../agents/permissions-and-safety/).
@@ -116,7 +128,8 @@ With every default:
   "cookieJar": true,
   "filesOutsideWorkspace": false,
   "scriptTimeoutMs": 5000,
-  "agents": { "enabled": false, "changes": "allow", "traffic": "askOutside", "follow": true, "headless": false }
+  "agents": { "enabled": false, "changes": "allow", "traffic": "askOutside", "follow": true, "headless": false },
+  "updates": { "mode": "automatic", "channel": "stable" }
 }
 ```
 

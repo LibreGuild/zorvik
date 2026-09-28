@@ -2,7 +2,7 @@
 
 The Zorvik website, published to GitHub Pages at <https://libreguild.github.io/zorvik/> by [`.github/workflows/pages.yml`](../../.github/workflows/pages.yml).
 
-- **Home page:** [`src/pages/index.astro`](src/pages/index.astro) and [`src/styles/site.css`](src/styles/site.css). Static HTML and CSS; a few small scripts pick the download for the visitor's system, switch the screenshots, and refresh the version and download count.
+- **Home page:** [`src/pages/index.astro`](src/pages/index.astro) and [`src/styles/site.css`](src/styles/site.css). Static HTML and CSS; a few small scripts pick the download for the visitor's system, switch the screenshots, and refresh the version (the download count is hidden for now; see the comment in `index.astro`).
 - **Docs:** Markdown under [`src/content/docs/docs/`](src/content/docs/docs), served at `/docs` with [Starlight](https://starlight.astro.build) (sidebar, search, dark and light themes). The sidebar groups follow the folders; `sidebar.order` in each page's front matter sets the order.
 - **Release data:** [`src/lib/releases.ts`](src/lib/releases.ts) reads the latest release from GitHub when the site is built. Download buttons use `releases/latest/download/<file>`, so they always point at the newest version.
 - **Pictures:** the README screenshots (`.github/assets`) and the Academy art (`app/src/assets`) are copied in at build time by [`scripts/assets.mjs`](scripts/assets.mjs), not stored twice.

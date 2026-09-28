@@ -286,8 +286,9 @@ export const TOPICS: DocTopic[] = [
       "Secret values stay out of the files",
       "Searchable history of every send, and a cookie jar per workspace",
       "Tabs come back as you left them",
+      "No account and no cloud: the only connection Zorvik makes by itself is the update check to GitHub, and it sends nothing about you",
     ],
-    tryIt: ["Press [mod+K] to find any request, server, load test or tool."],
+    tryIt: ["Press [mod+K] to find any request, server, load test or tool.", "Choose automatic updates, notify only or off in Settings → Updates."],
   },
   {
     id: "cli",
@@ -303,7 +304,10 @@ export const TOPICS: DocTopic[] = [
       "`zorvik serve <workspace> <server>`: runs a saved mock or server",
       "`zorvik mcp`: the connection for AI agents",
     ],
-    tryIt: ["In a terminal: `zorvik run ./my-api --env Staging --junit report.xml`"],
+    tryIt: [
+      "In a terminal: `zorvik run ./my-api --env Staging --junit report.xml`",
+      "On a CI machine without the app, download `zorvik-cli-…` from the latest release: just the command.",
+    ],
     tip: "On macOS, Settings → AI agents → Add zorvik to PATH makes the command available everywhere.",
   },
   {

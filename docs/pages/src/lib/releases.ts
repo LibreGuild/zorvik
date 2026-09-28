@@ -78,4 +78,11 @@ export async function latestRelease(): Promise<ReleaseInfo> {
   };
 }
 
+/** The command line on its own, for CI machines and servers. */
+export const CLI_FILES = [
+  { os: "windows" as Os, file: "zorvik-cli-windows-x64.zip", label: "Windows", note: "x64 · zorvik.exe" },
+  { os: "macos" as Os, file: "zorvik-cli-macos-universal.tar.gz", label: "macOS", note: "Apple silicon and Intel" },
+  { os: "linux" as Os, file: "zorvik-cli-linux-x86_64.tar.gz", label: "Linux", note: "x86-64 · glibc 2.35+" },
+].map((f) => ({ ...f, url: `https://github.com/${REPO}/releases/latest/download/${f.file}` }));
+
 export const formatSize = (bytes: number | null) => (bytes == null ? "" : `${(bytes / 1_048_576).toFixed(bytes > 104_857_600 ? 0 : 1)} MB`);

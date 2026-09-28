@@ -28,6 +28,8 @@ import { Spinner, TooltipProvider } from "./components/ui";
 import { isMac, modKey } from "./lib/platform";
 import { errorMessage } from "./lib/rpc";
 import { initAcademy, useAcademy, useInBootcamp } from "./store/academy";
+import { initUpdates } from "./store/updates";
+import { UpdateNotice } from "./components/UpdateNotice";
 import { loadAgents } from "./store/agents";
 import { useDialogs } from "./store/dialogs";
 import { refreshLoadTests, resetLoadTestResults, restoreActiveRun, toggleLoadRun } from "./store/loadtests";
@@ -210,6 +212,7 @@ export default function App() {
     (async () => {
       try {
         await Promise.all([loadSettings(), initWorkspace(), loadAgents(), initAcademy()]);
+        void initUpdates().catch((e) => console.error("updates unavailable", e));
         const ws = useWorkspace.getState().info;
         if (ws) await restoreTabs(ws.path);
       } catch (e) {
@@ -304,6 +307,7 @@ export default function App() {
       <AgentConfirmDialog />
       <Toasts />
       <Celebrations />
+      <UpdateNotice />
     </TooltipProvider>
   );
 }

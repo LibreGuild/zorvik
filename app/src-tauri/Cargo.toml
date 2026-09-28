@@ -16,12 +16,19 @@ tauri-build = { version = "2.6", features = [] }
 
 [dependencies]
 zorvik-api.workspace = true
+zorvik-engine.workspace = true
 zorvik-mcp.workspace = true
 tauri = { version = "2.11", features = [] }
 tauri-plugin-dialog = "2.7"
 tauri-plugin-opener = "2.5"
 # One app per user: a second launch focuses the first (AI agents find one app via agent.json).
 tauri-plugin-single-instance = "2"
+# Updates from GitHub Releases, signed with the project's updater key (docs/ci-release.md).
+tauri-plugin-updater = "2.13"
+semver = "1"
+serde.workspace = true
+time.workspace = true
+url.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

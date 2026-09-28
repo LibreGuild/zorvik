@@ -5,6 +5,7 @@ import type { ProxyMode } from "./ProxyMode";
 import type { RequestDefaults } from "./RequestDefaults";
 import type { Theme } from "./Theme";
 import type { TlsSettings } from "./TlsSettings";
+import type { UpdateSettings } from "./UpdateSettings";
 
 export type Settings = { theme: Theme, appearance: Appearance, request: RequestDefaults, proxy: ProxyMode, tls: TlsSettings, 
 /**
@@ -22,4 +23,4 @@ filesOutsideWorkspace: boolean,
 /**
  * Time limit of one pre-request or post-response script.
  */
-scriptTimeoutMs: number, agents: AgentSettings, };
+scriptTimeoutMs: number, agents: AgentSettings, updates: UpdateSettings, };
