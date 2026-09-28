@@ -150,6 +150,9 @@ impl Api {
                 }
             },
         };
+        // Credentials Zorvik built from secrets (a Basic header, an OAuth token, a signature) are
+        // hidden like the secrets themselves.
+        let text = self.redactor(&ws).with_headers(&http.headers).text(&text);
         Ok(Done::new(json!({ "format": format, "code": text }), format!("{} as {format}", request.name)))
     }
 

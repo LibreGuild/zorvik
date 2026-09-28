@@ -10,6 +10,7 @@ mod dto;
 mod graphql;
 mod grpc;
 mod load;
+pub mod mcp;
 mod mock;
 pub mod runner;
 mod scripting;
@@ -149,6 +150,9 @@ struct Inner {
     inflight: Mutex<HashMap<String, (u64, CancellationToken)>>,
     ws_sessions: Mutex<HashMap<String, WsEntry>>,
     socket_sessions: Mutex<HashMap<String, sockets::SocketEntry>>,
+    mcp_sessions: Mutex<HashMap<String, mcp::McpEntry>>,
+    /// Programs the user let workspaces start (MCP servers over stdio).
+    programs: mcp::TrustedPrograms,
     servers: servers::Manager,
     load: load::LoadState,
     /// Introspected GraphQL schemas (`graphql.schema`).
@@ -333,6 +337,10 @@ struct SendParams {
     /// auth or cookies, and no history entry (tools that check other sites).
     #[serde(default)]
     standalone: bool,
+    /// An AI agent's send: the fingerprint of the program the user was just asked about (never
+    /// set over RPC). An agent's send starts no other program.
+    #[serde(skip)]
+    approved_program: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -353,6 +361,7 @@ impl Api {
                 None
             }
         };
+        let programs = mcp::TrustedPrograms::new(data_dir.join(mcp::TRUSTED_FILE));
         let inner = Inner {
             settings: RwLock::new(Settings::load(&data_dir.join("settings.json"))),
             local: Mutex::new(LocalState::load(&data_dir.join("state.json"))),
@@ -368,6 +377,8 @@ impl Api {
             inflight: Mutex::new(HashMap::new()),
             ws_sessions: Mutex::new(HashMap::new()),
             socket_sessions: Mutex::new(HashMap::new()),
+            mcp_sessions: Mutex::new(HashMap::new()),
+            programs,
             servers: servers::Manager::default(),
             load: load::LoadState::default(),
             graphql: Default::default(),
@@ -412,6 +423,7 @@ impl Api {
         match method.split_once('.').map_or("", |(group, _)| group) {
             "server" => return self.call_server(method, p).await,
             "socket" => return self.call_socket(method, p).await,
+            "mcp" => return self.call_mcp(method, p).await,
             "tools" => return self.call_tool(method, p).await,
             "dns" => return self.call_dns(method, p).await,
             "mock" => return self.call_mock(method, p).await,
@@ -1084,7 +1096,8 @@ impl Api {
 
     fn save_jar(&self, ws: &Workspace, jar: &CookieJar) {
         let path = self.inner.data_dir.join("cookies").join(format!("{}.json", ws.local_key()));
-        if let Err(e) = zorvik_workspace::fsutil::atomic_write(&path, &jar.to_json()) {
+        // Owner-only: cookies are credentials.
+        if let Err(e) = zorvik_workspace::fsutil::atomic_write_private(&path, &jar.to_json()) {
             tracing::warn!("could not save cookies: {}", e.message);
         }
     }
@@ -1177,6 +1190,11 @@ impl Api {
                 jar: jar.as_ref(),
                 guard: agents::scope_guard(),
                 specs: Some(&self.inner.specs),
+                programs: match agents::in_agent_call() {
+                    true => mcp::Programs::Approved(p.approved_program.as_deref()),
+                    false => mcp::Programs::Trusted(&self.inner.programs),
+                },
+                mcp_session: self.mcp_session(&p.request_id),
             };
             let scripted = tokio::select! {
                 // Boxed: the whole pipeline is a big future (debug builds would overflow the stack).
@@ -1235,8 +1253,12 @@ impl Api {
                 Ok(result)
             }
             Err(err) => {
-                // A pre-request script error means nothing was sent.
-                if err.network_kind != Some(ErrorKind::Cancelled) && err.code != "script" {
+                // A pre-request script error, or a program not allowed to start, means nothing
+                // was sent.
+                if err.network_kind != Some(ErrorKind::Cancelled)
+                    && err.code != "script"
+                    && err.code != "untrustedProgram"
+                {
                     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
                     self.record_history(
                         &workspace_key,

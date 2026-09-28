@@ -12,6 +12,7 @@ export const KIND_BADGE: Partial<Record<RequestKind, { label: string; color: str
   mqtt: { label: "MQTT", color: "var(--m-mqtt)" },
   grpc: { label: "gRPC", color: "var(--m-grpc)" },
   socketio: { label: "SIO", color: "var(--m-socketio)" },
+  mcp: { label: "MCP", color: "var(--m-mcp)" },
 };
 
 /** Request kinds that keep a connection open (message log + composer). */

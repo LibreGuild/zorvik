@@ -12,6 +12,10 @@ use zorvik_formats::{CaptureFrom, LoadCapture};
 /// Body bytes a capture looks at (the rest of the body is read, not kept).
 pub(crate) const CAPTURE_BODY: usize = 1024 * 1024;
 
+/// Longest value a capture keeps (bytes). Each user holds its captured values
+/// for its whole life; a longer value counts as a miss.
+pub(crate) const MAX_CAPTURED: usize = 64 * 1024;
+
 /// What [`UserVars::probe`] sets every name to: plain letters, so it stays a
 /// valid URL, header and host name.
 pub(crate) const PROBE: &str = "zvprobe7c1e";
@@ -112,7 +116,7 @@ impl Capture {
 }
 
 /// Run a target's captures on its response: found values go into `vars`.
-/// Returns how many found nothing.
+/// Returns how many found nothing (or a value over [`MAX_CAPTURED`]).
 pub(crate) fn apply(captures: &[Capture], response: &KeptResponse, vars: &mut UserVars) -> u32 {
     // Parsed once, and only when a JSON capture needs it.
     let mut json: Option<Option<Value>> = None;
@@ -127,7 +131,11 @@ pub(crate) fn apply(captures: &[Capture], response: &KeptResponse, vars: &mut Us
             How::Regex(re) => regex_value(re, &response.body),
         };
         match found {
-            Some(value) => vars.set(&capture.variable, value),
+            Some(value) if value.len() <= MAX_CAPTURED => vars.set(&capture.variable, value),
+            Some(value) => {
+                tracing::debug!("capture '{}' found {} bytes, more than it keeps", capture.variable, value.len());
+                misses += 1;
+            }
             None => misses += 1,
         }
     }
@@ -388,6 +396,26 @@ mod tests {
         assert!(err(CaptureFrom::Regex, "x", "(").contains("invalid regular expression"));
         assert!(err(CaptureFrom::Header, "x", " ").contains("header name"));
         assert!(err(CaptureFrom::Json, "x", "$..x").starts_with("capture 'x': '$..x' is not a JSON path"));
+    }
+
+    #[test]
+    fn values_over_the_limit_are_misses() {
+        let captures = [
+            capture(CaptureFrom::Json, "id", "$.id"),
+            capture(CaptureFrom::Header, "token", "X-Token"),
+            capture(CaptureFrom::Regex, "blob", "blob=(x+)"),
+        ];
+        let mut vars = UserVars::new(None);
+        let fits = "x".repeat(MAX_CAPTURED);
+        let body = format!(r#"{{"id": "{fits}", "note": "blob={fits}"}}"#);
+        assert_eq!(apply(&captures, &response(&[("x-token", &fits)], &body), &mut vars), 0);
+        assert!(["id", "token", "blob"].iter().all(|v| vars.get(v) == Some(fits.as_str())));
+
+        // One byte more: each capture misses and the user keeps the value it had.
+        let over = "y".repeat(MAX_CAPTURED + 1);
+        let body = format!(r#"{{"id": "{over}", "note": "blob={}"}}"#, "x".repeat(MAX_CAPTURED + 1));
+        assert_eq!(apply(&captures, &response(&[("x-token", &over)], &body), &mut vars), 3);
+        assert!(["id", "token", "blob"].iter().all(|v| vars.get(v) == Some(fits.as_str())));
     }
 
     #[test]

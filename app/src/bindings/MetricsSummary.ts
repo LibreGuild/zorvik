@@ -12,11 +12,13 @@ requests: number,
  */
 errors: number, 
 /**
- * Percent of requests that failed.
+ * Percent of requests that failed: `errors` plus `dropped`, of
+ * `requests` plus `dropped`.
  */
 errorRate: number, 
 /**
- * Completed requests per second over the elapsed time.
+ * Completed requests per second while requests were being started (the
+ * wait for the last answers after the end or a stop is left out).
  */
 rps: number, bytesIn: number, bytesOut: number, latency: LatencySummary, 
 /**
@@ -29,6 +31,7 @@ statusCodes: Array<[number, number]>,
 errorKinds: Array<[string, number]>, 
 /**
  * Open model: iterations not started because `maxInFlight` was reached.
+ * They count as failed in `error_rate`.
  */
 dropped: number, 
 /**
@@ -40,6 +43,7 @@ connections: number,
  */
 timing: TimingSummary, 
 /**
- * Captures that found nothing in a response (the variable kept its value).
+ * Captures that found nothing in a response, or a value over 64 KB (the
+ * variable kept its value).
  */
 captureMisses: number, };

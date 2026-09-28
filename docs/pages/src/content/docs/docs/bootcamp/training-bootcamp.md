@@ -22,7 +22,7 @@ The Academy's own menu (**…** at the top right) has **Badges and certificate**
 
 ## The course
 
-The course has 16 units and 73 lessons; 68 lessons have a lab.
+The course has 17 units and 78 lessons; 71 lessons have a lab.
 
 | # | Unit | Lessons | Badge |
 |---|---|---|---|
@@ -41,7 +41,8 @@ The course has 16 units and 73 lessons; 68 lessons have a lab.
 | 12 | Mocking APIs | 6 | Mock Master |
 | 13 | Performance & load testing | 4 | Load Legend |
 | 14 | Automate: CLI, CI and AI agents | 3 | Automation Ace |
-| 15 | Capstone: Ship it | 2 | Graduate |
+| 15 | MCP: tools for AI agents | 5 | Context Connector |
+| 16 | Capstone: Ship it | 2 | Graduate |
 
 The **course map** lists the units; open one to see its lessons, each with its reading time, lab time and number of questions, and a tick when done. A card at the top says where to go next: **Start the Bootcamp** at first, then **Continue** with the next lesson. You can open any lesson in any order.
 
@@ -116,7 +117,7 @@ Your **streak** counts the days in a row on which you earned XP, by your compute
 
 ## Badges
 
-There are 24 badges: one per unit (see [the course](#the-course)) and eight for how you learn.
+There are 25 badges: one per unit (see [the course](#the-course)) and eight for how you learn.
 
 | Badge | How to earn it |
 |---|---|

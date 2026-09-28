@@ -177,12 +177,15 @@ impl Api {
                     self.forget_server(&ws, &id);
                 }
                 self.trust_server(&ws, &new_id, &server);
-                // A running copy follows the rename.
+                // A running copy follows the rename and runs what was saved (a change of
+                // address, port, TLS or kind waits for a restart).
                 let root = root_of(&ws);
+                let vars = self.server_vars(&ws);
                 for run in lock(&self.inner.servers.running).values_mut() {
                     if run.info.workspace_path == root && run.info.server_id == id {
                         run.info.server_id = new_id.clone();
                         run.info.name = server.name.clone();
+                        run.handle.update(server.clone(), vars.clone());
                     }
                 }
                 ok(new_id)

@@ -133,7 +133,7 @@ lab:
   servers:                    # started for the lab; {{api}} holds the address
     api:                      # id: a variable name (letters, digits, _)
       name: Shop API          # saved as "Lab · Shop API"
-      kind: http              # http, websocket, sse, tcp, udp, dns, tcpProxy
+      kind: http              # http, mcp, websocket, socketio, sse, tcp, udp, dns, tcpProxy
       http:
         routes:
           - { method: GET, path: /products/:id, status: 200, body: '{"id": "{{request.params.id}}"}' }
@@ -185,7 +185,7 @@ A step passes when its check matches something that happened since the lab start
 | `saved: {request \| folder \| environment \| server \| loadTest \| workspace: …}` | Something saved in the workspace (the file's fields, plus `path`, `id`, `running` for servers) | e.g. `{request: {name: Login, auth: {type: bearer}}}` |
 | `run: {…}` | A collection run that finished during the lab | `passed`, `requests`, `failed`, `testsPassed`, `testsFailed`, `iterations`, `name` |
 | `load: {…}` | A load test run that finished during the lab | `passed`, `requests`, `rps`, `p95`, `errorRate`, `stoppedEarly`, `name` |
-| `probe: {kind, name?, method?, path?, headers?, body?, expect}` | The lab calls a server the learner runs (`http`, `tcp`, `udp`; not a lab server) | `expect` on `{status, headers, body, json}` or `{text}` |
+| `probe: {kind, name?, method?, path?, headers?, body?, expect}` | The lab calls a server the learner runs (`http`, `tcp`, `udp`, `mcp`; not a lab server) | `expect` on `{status, headers, body, json}`, `{text}`, or for `mcp` (connects over Streamable HTTP and asks `method`, default `tools/list`, with `body` as the JSON parameters) `{result}` or `{error}` |
 | `answer: "…"` or `answer: [a, b]` | What the learner types in the Lab Guide | e.g. `answer: "{{secret.word}}"` |
 | `all: [...]`, `any: [...]` | Every one / one of the checks | |
 

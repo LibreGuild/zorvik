@@ -199,7 +199,8 @@ fn rsa_pkcs1_sha1(pkcs1: &[u8], message: &[u8]) -> Result<Vec<u8>, AuthError> {
     em[k - t.len() - 1] = 0;
     em[k - t.len()..].copy_from_slice(&t);
     let m = BigUint::from_bytes_be(&em);
-    if p.bits() == 0 || q.bits() == 0 {
+    // Components no larger than n (a crafted key could make the arithmetic run for ages).
+    if p.bits() == 0 || q.bits() == 0 || [&p, &q, &dp, &dq, &qinv, &e].iter().any(|x| x.bits() > n.bits()) {
         return Err(bad());
     }
     let m1 = m.modpow(&dp, &p);
@@ -207,7 +208,7 @@ fn rsa_pkcs1_sha1(pkcs1: &[u8], message: &[u8]) -> Result<Vec<u8>, AuthError> {
     let h = (&qinv * (&m1 + &p - (&m2 % &p))) % &p;
     let s = m2 + h * &q;
     // A wrong component (or a fault) would leak the key through a bad signature.
-    if s.modpow(&e, &n) != m {
+    if s >= n || s.modpow(&e, &n) != m {
         return Err(bad());
     }
     let bytes = s.to_bytes_be();
@@ -249,6 +250,59 @@ impl<'a> Der<'a> {
 pub(crate) mod tests {
     use super::*;
     use ring::signature::UnparsedPublicKey;
+
+    fn der(tag: u8, body: &[u8]) -> Vec<u8> {
+        let mut out = vec![tag];
+        match body.len() {
+            n @ 0..128 => out.push(n as u8),
+            n => {
+                let len = (n as u32).to_be_bytes();
+                let skip = len.iter().take_while(|b| **b == 0).count();
+                out.push(0x80 | (4 - skip) as u8);
+                out.extend_from_slice(&len[skip..]);
+            }
+        }
+        out.extend_from_slice(body);
+        out
+    }
+
+    fn der_int(v: &BigUint) -> Vec<u8> {
+        let mut bytes = v.to_bytes_be();
+        if bytes[0] & 0x80 != 0 {
+            bytes.insert(0, 0);
+        }
+        der(INTEGER, &bytes)
+    }
+
+    #[test]
+    fn crafted_rsa_keys_are_refused_not_a_crash() {
+        // e = 1 and q = n make s = m + h·n pass the s^e mod n check while s is larger than n.
+        let n = (BigUint::from(1u8) << 1100u32) + BigUint::from(1u8);
+        let one = BigUint::from(1u8);
+        let parts = [
+            BigUint::from(0u8),
+            n.clone(),
+            one.clone(),
+            one.clone(),
+            BigUint::from(3u8),
+            n,
+            BigUint::from(2u8),
+            one.clone(),
+            one,
+        ];
+        let body: Vec<u8> = parts.iter().flat_map(der_int).collect();
+        let key = der(SEQUENCE, &body);
+        for i in 0..24u8 {
+            if let Ok(signature) = rsa_pkcs1_sha1(&key, &[i]) {
+                assert_eq!(signature.len(), 1101usize.div_ceil(8));
+            }
+        }
+        // A component far larger than n is refused before any arithmetic.
+        let mut parts = parts.to_vec();
+        parts[6] = BigUint::from(1u8) << 100_000u32;
+        let body: Vec<u8> = parts.iter().flat_map(der_int).collect();
+        assert!(rsa_pkcs1_sha1(&der(SEQUENCE, &body), b"x").is_err());
+    }
 
     /// A 2048-bit RSA key made with `openssl genrsa 2048` for these tests only.
     pub(crate) const RSA_PKCS1: &str = include_str!("testdata/rsa2048-pkcs1.pem");

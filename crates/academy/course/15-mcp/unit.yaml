@@ -1,0 +1,9 @@
+id: mcp
+title: "MCP: tools for AI agents"
+summary: Why AI apps speak the Model Context Protocol, and how to call, test and build MCP servers so the agents that rely on them don't stumble.
+color: "#8A4B7C"
+image: mcp
+badge:
+  id: context-connector
+  name: Context Connector
+  description: Calls, tests and builds MCP servers.

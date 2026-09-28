@@ -76,7 +76,7 @@ Press <kbd>Mod</kbd>+<kbd>K</kbd> (or <kbd>Mod</kbd>+<kbd>P</kbd>) to open **Go 
 - <kbd>↑</kbd> and <kbd>↓</kbd> move, <kbd>Enter</kbd> opens, <kbd>Esc</kbd> closes.
 - It shows up to 100 results.
 
-<kbd>Mod</kbd>+<kbd>K</kbd> works even while another dialog is open.
+While another dialog is open, <kbd>Mod</kbd>+<kbd>K</kbd> does nothing, so unsaved changes in it can't be lost; close the dialog first.
 
 ## Keyboard shortcuts
 
@@ -95,7 +95,7 @@ Press <kbd>Mod</kbd>+<kbd>K</kbd> (or <kbd>Mod</kbd>+<kbd>P</kbd>) to open **Go 
 | <kbd>Mod</kbd>+<kbd>+</kbd> / <kbd>Mod</kbd>+<kbd>−</kbd> | Zoom in / out |
 | <kbd>Mod</kbd>+<kbd>0</kbd> | Reset the zoom to 100 % |
 
-- Most shortcuts work only with a workspace open, and not while a dialog is open (the command palette shortcut is the exception). Zoom works everywhere.
+- Most shortcuts work only with a workspace open, and not while a dialog is open. Zoom works everywhere.
 - In the URL field, and in the rows of the query parameter, header and form tables, <kbd>Enter</kbd> sends the request too.
 - The keyboard icon in the title bar shows this list in the app.
 

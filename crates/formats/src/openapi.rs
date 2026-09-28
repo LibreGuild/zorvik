@@ -1794,7 +1794,7 @@ fn encode(s: &str) -> String {
 }
 
 /// Decodes `%XX` escapes in a `$ref` fragment; `None` when there are none.
-fn percent_decode(s: &str) -> Option<String> {
+pub(crate) fn percent_decode(s: &str) -> Option<String> {
     if !s.contains('%') {
         return None;
     }

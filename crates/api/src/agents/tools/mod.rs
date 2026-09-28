@@ -103,7 +103,7 @@ fn request_schema() -> Value {
     obj(
         json!({
             "name": string("Request name, e.g. \"Create order\" (also its file name)."),
-            "kind": { "type": "string", "enum": ["http", "grpc", "dns", "websocket", "sse", "tcp", "udp", "mqtt", "socketio"], "description": "Default http. GraphQL is http with a graphql body. socketio: a Socket.IO client (url is the server and namespace, e.g. http://localhost:3000/chat)." },
+            "kind": { "type": "string", "enum": ["http", "grpc", "dns", "websocket", "sse", "tcp", "udp", "mqtt", "socketio", "mcp"], "description": "Default http. GraphQL is http with a graphql body. socketio: a Socket.IO client (url is the server and namespace, e.g. http://localhost:3000/chat). mcp: a call to an MCP server; url is its address (http://localhost:3000/mcp) or the command that starts it (npx -y @modelcontextprotocol/server-everything)." },
             "method": string("HTTP method (default GET). gRPC: package.Service/Method. DNS: the record type (A, AAAA, MX…)."),
             "url": string("Full URL with the query string, using {{variables}}: {{baseUrl}}/orders/{{orderId}}?expand=items. :name path segments take their value from pathParams ({{baseUrl}}/users/:id). gRPC: grpc://host:port (grpcs:// for TLS). DNS: the name."),
             "query": {
@@ -144,6 +144,14 @@ fn request_schema() -> Value {
                 "transport": { "type": "string", "enum": ["auto", "websocket", "polling"], "description": "Default auto: WebSocket, or long-polling when the server doesn't take WebSocket." },
                 "event": string("The event the message composer emits."),
                 "ack": { "type": "boolean", "description": "The composer asks the server to acknowledge." },
+            }), &[]),
+            "mcp": obj(json!({
+                "transport": { "type": "string", "enum": ["auto", "streamableHttp", "sse", "stdio"], "description": "Default auto: Streamable HTTP for http(s):// addresses (falling back to the older HTTP+SSE transport), otherwise a program over stdio." },
+                "call": { "type": "string", "enum": ["tool", "resource", "prompt"], "description": "What the request calls (default tool)." },
+                "name": string("The tool or prompt name, or the resource URI (a template's {parts} are filled from arguments)."),
+                "arguments": string("The arguments as a JSON object in text, e.g. {\"city\": \"{{city}}\"} (prompt arguments are strings)."),
+                "env": kv,
+                "cwd": string("Programs only: the folder they start in (relative to the workspace folder; default the workspace folder)."),
             }), &[]),
             "docs": string("Markdown notes: what it does, where the handler is in the code."),
             "examples": {
@@ -254,7 +262,7 @@ fn load_test_schema() -> Value {
                 "type": "array",
                 "description": "Checks that pass or fail the run, e.g. {metric: \"p95\", op: \"<\", value: 300} and {metric: \"errorRate\", op: \"<\", value: 1}.",
                 "items": obj(json!({
-                    "metric": { "type": "string", "enum": ["p50", "p90", "p95", "p99", "p999", "avg", "max", "errorRate", "rps"], "description": "p50…p999, avg, max: latency in milliseconds (p999 = 99.9th percentile). errorRate: failed requests (network errors and HTTP status >= 400) in percent, 0-100. rps: completed requests per second." },
+                    "metric": { "type": "string", "enum": ["p50", "p90", "p95", "p99", "p999", "avg", "max", "errorRate", "rps"], "description": "p50…p999, avg, max: latency in milliseconds (p999 = 99.9th percentile). errorRate: failed requests (network errors and HTTP status >= 400) and dropped ones, in percent of all requests, 0-100. rps: completed requests per second while requests were being started." },
                     "op": { "type": "string", "enum": ["<", "<=", ">", ">="] },
                     "value": { "type": "number", "description": "In the metric's unit: milliseconds, percent (1 = 1 %) or requests per second." },
                     "target": string("Only this request path (default: the whole test)."),
@@ -437,7 +445,7 @@ fn defs() -> Vec<Def> {
         Def {
             name: "send_request",
             title: "Send a request",
-            description: "Send a saved request (`path`), a saved one with changes (`path` + `request`: only the fields given change, nothing is saved), or an unsaved one (`request`), with its scripts and tests, and return the response. HTTP, GraphQL, gRPC (unary), DNS, and Server-Sent Events: an SSE request is read until the event named in stream.untilEvent, stream.maxEvents events, or stream.timeoutMs, and returns the events. A GraphQL subscription is read the same way: each result is an event named \"next\". For a large JSON response, pass `filter` (JSONPath or jq) to get only the part you need: it runs on the whole body. The user sees it in Zorvik.",
+            description: "Send a saved request (`path`), a saved one with changes (`path` + `request`: only the fields given change, nothing is saved), or an unsaved one (`request`), with its scripts and tests, and return the response. HTTP, GraphQL, gRPC (unary), DNS, MCP (one tool call, resource read or prompt; the user is asked before a program starts), and Server-Sent Events: an SSE request is read until the event named in stream.untilEvent, stream.maxEvents events, or stream.timeoutMs, and returns the events. A GraphQL subscription is read the same way: each result is an event named \"next\". For a large JSON response, pass `filter` (JSONPath or jq) to get only the part you need: it runs on the whole body. The user sees it in Zorvik.",
             schema: obj(
                 json!({
                     "path": path("Saved request"),
@@ -504,6 +512,18 @@ fn defs() -> Vec<Def> {
             description: "The schema of a GraphQL endpoint (introspection) as SDL, to write queries against.",
             schema: obj(
                 json!({ "path": path("GraphQL request"), "request": request_schema(), "maxChars": { "type": "integer", "description": "SDL characters to return (default and most 60000)." } }),
+                &[],
+            ),
+            read_only: true,
+            destructive: false,
+            open_world: true,
+        },
+        Def {
+            name: "mcp_catalog",
+            title: "MCP server catalog",
+            description: "What an MCP request's server offers: its tools (with their input schemas), resources, resource templates and prompts, and its name and instructions. Call them with send_request (kind mcp). The user is asked before a program starts.",
+            schema: obj(
+                json!({ "path": path("MCP request"), "request": request_schema(), "maxChars": { "type": "integer", "description": "Characters to return (default and most 60000)." } }),
                 &[],
             ),
             read_only: true,
@@ -825,6 +845,7 @@ impl Api {
             "get_run_status" => run!(self.tool_run_status(c)),
             "stop_collection_run" => run!(self.tool_stop_run(c)),
             "graphql_schema" => run!(self.tool_graphql_schema(c)),
+            "mcp_catalog" => run!(self.tool_mcp_catalog(c)),
             "grpc_describe" => run!(self.tool_grpc_describe(c)),
             "list_load_tests" => run!(async move { self.tool_list_load_tests() }),
             "read_load_test" => run!(async move { self.tool_read_load_test(c) }),
@@ -968,16 +989,59 @@ impl Api {
 
     /// The resolver a DNS request asks (none for the system's resolvers).
     fn dns_hosts(&self, ws: &Workspace, request: &Request) -> Vec<String> {
-        let server = self.var_context(ws).render(request.dns.server.trim(), &mut BTreeSet::new());
-        match zorvik_engine::DnsResolver::parse(&server) {
+        let vars = self.var_context(ws);
+        let server = vars.render(request.dns.server.trim(), &mut BTreeSet::new());
+        let mut hosts = match zorvik_engine::DnsResolver::parse(&server) {
             Ok(zorvik_engine::DnsResolver::Udp { host, .. })
             | Ok(zorvik_engine::DnsResolver::Tcp { host, .. })
             | Ok(zorvik_engine::DnsResolver::Tls { host, .. }) => vec![host.to_ascii_lowercase()],
             Ok(zorvik_engine::DnsResolver::Https { url }) => host_of(&url).into_iter().collect(),
-            Ok(zorvik_engine::DnsResolver::System) => Vec::new(),
-            // Unparseable: the query fails before sending anything.
-            Err(_) => Vec::new(),
+            // The system's resolvers, or unparseable (the query fails before sending anything).
+            Ok(zorvik_engine::DnsResolver::System) | Err(_) => Vec::new(),
+        };
+        // Resolvers pass the name on to its own servers: whoever runs them learns it.
+        let name = vars.render(request.url.trim(), &mut BTreeSet::new());
+        let name = name.trim_end_matches('.').to_ascii_lowercase();
+        if !name.is_empty() {
+            hosts.push(name);
         }
+        hosts
+    }
+
+    /// An MCP request: the hosts of a server at a URL, or the program it starts (asked about
+    /// every time, whatever the settings, since it runs on the user's computer).
+    async fn gate_mcp(
+        &self,
+        c: &Call<'_>,
+        ws: &Workspace,
+        request: &Request,
+        path: Option<&str>,
+        what: &str,
+    ) -> Result<(Option<HostGuard>, Option<String>), Fail> {
+        let resolved = self.resolve_only(ws, request, path)?;
+        let command = resolved.request.url.trim();
+        let Some(mcp) = resolved.mcp.as_ref().filter(|m| m.is_program(command)) else {
+            return Ok((self.gate_traffic(c, what, self.request_hosts(ws, request, path)).await?, None));
+        };
+        let redactor = self.redactor(ws);
+        let mut items = vec![format!("Command: {}", redactor.text(command)), format!("In: {}", mcp.cwd.display())];
+        items.extend(mcp.env.iter().map(|(k, v)| format!("Environment: {k}={}", redactor.text(v))));
+        let ask = Ask {
+            kind: ConfirmKind::Program,
+            title: format!("{what}?"),
+            message: format!(
+                "{} wants to start this program on your computer (an MCP server). Allow it only if you know what it does:",
+                c.session.info.client
+            ),
+            items: cap_items(items),
+            confirm_label: "Start program".into(),
+            session_option: false,
+            danger: true,
+        };
+        self.approve(c, ask).await?;
+        // Exactly this program (command, folder, environment) may start. It talks over stdio:
+        // nothing goes to the network from Zorvik.
+        Ok((Some(super::no_hosts()), Some(crate::mcp::fingerprint(command, mcp))))
     }
 
     // ---- workspace -----------------------------------------------------------------------------
@@ -1698,19 +1762,31 @@ impl Api {
             .get("maxBodyChars")
             .and_then(Value::as_u64)
             .map_or(DEFAULT_BODY_CHARS, |n| (n as usize).min(MAX_BODY_CHARS));
-        if !matches!(request.kind, RequestKind::Http | RequestKind::Grpc | RequestKind::Dns | RequestKind::Sse) {
+        if !matches!(
+            request.kind,
+            RequestKind::Http | RequestKind::Grpc | RequestKind::Dns | RequestKind::Sse | RequestKind::Mcp
+        ) {
             return Err(Fail::Invalid(format!(
                 "{} requests are live sessions, which agents can't use yet; ask the user to open it in Zorvik",
                 method_label(&request)
             )));
         }
-        let hosts = match request.kind {
-            RequestKind::Dns => self.dns_hosts(&ws, &request),
-            _ => self.request_hosts(&ws, &request, path.as_deref()),
-        };
         let label = format!("{} {}", method_label(&request), request.url);
-        let guard = self.gate_traffic(c, &format!("Send {label}"), hosts).await?;
-        super::with_guard(guard, self.send_now(c, &ws, request, path, saved_path, max_chars)).await
+        let mut approved_program = None;
+        let guard = match request.kind {
+            RequestKind::Mcp => {
+                let (guard, program) =
+                    self.gate_mcp(c, &ws, &request, path.as_deref(), &format!("Send {label}")).await?;
+                approved_program = program;
+                guard
+            }
+            RequestKind::Dns => self.gate_traffic(c, &format!("Send {label}"), self.dns_hosts(&ws, &request)).await?,
+            _ => {
+                let hosts = self.request_hosts(&ws, &request, path.as_deref());
+                self.gate_traffic(c, &format!("Send {label}"), hosts).await?
+            }
+        };
+        super::with_guard(guard, self.send_now(c, &ws, request, path, saved_path, max_chars, approved_program)).await
     }
 
     /// `filter` (JSONPath or jq) over the whole body: the matches replace the body.
@@ -1746,6 +1822,7 @@ impl Api {
     }
 
     /// Send what `send_request` approved (in the call's scope, limited to the approved hosts).
+    #[allow(clippy::too_many_arguments)]
     async fn send_now(
         &self,
         c: &Call<'_>,
@@ -1754,6 +1831,7 @@ impl Api {
         path: Option<String>,
         saved_path: Option<String>,
         max_chars: usize,
+        approved_program: Option<String>,
     ) -> Outcome {
         let request_id = format!("agent-{}", uuid::Uuid::new_v4());
         let target = saved_path.clone().map(|path| AgentTarget::Request { path });
@@ -1761,12 +1839,14 @@ impl Api {
             return self.read_sse_for_agent(c, ws, &request, path.as_deref(), target).await;
         }
         match request.kind {
-            RequestKind::Http => {
+            RequestKind::Http | RequestKind::Mcp => {
                 let params = SendParams {
                     request_id: request_id.clone(),
                     request: request.clone(),
                     path: path.clone(),
                     standalone: false,
+                    // The program `gate_mcp` asked the user about, if any: the only one it may start.
+                    approved_program: approved_program.clone(),
                 };
                 let result = self.cancellable(&c.cancel, &request_id, self.http_send(params)).await;
                 let result = result.map_err(|e| self.blocked_hint(c, e))?;
@@ -1829,7 +1909,7 @@ impl Api {
                 Ok(Done { value: result, detail, target })
             }
             RequestKind::Sse => self.read_sse_for_agent(c, ws, &request, path.as_deref(), target).await,
-            _ => Err(Fail::Invalid("Agents can send HTTP, GraphQL, gRPC, DNS and SSE requests".into())),
+            _ => Err(Fail::Invalid("Agents can send HTTP, GraphQL, gRPC, DNS, SSE and MCP requests".into())),
         }
     }
 
@@ -2065,6 +2145,49 @@ impl Api {
         let detail = format!("{} lines of SDL", sdl.lines().count());
         let (sdl, truncated) = cut(&sdl, max_chars.min(MAX_SCHEMA_CHARS));
         Ok(Done::new(json!({ "sdl": sdl, "truncated": truncated }), detail))
+    }
+
+    async fn tool_mcp_catalog(&self, c: &Call<'_>) -> Outcome {
+        let ws = self.agent_ws()?;
+        let (request, path) = self.request_to_send(&ws, c)?;
+        if request.kind != RequestKind::Mcp {
+            return Err(Fail::Invalid("mcp_catalog takes an MCP request (kind mcp)".into()));
+        }
+        let max_chars = c.args.get("maxChars").and_then(Value::as_u64).map_or(MAX_SCHEMA_CHARS, |n| n as usize);
+        let what = format!("List what the MCP server {} offers", request.url.trim());
+        let (guard, approved) = self.gate_mcp(c, &ws, &request, path.as_deref(), &what).await?;
+        let listing = super::with_guard(
+            guard,
+            Box::pin(self.mcp_catalog_approved(&ws, &request, path.as_deref(), approved.as_deref())),
+        );
+        let (info, catalog) = until_cancelled(c, async { listing.await.map_err(|e| self.blocked_hint(c, e)) }).await?;
+        let detail = format!(
+            "{}, {}, {}",
+            plural(catalog.tools.len(), "tool"),
+            plural(catalog.resources.len() + catalog.resource_templates.len(), "resource"),
+            plural(catalog.prompts.len(), "prompt")
+        );
+        let redactor = self.redactor(&ws);
+        let mut value = redact_value(
+            &json!({
+                "server": { "name": info.name, "title": info.title, "version": info.version, "protocolVersion": info.protocol_version, "transport": info.transport, "instructions": info.instructions },
+                "tools": catalog.tools,
+                "resources": catalog.resources,
+                "resourceTemplates": catalog.resource_templates,
+                "prompts": catalog.prompts,
+            }),
+            &redactor,
+        );
+        if !catalog.problems.is_empty() {
+            value["problems"] = json!(catalog.problems);
+        }
+        let text = serde_json::to_string(&value).unwrap_or_default();
+        let max = max_chars.min(MAX_SCHEMA_CHARS);
+        if text.chars().count() > max {
+            let (text, _) = cut(&text, max);
+            value = json!({ "catalogText": text, "truncated": true });
+        }
+        Ok(Done::new(value, detail))
     }
 
     async fn tool_grpc_describe(&self, c: &Call<'_>) -> Outcome {
@@ -2664,6 +2787,19 @@ fn normalize_request(mut value: Value) -> Result<(Value, Option<Vec<KeyValue>>),
     }
     if let Some(auth) = map.get("auth").cloned() {
         map.insert("auth".into(), serde_json::to_value(parse_auth(auth)?).unwrap_or_default());
+    }
+    if let Some(mcp) = map.get_mut("mcp").and_then(Value::as_object_mut) {
+        // `arguments` given as JSON instead of JSON text; `env` as an object.
+        if let Some(a) = mcp.get("arguments").filter(|a| !a.is_string() && !a.is_null()).cloned() {
+            mcp.insert("arguments".into(), json!(serde_json::to_string_pretty(&a).unwrap_or_default()));
+        }
+        if let Some(env) = mcp.get("env").cloned() {
+            mcp.insert(
+                "env".into(),
+                serde_json::to_value(parse_headers(env).map_err(|e| e.replacen("headers", "mcp.env", 1))?)
+                    .unwrap_or_default(),
+            );
+        }
     }
     Ok((value, query))
 }

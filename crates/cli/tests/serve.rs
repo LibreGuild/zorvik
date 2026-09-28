@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use zorvik_engine::{Client, HttpRequest, RequestOptions};
 use zorvik_workspace::Workspace;
-use zorvik_workspace::formats::{Environment, MockRoute, Server, ServerKind, Variable};
+use zorvik_workspace::formats::{Environment, McpToolMock, MockRoute, Server, ServerKind, Variable};
 
 fn workspace() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -162,4 +162,49 @@ async fn control_characters_from_clients_are_escaped() {
     assert!(line.contains(r"\u{1b}]0;owned\u{7}\u{1b}[2Jhi\r\n"), "{line:?}");
     child.kill().unwrap();
     let _ = child.wait();
+}
+
+#[test]
+fn serves_an_mcp_server_on_stdio() {
+    use std::io::Write as _;
+    let dir = workspace();
+    let ws = Workspace::open(dir.path()).unwrap();
+    let mut server = Server::new("Tools", ServerKind::Mcp);
+    server.mcp.tools = vec![McpToolMock { name: "where".into(), result: "in {{place}}".into(), ..Default::default() }];
+    ws.create_server(&server).unwrap();
+    let path = dir.path().to_str().unwrap();
+
+    let mut child = zorvik(&["serve", path, "Tools", "--stdio", "--env", "Local"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let rx = lines(&mut child);
+    let messages = [
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#,
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"where","arguments":{}}}"#,
+    ];
+    for m in messages {
+        writeln!(stdin, "{m}").unwrap();
+    }
+    let init: serde_json::Value = serde_json::from_str(&wait_line(&rx, |l| l.contains(r#""id":1"#))).unwrap();
+    assert_eq!(init["result"]["serverInfo"]["name"], "Tools");
+    assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
+    let call: serde_json::Value = serde_json::from_str(&wait_line(&rx, |l| l.contains(r#""id":2"#))).unwrap();
+    assert_eq!(call["result"]["content"][0]["text"], "in local");
+
+    // Closing stdin ends it; the traffic log went to stderr, stdout had only messages.
+    drop(stdin);
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let log = String::from_utf8_lossy(&out.stderr);
+    assert!(log.contains("tools/call"), "{log}");
+
+    // Other kinds don't speak stdio.
+    let out = zorvik(&["serve", path, "Users API", "--stdio"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("MCP servers only"));
 }

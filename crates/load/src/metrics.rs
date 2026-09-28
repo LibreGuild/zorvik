@@ -8,7 +8,11 @@
 //! Latency includes every request that got an answer (any status), plus
 //! timed-out requests and requests cut off by a stop, as the time waited (a
 //! lower bound; leaving them out would hide exactly the slow ones). Requests
-//! that could not connect count as errors but have no latency.
+//! that could not connect count as errors but have no latency. Requests
+//! dropped at the in-flight limit count as failed in the error rate.
+//!
+//! Throughput is measured over the time requests were being started: the wait
+//! for the last answers after the end (or a stop) is not part of it.
 
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
@@ -217,7 +221,8 @@ impl Stats {
         self.capture_misses += u64::from(*capture_misses);
     }
 
-    fn summary(&self, elapsed_secs: f64) -> MetricsSummary {
+    /// `secs`: the time requests were being started, for the throughput.
+    fn summary(&self, secs: f64) -> MetricsSummary {
         let mut status_codes: Vec<(u16, u64)> = self.statuses.iter().map(|(s, n)| (*s, *n)).collect();
         status_codes.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         let mut error_kinds: Vec<(String, u64)> = KINDS
@@ -227,11 +232,13 @@ impl Stats {
             .map(|(k, n)| (kind_name(*k).to_string(), n))
             .collect();
         error_kinds.sort_by_key(|k| std::cmp::Reverse(k.1));
+        // A dropped request never got an answer: it failed, like one that timed out.
+        let tried = self.requests + self.dropped;
         MetricsSummary {
             requests: self.requests,
             errors: self.errors,
-            error_rate: if self.requests == 0 { 0.0 } else { self.errors as f64 * 100.0 / self.requests as f64 },
-            rps: if elapsed_secs > 0.0 { self.requests as f64 / elapsed_secs } else { 0.0 },
+            error_rate: if tried == 0 { 0.0 } else { (self.errors + self.dropped) as f64 * 100.0 / tried as f64 },
+            rps: if secs > 0.0 { self.requests as f64 / secs } else { 0.0 },
             bytes_in: self.bytes_in,
             bytes_out: self.bytes_out,
             latency: self.latency_summary(),
@@ -309,6 +316,8 @@ pub(crate) struct Recorder {
     /// Open model: chart the average target of each second, like the request
     /// count it is compared with; users are charted at the end of the second.
     rate: bool,
+    /// When the run stopped starting requests (the planned end or a stop).
+    sending_ended: Option<Duration>,
 }
 
 impl Recorder {
@@ -328,6 +337,7 @@ impl Recorder {
             thresholds,
             profile,
             rate,
+            sending_ended: None,
         }
     }
 
@@ -370,6 +380,12 @@ impl Recorder {
         self.last_active = active;
     }
 
+    /// No request starts after `at` (the planned end or a stop): throughput
+    /// counts up to here, not the wait for requests still in flight.
+    pub(crate) fn end_sending(&mut self, at: Duration) {
+        self.sending_ended.get_or_insert(at);
+    }
+
     /// Turn seconds before `until` into chart points.
     fn close_seconds(&mut self, until: u32) {
         while self.first_open < until {
@@ -408,7 +424,7 @@ impl Recorder {
     }
 
     fn metrics(&self, elapsed: Duration) -> (MetricsSummary, Vec<TargetSummary>) {
-        let secs = elapsed.as_secs_f64();
+        let secs = self.sending_ended.map_or(elapsed, |end| end.min(elapsed)).as_secs_f64();
         let targets = self
             .names
             .iter()
@@ -514,9 +530,10 @@ pub(crate) struct SummaryInfo {
     pub peak_cpu_percent: Option<f32>,
 }
 
-/// The measured value; `None` until there is data for it.
+/// The measured value; `None` until there is data for it (dropped requests
+/// are data for the error rate and throughput: every one failed).
 fn actual(metric: ThresholdMetric, m: &MetricsSummary, stats: &Stats) -> Option<f64> {
-    if m.requests == 0 {
+    if m.requests == 0 && m.dropped == 0 {
         return None;
     }
     let l = &m.latency;
@@ -689,5 +706,63 @@ mod tests {
         assert!(!summary.passed);
         assert_eq!(number(0.5), "0.5");
         assert_eq!(number(300.0), "300");
+    }
+
+    fn info(elapsed: Duration) -> SummaryInfo {
+        SummaryInfo { started_at: 0.0, elapsed, stopped_early: false, error: None, peak_cpu_percent: None }
+    }
+
+    #[test]
+    fn dropped_requests_fail_the_error_rate() {
+        let profile =
+            Profile::new(&[LoadStage { duration_secs: 0, target: 100 }, LoadStage { duration_secs: 2, target: 100 }]);
+        let names = vec![("Fast".to_string(), "fast.yaml".to_string()), ("Gone".to_string(), "gone.yaml".to_string())];
+        let thresholds = vec![
+            threshold(ThresholdMetric::ErrorRate, ThresholdOp::Lt, 1.0, None),
+            threshold(ThresholdMetric::P95, ThresholdOp::Lt, 300.0, None),
+            threshold(ThresholdMetric::ErrorRate, ThresholdOp::Lt, 1.0, Some("gone.yaml")),
+            threshold(ThresholdMetric::P95, ThresholdOp::Lt, 300.0, Some("gone.yaml")),
+        ];
+        let mut rec = Recorder::new(names, thresholds, profile, true);
+        // Half the schedule ran (fast, all 200), half was dropped at the in-flight limit.
+        for i in 0..100 {
+            rec.record(&done(0, i * 10, 5, 200));
+            rec.record(&Sample { target: 1, at_us: i * 10_000, outcome: Outcome::Dropped });
+        }
+        let summary = rec.summary(info(Duration::from_secs(2)));
+        let t = &summary.totals;
+        assert_eq!((t.requests, t.errors, t.dropped), (100, 0, 100));
+        assert_eq!(t.error_rate, 50.0);
+        assert_eq!(summary.targets[0].metrics.error_rate, 0.0);
+        let results: Vec<(Option<f64>, bool)> = summary.thresholds.iter().map(|t| (t.actual, t.passed)).collect();
+        // Every request of "Gone" was dropped: a 100 % error rate, and no latency at all.
+        assert_eq!(results, [(Some(50.0), false), (Some(5.0), true), (Some(100.0), false), (None, false)]);
+        assert!(!summary.passed);
+    }
+
+    #[test]
+    fn throughput_leaves_out_the_wait_after_the_end() {
+        let profile =
+            Profile::new(&[LoadStage { duration_secs: 0, target: 50 }, LoadStage { duration_secs: 2, target: 50 }]);
+        let thresholds = vec![threshold(ThresholdMetric::Rps, ThresholdOp::Gte, 45.0, None)];
+        let mut rec = Recorder::new(vec![("Ok".into(), "ok.yaml".into())], thresholds, profile, true);
+        for i in 0..99 {
+            rec.record(&done(0, i * 20, 5, 200));
+        }
+        // Live, while requests are still being started: over the time so far.
+        let snap = rec.snapshot(RunPhase::Running, Duration::from_millis(1980), 1, None);
+        assert_eq!(snap.totals.rps, 50.0);
+        // The planned end; one request hangs, and the run waits for it before finishing.
+        rec.end_sending(Duration::from_secs(2));
+        let snap = rec.snapshot(RunPhase::Stopping, Duration::from_secs(5), 1, None);
+        assert_eq!((snap.totals.rps, snap.targets[0].metrics.rps), (49.5, 49.5));
+        rec.record(&done(0, 7000, 5000, 200));
+        let summary = rec.summary(info(Duration::from_secs(7)));
+        assert_eq!(summary.duration_ms, 7000);
+        assert_eq!((summary.totals.rps, summary.targets[0].metrics.rps), (50.0, 50.0));
+        assert!(summary.passed, "{:?}", summary.thresholds);
+        // Only the first end counts (a stop while winding down changes nothing).
+        rec.end_sending(Duration::from_secs(9));
+        assert_eq!(rec.summary(info(Duration::from_secs(10))).totals.rps, 50.0);
     }
 }

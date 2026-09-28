@@ -21,8 +21,8 @@ use zorvik_formats::{
 
 use crate::error::{Error, ErrorCode, Result};
 use crate::fsutil::{
-    MAX_YAML_FILE, atomic_write, atomic_write_private, copy_dir, is_reserved_name, is_symlink, read_yaml,
-    sanitize_file_stem, unique_name, write_yaml,
+    MAX_YAML_FILE, atomic_write, atomic_write_private, claim_unique_name, copy_dir, is_reserved_name, is_symlink,
+    read_yaml, sanitize_file_stem, unique_name, write_yaml,
 };
 
 pub const META_FILE: &str = "zorvik.yaml";
@@ -301,8 +301,8 @@ impl Workspace {
     fn write_new_request(&self, dir: &Path, mut request: Request) -> Result<PathBuf> {
         validate_name(&request.name)?;
         request.name = request.name.trim().to_string();
-        let file = dir.join(unique_name(dir, &sanitize_file_stem(&request.name), EXT, None));
-        write_yaml(&file, &request)?;
+        let file = dir.join(claim_unique_name(dir, &sanitize_file_stem(&request.name), EXT)?);
+        write_yaml(&file, &request).inspect_err(|_| drop(std::fs::remove_file(&file)))?;
         Ok(file)
     }
 
@@ -319,8 +319,8 @@ impl Workspace {
     fn write_new_folder(&self, dir: &Path, mut meta: FolderMeta) -> Result<PathBuf> {
         validate_name(&meta.name)?;
         meta.name = meta.name.trim().into();
-        let folder = dir.join(unique_name(dir, &sanitize_file_stem(&meta.name), "", None));
-        std::fs::create_dir_all(&folder).map_err(|e| Error::io("Could not create folder", e))?;
+        std::fs::create_dir_all(dir).map_err(|e| Error::io("Could not create folder", e))?;
+        let folder = dir.join(claim_unique_name(dir, &sanitize_file_stem(&meta.name), "")?);
         write_yaml(&folder.join(FOLDER_FILE), &meta)?;
         Ok(folder)
     }
@@ -578,8 +578,8 @@ impl Workspace {
             return Err(Error::invalid(format!("{} is a symbolic link, which is not followed", dir.display())));
         }
         std::fs::create_dir_all(&dir).map_err(|e| Error::io("Could not create environments folder", e))?;
-        let file_name = unique_name(&dir, &sanitize_file_stem(&env.name), EXT, None);
-        write_yaml(&dir.join(&file_name), env)?;
+        let file_name = claim_unique_name(&dir, &sanitize_file_stem(&env.name), EXT)?;
+        write_yaml(&dir.join(&file_name), env).inspect_err(|_| drop(std::fs::remove_file(dir.join(&file_name))))?;
         Ok(file_name[..file_name.len() - EXT.len()].to_string())
     }
 
@@ -682,10 +682,10 @@ impl Workspace {
         std::fs::create_dir_all(&dir).map_err(|e| Error::io(format!("Could not create the {} folder", T::DIR), e))?;
         let seq =
             self.flat_list::<T>().iter().filter_map(|(_, t)| t.as_ref().ok().map(|t| t.seq() + 1)).max().unwrap_or(0);
-        let file_name = unique_name(&dir, &sanitize_file_stem(item.name()), EXT, None);
+        let file_name = claim_unique_name(&dir, &sanitize_file_stem(item.name()), EXT)?;
         let mut item = item.clone();
         item.set_seq(seq);
-        write_flat(&dir.join(&file_name), &item)?;
+        write_flat(&dir.join(&file_name), &item).inspect_err(|_| drop(std::fs::remove_file(dir.join(&file_name))))?;
         Ok(file_name[..file_name.len() - EXT.len()].to_string())
     }
 

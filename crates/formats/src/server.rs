@@ -58,6 +58,8 @@ pub enum ServerKind {
     /// Socket.IO server (Socket.IO 3 and 4: WebSocket and HTTP long-polling).
     #[serde(rename = "socketio")]
     SocketIo,
+    /// MCP server (Streamable HTTP and HTTP+SSE; stdio with `zorvik serve --stdio`).
+    Mcp,
 }
 
 impl ServerKind {
@@ -65,7 +67,12 @@ impl ServerKind {
     pub fn supports_tls(self) -> bool {
         matches!(
             self,
-            ServerKind::Http | ServerKind::Websocket | ServerKind::Sse | ServerKind::Tcp | ServerKind::SocketIo
+            ServerKind::Http
+                | ServerKind::Websocket
+                | ServerKind::Sse
+                | ServerKind::Tcp
+                | ServerKind::SocketIo
+                | ServerKind::Mcp
         )
     }
 }
@@ -430,6 +437,275 @@ impl Default for SocketIoServerConfig {
     }
 }
 
+// ---- MCP ----------------------------------------------------------------------
+
+fn mcp_path() -> String {
+    "/mcp".to_string()
+}
+fn is_mcp_path(v: &String) -> bool {
+    v == "/mcp"
+}
+
+/// A tool of an MCP server. Its result may use `{{args.name}}` (one argument, text as it is),
+/// `{{args}}` (all of them as JSON), dynamic variables and environment variables.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct McpToolMock {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub description: String,
+    /// JSON Schema of the arguments, as JSON text (empty: any object).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub input_schema: String,
+    /// JSON Schema of a structured result, as JSON text: then the result must be JSON, and is
+    /// also sent as `structuredContent`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub output_schema: String,
+    /// The result's text.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub result: String,
+    /// Answer as a failed tool call (`isError`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional, as = "Option<bool>")]
+    pub is_error: bool,
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    #[ts(optional, as = "Option<u32>")]
+    pub delay_ms: u64,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    #[ts(optional, as = "Option<bool>")]
+    pub enabled: bool,
+}
+
+impl Default for McpToolMock {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            title: String::new(),
+            description: String::new(),
+            input_schema: String::new(),
+            output_schema: String::new(),
+            result: String::new(),
+            is_error: false,
+            delay_ms: 0,
+            enabled: true,
+        }
+    }
+}
+
+/// A resource of an MCP server. A URI with `{name}` parts is a template: reads fill them in,
+/// and its text may use `{{params.name}}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct McpResourceMock {
+    #[serde(default)]
+    pub uri: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub description: String,
+    /// Default `text/plain`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub mime_type: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub text: String,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    #[ts(optional, as = "Option<bool>")]
+    pub enabled: bool,
+}
+
+impl Default for McpResourceMock {
+    fn default() -> Self {
+        Self {
+            uri: String::new(),
+            name: String::new(),
+            title: String::new(),
+            description: String::new(),
+            mime_type: String::new(),
+            text: String::new(),
+            enabled: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct McpPromptArgument {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional, as = "Option<bool>")]
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct McpPromptMessage {
+    /// `user` (default) or `assistant`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub role: String,
+    /// The message's text; may use `{{args.name}}`.
+    #[serde(default)]
+    pub text: String,
+}
+
+/// A prompt of an MCP server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct McpPromptMock {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<McpPromptArgument>>")]
+    pub arguments: Vec<McpPromptArgument>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<McpPromptMessage>>")]
+    pub messages: Vec<McpPromptMessage>,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    #[ts(optional, as = "Option<bool>")]
+    pub enabled: bool,
+}
+
+impl Default for McpPromptMock {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            title: String::new(),
+            description: String::new(),
+            arguments: Vec::new(),
+            messages: Vec::new(),
+            enabled: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct McpServerConfig {
+    /// The name clients see (`serverInfo.name`); empty: the server's name.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub server_name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub version: String,
+    /// Sent with `initialize`: how to use the server.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub instructions: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<McpToolMock>>")]
+    pub tools: Vec<McpToolMock>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<McpResourceMock>>")]
+    pub resources: Vec<McpResourceMock>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<McpPromptMock>>")]
+    pub prompts: Vec<McpPromptMock>,
+    /// The Streamable HTTP endpoint (HTTP+SSE clients use `/sse`).
+    #[serde(default = "mcp_path", skip_serializing_if = "is_mcp_path")]
+    #[ts(optional, as = "Option<String>")]
+    pub path: String,
+    /// Allow browser-based clients on other origins (CORS).
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional, as = "Option<bool>")]
+    pub cors: bool,
+}
+
+impl Default for McpServerConfig {
+    fn default() -> Self {
+        Self {
+            server_name: String::new(),
+            version: String::new(),
+            instructions: String::new(),
+            tools: Vec::new(),
+            resources: Vec::new(),
+            prompts: Vec::new(),
+            path: mcp_path(),
+            cors: false,
+        }
+    }
+}
+
+impl McpServerConfig {
+    /// Settings clients would trip over, in words: missing or repeated names, schemas that
+    /// aren't JSON objects, a path the server can't answer on.
+    pub fn problems(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let path = self.path.trim();
+        if !path.starts_with('/') {
+            out.push(format!("The endpoint path must start with / (got \"{path}\")"));
+        } else if path == "/sse" || path == "/messages" {
+            out.push(format!("The endpoint path can't be {path}: the older HTTP+SSE transport uses it"));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for (i, tool) in self.tools.iter().enumerate().filter(|(_, t)| t.enabled) {
+            let name = tool.name.trim();
+            if name.is_empty() {
+                out.push(format!("Tool {} has no name", i + 1));
+                continue;
+            }
+            if !seen.insert(name) {
+                out.push(format!("Two tools are named \"{name}\""));
+            }
+            for (what, text) in [("input schema", &tool.input_schema), ("output schema", &tool.output_schema)] {
+                let object = serde_json::from_str::<serde_json::Value>(text).is_ok_and(|v| v.is_object());
+                if !text.trim().is_empty() && !object {
+                    out.push(format!("Tool \"{name}\": the {what} is not a JSON object"));
+                }
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        for (i, resource) in self.resources.iter().enumerate().filter(|(_, r)| r.enabled) {
+            let uri = resource.uri.trim();
+            if uri.is_empty() {
+                out.push(format!("Resource {} has no URI", i + 1));
+            } else if !seen.insert(uri) {
+                out.push(format!("Two resources have the URI \"{uri}\""));
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        for (i, prompt) in self.prompts.iter().enumerate().filter(|(_, p)| p.enabled) {
+            let name = prompt.name.trim();
+            if name.is_empty() {
+                out.push(format!("Prompt {} has no name", i + 1));
+            } else if !seen.insert(name) {
+                out.push(format!("Two prompts are named \"{name}\""));
+            }
+        }
+        out
+    }
+}
+
 // ---- TCP / UDP ---------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -578,6 +854,9 @@ pub struct Server {
     #[serde(default, skip_serializing_if = "is_default")]
     #[ts(optional, as = "Option<SocketIoServerConfig>")]
     pub socketio: SocketIoServerConfig,
+    #[serde(default, skip_serializing_if = "is_default")]
+    #[ts(optional, as = "Option<McpServerConfig>")]
+    pub mcp: McpServerConfig,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     #[ts(optional, as = "Option<String>")]
     pub docs: String,
@@ -594,6 +873,7 @@ impl Server {
             ServerKind::Dns => 1053,
             ServerKind::TcpProxy => 9100,
             ServerKind::SocketIo => 3003,
+            ServerKind::Mcp => 3004,
         };
         Self {
             name: name.into(),
@@ -610,6 +890,7 @@ impl Server {
             dns: DnsServerConfig::default(),
             proxy: TcpProxyConfig::default(),
             socketio: SocketIoServerConfig::default(),
+            mcp: McpServerConfig::default(),
             docs: String::new(),
         }
     }
@@ -654,5 +935,27 @@ mod tests {
         assert!(!yaml.contains("http:") && !yaml.contains("dns:"), "{yaml}");
         assert!(yaml.contains("match: contains"), "{yaml}");
         assert_eq!(serde_yaml_ng::from_str::<Server>(&yaml).unwrap(), s);
+    }
+
+    #[test]
+    fn mcp_settings_problems() {
+        let tool = |name: &str, schema: &str| McpToolMock {
+            name: name.into(),
+            input_schema: schema.into(),
+            ..Default::default()
+        };
+        let mut config = McpServerConfig { tools: vec![tool("a", r#"{"type":"object"}"#)], ..Default::default() };
+        assert!(config.problems().is_empty());
+        config.tools.push(tool("a", ""));
+        config.tools.push(tool(" ", ""));
+        config.tools.push(tool("b", "[1]"));
+        config.path = "/sse".into();
+        let problems = config.problems();
+        assert_eq!(problems.len(), 4, "{problems:?}");
+        assert!(problems.iter().any(|p| p.contains("named \"a\"")));
+        assert!(problems.iter().any(|p| p.contains("input schema is not a JSON object")));
+        // Switched-off tools don't count.
+        config.tools[1].enabled = false;
+        assert_eq!(config.problems().len(), 3);
     }
 }

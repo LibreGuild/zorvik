@@ -32,13 +32,15 @@ pub(crate) async fn run(listener: TcpListener, mut ctx: Ctx) -> Result<(), Strin
     let mut live = ctx.live.clone();
     let first = live.borrow_and_update().clone();
     let mut reported = report_rule_problems(&first, &ctx.reporter, &[]);
+    let slots = crate::connections_limit::Slots::new();
     loop {
         tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok((stream, peer)) => {
+                    let Some(slot) = slots.take(&ctx.reporter) else { continue };
                     let _ = stream.set_nodelay(true);
                     // Ids follow accept order (assigned here, not in the spawned task).
-                    tokio::spawn(connection(
+                    let task = connection(
                         stream,
                         ctx.reporter.next_conn(),
                         peer,
@@ -47,7 +49,11 @@ pub(crate) async fn run(listener: TcpListener, mut ctx: Ctx) -> Result<(), Strin
                         ctx.reporter.clone(),
                         conns.clone(),
                         ctx.cancel.child_token(),
-                    ));
+                    );
+                    tokio::spawn(async move {
+                        task.await;
+                        drop(slot);
+                    });
                 }
                 Err(e) => {
                     // E.g. too many open files: report and back off instead of spinning.

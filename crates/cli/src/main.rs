@@ -75,6 +75,10 @@ struct ServeArgs {
     /// Print JSON lines (the start, then one per traffic entry) instead of text.
     #[arg(long)]
     json: bool,
+    /// MCP servers only: talk MCP over stdin and stdout instead of listening on a port, so an
+    /// AI app can start the mock as a program. The traffic log goes to stderr.
+    #[arg(long)]
+    stdio: bool,
 }
 
 #[derive(Parser)]
@@ -141,6 +145,9 @@ struct RunArgs {
     /// Skip TLS certificate verification.
     #[arg(short = 'k', long)]
     insecure: bool,
+    /// Let MCP requests start the programs they name (stdio servers). Only for workspaces you trust.
+    #[arg(long)]
+    allow_programs: bool,
     /// Let requests send body files from outside the workspace folder.
     #[arg(long)]
     allow_outside_files: bool,
@@ -154,6 +161,7 @@ struct RunArgs {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    zorvik_engine::raise_open_file_limit();
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio runtime");
     match cli.command {
         Command::Run(args) => runtime.block_on(run(args)),
@@ -309,6 +317,8 @@ async fn run(args: RunArgs) -> ExitCode {
         jar: Some(&jar),
         guard: None,
         specs: Some(&specs),
+        programs: if args.allow_programs { zorvik_api::mcp::Programs::Any } else { zorvik_api::mcp::Programs::None },
+        mcp_session: None,
     };
 
     // Ctrl+C stops the run; the summary so far is still printed (and saved).
@@ -388,6 +398,7 @@ fn kind_name(kind: RequestKind) -> &'static str {
         RequestKind::Mqtt => "MQTT",
         RequestKind::Grpc => "gRPC",
         RequestKind::SocketIo => "Socket.IO",
+        RequestKind::Mcp => "MCP",
     }
 }
 
@@ -769,7 +780,7 @@ fn print_load_summary(name: &str, s: &Summary, paint: &dyn Fn(&str, &str) -> Str
     out(&format!("  Requests   {} ({} req/s)", thousands(t.requests), fixed1(t.rps)));
     out(&format!("  Errors     {} ({} %)", thousands(t.errors), fixed2(t.error_rate)));
     if t.dropped > 0 {
-        out(&format!("  Dropped    {} (in-flight limit reached)", thousands(t.dropped)));
+        out(&format!("  Dropped    {} (in-flight limit reached; they count as errors)", thousands(t.dropped)));
     }
     out(&format!(
         "  Latency    min {}  avg {}  p50 {}  p90 {}  p95 {}  p99 {}  p99.9 {}  max {}",
@@ -921,6 +932,7 @@ fn kind_label(kind: ServerKind) -> &'static str {
         ServerKind::Dns => "DNS server",
         ServerKind::TcpProxy => "TCP relay",
         ServerKind::SocketIo => "Socket.IO server",
+        ServerKind::Mcp => "MCP server",
     }
 }
 
@@ -992,6 +1004,9 @@ async fn serve(args: ServeArgs) -> ExitCode {
         Err(e) => return fail(e.message),
     };
     let options = StartOptions { base_dir: ws.root().to_path_buf(), client: Arc::new(Client::new()), request_options };
+    if args.stdio {
+        return serve_stdio(server, vars, args.json).await;
+    }
 
     let (stopped_tx, mut stopped_rx) = tokio::sync::mpsc::unbounded_channel();
     let started = Instant::now();
@@ -1049,6 +1064,34 @@ async fn serve(args: ServeArgs) -> ExitCode {
             Some(e) => fail(format!("the server stopped: {e}")),
             None => ExitCode::SUCCESS,
         },
+    }
+}
+
+/// `serve --stdio`: an MCP server on stdin and stdout, the traffic log on stderr (stdout carries
+/// the protocol, so nothing else may be printed there).
+async fn serve_stdio(server: Server, vars: VarContext, json: bool) -> ExitCode {
+    if server.kind != ServerKind::Mcp {
+        return fail(format!(
+            "--stdio works with MCP servers only; \"{}\" is a {}",
+            printable(&server.name),
+            kind_label(server.kind)
+        ));
+    }
+    let started = Instant::now();
+    let color = !json && std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let reporter = Reporter::new(move |event| {
+        if let ServerEvent::Traffic { entry } = event {
+            let line = if json {
+                serde_json::json!({ "type": "traffic", "entry": entry }).to_string()
+            } else {
+                traffic_line(&entry, started, color)
+            };
+            eprintln!("{line}");
+        }
+    });
+    match zorvik_servers::mcp::serve_stdio(server, vars, reporter, tokio::io::stdin(), tokio::io::stdout()).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => fail(e),
     }
 }
 

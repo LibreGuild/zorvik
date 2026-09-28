@@ -13,6 +13,13 @@
 use base64::Engine as _;
 use serde_json::{Value, json};
 
+/// Binary attachments one packet may announce.
+pub const MAX_ATTACHMENTS: usize = 64;
+/// Bytes of attachments one packet may carry in all.
+pub const MAX_ATTACHMENT_BYTES: usize = 64 << 20;
+/// The longest ping interval or timeout a handshake may set (10 minutes).
+const MAX_PING_MS: u64 = 600_000;
+
 /// Engine.IO packet types.
 pub const OPEN: char = '0';
 pub const CLOSE: char = '1';
@@ -141,7 +148,8 @@ impl Packet {
         out
     }
 
-    /// Read a Socket.IO string (without the Engine.IO `4`).
+    /// Read a Socket.IO string (without the Engine.IO `4`). The other side chooses the numbers
+    /// in it, so they are bounded ([`MAX_ATTACHMENTS`]).
     pub fn decode(text: &str) -> Result<Self, String> {
         let mut rest = text;
         let first = rest.chars().next().ok_or("an empty packet")?;
@@ -151,6 +159,9 @@ impl Packet {
         if kind.is_binary() {
             let (count, after) = rest.split_once('-').ok_or("a binary packet without an attachment count")?;
             attachments = count.parse().map_err(|_| format!("a bad attachment count '{count}'"))?;
+            if attachments > MAX_ATTACHMENTS {
+                return Err(format!("a binary packet with more than {MAX_ATTACHMENTS} attachments"));
+            }
             rest = after;
         }
         let mut namespace = "/".to_string();
@@ -298,8 +309,8 @@ impl Handshake {
                 .as_array()
                 .map(|a| a.iter().filter_map(|u| u.as_str().map(String::from)).collect())
                 .unwrap_or_default(),
-            ping_interval: v["pingInterval"].as_u64().unwrap_or(25_000),
-            ping_timeout: v["pingTimeout"].as_u64().unwrap_or(20_000),
+            ping_interval: v["pingInterval"].as_u64().unwrap_or(25_000).min(MAX_PING_MS),
+            ping_timeout: v["pingTimeout"].as_u64().unwrap_or(20_000).min(MAX_PING_MS),
             max_payload: v["maxPayload"].as_u64().unwrap_or(1_000_000),
         })
     }
@@ -329,6 +340,17 @@ mod tests {
         let packet = Packet::decode(text).unwrap_or_else(|e| panic!("{text}: {e}"));
         assert_eq!(packet.encode(), text);
         packet
+    }
+
+    #[test]
+    fn numbers_from_the_other_side_are_bounded() {
+        assert!(Packet::decode("51000000000-[\"e\"]").unwrap_err().contains("more than 64 attachments"));
+        assert_eq!(Packet::decode("564-[\"e\"]").unwrap().attachments, 64);
+        let h = Handshake::parse(
+            r#"{"sid":"x","upgrades":[],"pingInterval":18446744073709551615,"pingTimeout":18446744073709551615}"#,
+        )
+        .unwrap();
+        assert!(h.ping_interval + h.ping_timeout <= 1_200_000);
     }
 
     #[test]

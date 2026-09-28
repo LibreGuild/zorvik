@@ -24,7 +24,15 @@ const RELEASES_PAGE: &str = "https://github.com/LibreGuild/zorvik/releases";
 /// The first check waits until the app has settled.
 const FIRST_CHECK: Duration = Duration::from_secs(20);
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
-const TIMEOUT: Duration = Duration::from_secs(30);
+/// Connecting to a server, shared across its addresses: GitHub's download host has several,
+/// and one that doesn't answer from some networks must not stall the check (the OS waits over
+/// a minute for a single address).
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// The longest wait for more data, for the check and the download (a slow download that
+/// keeps going is fine: there is no limit on the whole transfer).
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// The whole check (the small release JSON, after redirects).
+const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
 /// Emitted to the UI whenever the state changes.
 const EVENT: &str = "zv:update";
 
@@ -288,7 +296,7 @@ pub async fn check(app: AppHandle, manual: bool) {
     let found = match find(&app, channel, proxy).await {
         Ok(found) => found,
         Err(e) => {
-            tracing::info!("update check failed: {e}");
+            tracing::info!("update check failed: {}", causes(&e));
             // Background checks fail quietly (offline, a proxy); asking shows why.
             let status = if manual { Status::Failed { message: plain(&e) } } else { Status::Idle };
             updates.set(&app, status);
@@ -361,13 +369,21 @@ async fn find(
         .unwrap_or_else(|| (if channel == Channel::Nightly { NIGHTLY_URL } else { STABLE_URL }).to_string());
     let endpoint = url::Url::parse(&url).map_err(|e| tauri_plugin_updater::Error::Io(std::io::Error::other(e)))?;
     let built = built_at();
-    let mut builder = app.updater_builder().endpoints(vec![endpoint])?.timeout(TIMEOUT).version_comparator(
-        move |current, remote: RemoteRelease| is_newer(channel, &current, built, &remote.version, remote.pub_date),
-    );
+    let mut builder = app
+        .updater_builder()
+        .endpoints(vec![endpoint])?
+        .configure_client(|client| client.connect_timeout(CONNECT_TIMEOUT).read_timeout(READ_TIMEOUT))
+        .version_comparator(move |current, remote: RemoteRelease| {
+            is_newer(channel, &current, built, &remote.version, remote.pub_date)
+        });
     if let Some(proxy) = proxy {
         builder = builder.proxy(proxy);
     }
-    builder.build()?.check().await
+    let updater = builder.build()?;
+    match tokio::time::timeout(CHECK_TIMEOUT, updater.check()).await {
+        Ok(result) => result,
+        Err(_) => Err(tauri_plugin_updater::Error::Network("GitHub didn't answer in time".into())),
+    }
 }
 
 /// Install the downloaded update now and start the new version. On Windows the installer
@@ -378,9 +394,11 @@ pub fn install_now(app: &AppHandle) -> Result<(), String> {
         return Err("No update is ready".into());
     };
     updates.set(app, Status::Installing);
-    // The Windows installer ends this process itself: stop things first.
+    // The Windows installer ends this process itself: stop servers and load tests first. The
+    // agents' listener stays: if the install fails, the app carries on with it (and the process
+    // ending takes it down otherwise).
     #[cfg(windows)]
-    before_exit(app);
+    stop_work(app);
     if let Err(e) = update.install(&bytes) {
         // The app keeps running as it was; the notice links to the download instead.
         tracing::warn!("installing the update failed: {e}");
@@ -404,14 +422,20 @@ pub fn install_on_quit(app: &AppHandle) {
     }
 }
 
-/// What quitting does anyway, before an installer takes over (it ends the process itself on
-/// Windows): stop servers and load tests, close the agents' listener.
+/// What quitting does anyway, before the new version starts: stop servers and load tests,
+/// close the agents' listener.
+#[cfg(not(windows))]
 fn before_exit(app: &AppHandle) {
-    if let Some(api) = app.try_state::<Api>() {
-        api.stop_all_servers();
-    }
+    stop_work(app);
     if let Some(listener) = app.try_state::<zorvik_mcp::listener::AgentListener>() {
         listener.shutdown();
+    }
+}
+
+/// Stop servers and load tests.
+fn stop_work(app: &AppHandle) {
+    if let Some(api) = app.try_state::<Api>() {
+        api.stop_all_servers();
     }
 }
 
@@ -427,11 +451,28 @@ pub fn start(app: &AppHandle) {
     });
 }
 
+/// An error and what caused it, for the log ("error sending request" alone says little).
+fn causes(e: &dyn std::error::Error) -> String {
+    let mut text = e.to_string();
+    let mut source = e.source();
+    while let Some(cause) = source {
+        text.push_str(&format!(": {cause}"));
+        source = cause.source();
+    }
+    text
+}
+
 /// An error in a sentence for the UI.
 fn plain(e: &tauri_plugin_updater::Error) -> String {
     use tauri_plugin_updater::Error as E;
     match e {
         E::ReleaseNotFound => "No release was found on GitHub.".into(),
+        E::Reqwest(e) if e.is_timeout() => {
+            "GitHub didn't answer in time. Try again in a moment, or check your connection or proxy.".into()
+        }
+        E::Network(message) if message.contains("in time") => {
+            "GitHub didn't answer in time. Try again in a moment, or check your connection or proxy.".into()
+        }
         E::Reqwest(_) | E::Network(_) => "Could not reach GitHub. Check your connection or proxy.".into(),
         other => other.to_string(),
     }
@@ -505,5 +546,28 @@ mod tests {
             s,
             serde_json::json!({ "state": "available", "version": "1.0.0", "notes": null, "date": null, "byHand": true })
         );
+    }
+
+    #[test]
+    fn failures_in_words() {
+        let late = tauri_plugin_updater::Error::Network("GitHub didn't answer in time".into());
+        assert!(plain(&late).starts_with("GitHub didn't answer in time."), "{}", plain(&late));
+        let other = tauri_plugin_updater::Error::Network("refused".into());
+        assert_eq!(plain(&other), "Could not reach GitHub. Check your connection or proxy.");
+        // The log gets what caused it too.
+        #[derive(Debug)]
+        struct Sending(std::io::Error);
+        impl std::fmt::Display for Sending {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("error sending request")
+            }
+        }
+        impl std::error::Error for Sending {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+        let timed_out = Sending(std::io::Error::new(std::io::ErrorKind::TimedOut, "operation timed out"));
+        assert_eq!(causes(&timed_out), "error sending request: operation timed out");
     }
 }

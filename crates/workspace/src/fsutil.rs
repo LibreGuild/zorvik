@@ -170,6 +170,28 @@ pub fn unique_name(dir: &Path, stem: &str, ext: &str, exclude: Option<&Path>) ->
     }
 }
 
+/// Like [`unique_name`], and taken: an empty file (or, for `ext` "", a folder) is created with
+/// that name before it's returned, so two creates at once can't pick the same one and the
+/// second overwrite the first. The caller writes the content over it.
+pub fn claim_unique_name(dir: &Path, stem: &str, ext: &str) -> Result<String> {
+    for _ in 0..1000 {
+        let name = unique_name(dir, stem, ext, None);
+        let path = dir.join(&name);
+        let claimed = if ext.is_empty() {
+            std::fs::create_dir(&path)
+        } else {
+            std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map(drop)
+        };
+        match claimed {
+            Ok(()) => return Ok(name),
+            // Taken meanwhile: the next name.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(Error::io(format!("Could not create {}", path.display()), e)),
+        }
+    }
+    Err(Error::invalid(format!("Could not find a free name for {stem} in {}", dir.display())))
+}
+
 /// Recursively copy a directory. Symbolic links are skipped: following one
 /// could copy files from outside the workspace into it, or loop forever.
 pub fn copy_dir(from: &Path, to: &Path) -> Result<()> {
@@ -214,6 +236,20 @@ mod tests {
         assert_eq!(sanitize_file_stem("console"), "console");
         assert_eq!(sanitize_file_stem("_FOLDER"), "untitled");
         assert!(is_reserved_name("aux.yaml") && !is_reserved_name("auxiliary.yaml"));
+    }
+
+    #[test]
+    fn claimed_names_are_never_shared() {
+        let dir = tempfile::tempdir().unwrap();
+        let names: Vec<String> = std::thread::scope(|scope| {
+            let handles: Vec<_> =
+                (0..8).map(|_| scope.spawn(|| claim_unique_name(dir.path(), "Get user", ".yaml").unwrap())).collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        let distinct: HashSet<&String> = names.iter().collect();
+        assert_eq!(distinct.len(), 8, "{names:?}");
+        assert!(dir.path().join(&names[0]).is_file());
+        assert!(dir.path().join(claim_unique_name(dir.path(), "Users", "").unwrap()).is_dir());
     }
 
     #[test]

@@ -84,9 +84,10 @@ export const SERVER_KIND_NAMES: Record<ServerKind, string> = {
   dns: "DNS server",
   tcpProxy: "TCP relay",
   socketio: "Socket.IO server",
+  mcp: "MCP server",
 };
 
-const DEFAULT_PORTS: Record<ServerKind, number> = { http: 3000, websocket: 3001, sse: 3002, tcp: 9000, udp: 9001, dns: 1053, tcpProxy: 9100, socketio: 3003 };
+const DEFAULT_PORTS: Record<ServerKind, number> = { http: 3000, websocket: 3001, sse: 3002, tcp: 9000, udp: 9001, dns: 1053, tcpProxy: 9100, socketio: 3003, mcp: 3004 };
 
 export function newServerDraft(kind: ServerKind, name = SERVER_KIND_NAMES[kind]): Server {
   // A port not used by another saved server, so a new one starts right away.
@@ -99,6 +100,20 @@ export function newServerDraft(kind: ServerKind, name = SERVER_KIND_NAMES[kind])
   if (kind === "dns") server.dns = { records: [{ name: "api.example.test", type: "A", value: "127.0.0.1", ttl: 60 }], upstream: "system" };
   if (kind === "tcpProxy") server.proxy = { target: "example.com:80" };
   if (kind === "socketio") server.socketio = { greetingEvent: "welcome", greetingArgs: '{"id": "{{$uuid}}"}' };
+  if (kind === "mcp") {
+    server.mcp = {
+      tools: [
+        {
+          name: "get_weather",
+          description: "The current weather in a city.",
+          inputSchema: '{\n  "type": "object",\n  "properties": {\n    "city": { "type": "string", "description": "City name" }\n  },\n  "required": ["city"]\n}',
+          result: '{"city": "{{args.city}}", "forecast": "sunny", "temperatureC": 21}',
+        },
+      ],
+      resources: [{ uri: "docs://readme", name: "readme", mimeType: "text/markdown", text: "# Weather service\n\nAsk get_weather for any city." }],
+      prompts: [{ name: "plan_trip", description: "Plan a day out", arguments: [{ name: "city", required: true }], messages: [{ role: "user", text: "Plan a day in {{args.city}} that suits the weather." }] }],
+    };
+  }
   return server;
 }
 
@@ -224,7 +239,10 @@ export async function startServer(serverId: string, server: Server): Promise<boo
     await loadBacklog(key, info.runId);
     return true;
   } catch (e) {
-    toast("error", `Could not start "${server.name}"`, errorMessage(e));
+    const message = errorMessage(e);
+    toast("error", `Could not start "${server.name}"`, message);
+    // Out of step with the backend (e.g. an AI agent started it): show it as running.
+    if (/already running/i.test(message)) void refreshRunning();
     return false;
   } finally {
     setBusy(key, false);
@@ -262,8 +280,14 @@ export async function stopAllServers() {
     });
     if (!ok) return;
   }
-  await api.stopAllServers().catch((e) => toast("error", "Could not stop servers", errorMessage(e)));
-  set({ running: [] });
+  try {
+    await api.stopAllServers();
+    set({ running: [] });
+  } catch (e) {
+    toast("error", "Could not stop servers", errorMessage(e));
+    // Some may have stopped: show what still runs.
+    await refreshRunning();
+  }
 }
 
 /** Restart with the current configuration (needed after changing address, port or TLS). */
@@ -346,6 +370,17 @@ async function loadBacklog(key: string, runId: string) {
 
 // ---- events (batched per animation frame: servers can log thousands of entries a second) ----
 
+/** Runs seen in events but not in the list, asked about once each. */
+const unlisted = new Set<string>();
+
+/** A run this window didn't start (e.g. an AI agent started it): list it, with its log so far. */
+function askAbout(runId: string) {
+  // A start in progress lists its own run (and loads its log) when it returns.
+  if (unlisted.has(runId) || Object.values(get().busy).some(Boolean)) return;
+  unlisted.add(runId);
+  void refreshRunning();
+}
+
 let pendingTraffic: Record<string, TrafficEntry[]> = {};
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -384,19 +419,28 @@ onEvent((e) => {
     })();
     return;
   }
+  // An AI agent started a server: the backend says so only to the agents view, and an idle server sends no events.
+  if (e.type === "agent") {
+    if (e.event.type === "show" && e.event.target.type === "server") void refreshRunning();
+    return;
+  }
   if (e.type !== "server") return;
   const info = get().running.find((r) => r.runId === e.runId);
   const ev = e.event;
-  if (ev.type === "stats") {
-    if (info) set((s) => ({ running: s.running.map((r) => (r.runId === e.runId ? { ...r, stats: ev.stats } : r)) }));
-    return;
-  }
   if (ev.type === "stopped") {
+    unlisted.delete(e.runId);
     if (ev.error) toast("error", `${info?.name ?? "A server"} stopped`, ev.error);
     set((s) => ({ running: s.running.filter((r) => r.runId !== e.runId) }));
     return;
   }
-  if (!info) return; // started from elsewhere and not listed yet; `startServer` loads its log
+  if (!info) {
+    askAbout(e.runId);
+    return;
+  }
+  if (ev.type === "stats") {
+    set((s) => ({ running: s.running.map((r) => (r.runId === e.runId ? { ...r, stats: ev.stats } : r)) }));
+    return;
+  }
   const key = serverKey(info.workspacePath, info.serverId);
   claimLog(key, e.runId);
   (pendingTraffic[key] ??= []).push(ev.entry);

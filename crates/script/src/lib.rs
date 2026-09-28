@@ -397,8 +397,10 @@ fn execute(
     runtime.set_host_promise_rejection_tracker(Some(Box::new(move |ctx, promise, reason, handled| {
         let Some(promise) = promise.as_object() else { return };
         if handled {
-            if let Ok(id) = promise.get::<_, u32>(UNHANDLED_TAG) {
-                seen.borrow_mut().retain(|(i, _)| *i != id);
+            if let Ok(id) = promise.get::<_, u32>(UNHANDLED_TAG)
+                && let Ok(mut seen) = seen.try_borrow_mut()
+            {
+                seen.retain(|(i, _)| *i != id);
             }
             return;
         }
@@ -408,7 +410,10 @@ fn execute(
             Some(exception) => CaughtError::Exception(exception),
             None => CaughtError::Value(reason),
         };
-        seen.borrow_mut().push((next_id.get(), script_error(&ctx, caught)));
+        // Described first: that can run the script's own code (a getter), which can reject
+        // another promise and come back here while nothing is borrowed.
+        let error = script_error(&ctx, caught);
+        seen.borrow_mut().push((next_id.get(), error));
     })));
     let context = Context::full(&runtime).map_err(internal)?;
 

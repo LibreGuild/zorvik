@@ -637,7 +637,12 @@ async fn relay(
                     deadline.as_mut().reset(tokio::time::Instant::now() + alive);
                     if let Some((packet, attachments)) = assembling.as_mut() {
                         attachments.push(bytes);
-                        if attachments.len() >= packet.attachments {
+                        if attachments.iter().map(Vec::len).sum::<usize>() > packet::MAX_ATTACHMENT_BYTES {
+                            assembling = None;
+                            let _ = events.send(SocketEvent::Error {
+                                message: format!("The server sent more than {} MB of attachments for one event; it was dropped", packet::MAX_ATTACHMENT_BYTES >> 20),
+                            });
+                        } else if attachments.len() >= packet.attachments {
                             let (mut packet, attachments) = assembling.take().expect("assembling");
                             if let Some(data) = packet.data.as_mut() {
                                 packet::fill_placeholders(data, &attachments);

@@ -25,7 +25,7 @@ Iteration 1 of 2
 ✓ GET     Profile  https://api.example.com/me  200 41 ms, 1204 B
     ✓ token works
     ✓ not bob
-– WS      Live prices  (skipped: WebSocket connections are live sessions; the runner sends HTTP, GraphQL and SSE requests)
+– WS      Live prices  (skipped: WebSocket connections are live sessions; the runner sends HTTP, GraphQL, SSE and MCP requests)
 
 Iteration 2 of 2
 ✓ POST    Log in  https://api.example.com/login  200 77 ms, 312 B
@@ -33,7 +33,7 @@ Iteration 2 of 2
 ✗ GET     Profile  https://api.example.com/me  200 39 ms, 1204 B
     ✓ token works
     ✗ not bob — expected 'bob' to not equal 'bob'
-– WS      Live prices  (skipped: WebSocket connections are live sessions; the runner sends HTTP, GraphQL and SSE requests)
+– WS      Live prices  (skipped: WebSocket connections are live sessions; the runner sends HTTP, GraphQL, SSE and MCP requests)
 
 Requests  3 passed, 1 failed, 2 skipped (6 total)
 Tests     5 passed, 1 failed
@@ -193,7 +193,7 @@ The JUnit report follows the layout most CI tools read:
   </testsuite>
   <testsuite name="Live prices" tests="1" failures="0" errors="0" skipped="1" time="0.000">
     <testcase name="Live prices (iteration 2)" classname="Live prices" time="0.000">
-      <skipped message="WebSocket connections are live sessions; the runner sends HTTP, GraphQL and SSE requests"/>
+      <skipped message="WebSocket connections are live sessions; the runner sends HTTP, GraphQL, SSE and MCP requests"/>
     </testcase>
   </testsuite>
 </testsuites>
@@ -219,13 +219,13 @@ A request is **skipped** when it's of a kind the runner doesn't send. It counts 
 
 | Request kind | Skip reason |
 |---|---|
-| WebSocket | `WebSocket connections are live sessions; the runner sends HTTP, GraphQL and SSE requests` |
-| TCP | `TCP connections are live sessions; the runner sends HTTP, GraphQL and SSE requests` |
-| UDP | `UDP sockets are live sessions; the runner sends HTTP, GraphQL and SSE requests` |
-| MQTT | `MQTT clients are live sessions; the runner sends HTTP, GraphQL and SSE requests` |
-| Socket.IO | `Socket.IO clients are live sessions; the runner sends HTTP, GraphQL and SSE requests` |
-| gRPC | `gRPC calls don't run in the collection runner; the runner sends HTTP, GraphQL and SSE requests` |
-| DNS | `DNS queries don't run in the collection runner; the runner sends HTTP, GraphQL and SSE requests` |
+| WebSocket | `WebSocket connections are live sessions; the runner sends HTTP, GraphQL, SSE and MCP requests` |
+| TCP | `TCP connections are live sessions; the runner sends HTTP, GraphQL, SSE and MCP requests` |
+| UDP | `UDP sockets are live sessions; the runner sends HTTP, GraphQL, SSE and MCP requests` |
+| MQTT | `MQTT clients are live sessions; the runner sends HTTP, GraphQL, SSE and MCP requests` |
+| Socket.IO | `Socket.IO clients are live sessions; the runner sends HTTP, GraphQL, SSE and MCP requests` |
+| gRPC | `gRPC calls don't run in the collection runner; the runner sends HTTP, GraphQL, SSE and MCP requests` |
+| DNS | `DNS queries don't run in the collection runner; the runner sends HTTP, GraphQL, SSE and MCP requests` |
 
 A request file that can't be read is **not** skipped: it fails with `The request can't be read: …`.
 

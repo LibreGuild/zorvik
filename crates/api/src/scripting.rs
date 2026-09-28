@@ -157,6 +157,11 @@ pub struct SendContext<'a> {
     pub guard: Option<zorvik_engine::HostGuard>,
     /// Imported requests' responses are checked against their OpenAPI document (when kept).
     pub specs: Option<&'a crate::specs::SpecCache>,
+    /// Which programs MCP requests may start.
+    pub programs: crate::mcp::Programs<'a>,
+    /// The MCP session the request's tab has open (its calls go there while it is open to the
+    /// same server).
+    pub mcp_session: Option<crate::mcp::OpenSession>,
 }
 
 /// A request that was sent.
@@ -317,6 +322,15 @@ async fn send(
         let token = oauth2::ensure_token(cx.client, &opts, &config, cx.tokens, &cx.ws.local_key()).await?;
         apply_token(&mut resolved, &token.access_token);
     }
+    if resolved.mcp.is_some() {
+        let workspace = cx.ws.local_key();
+        let jar = cx.jar.cloned();
+        let session = cx.mcp_session.as_ref();
+        let calling = crate::mcp::call(cx.client, &resolved, &opts, jar, cx.programs, &workspace, session);
+        let (info, call) = Box::pin(calling).await?;
+        let response = crate::mcp::as_response(&resolved.request.url, &info, &call);
+        return Ok((resolved, response, None));
+    }
     if let Some(subscription) = resolved.subscription.clone() {
         // Read like an event stream; the body is the results as a JSON array.
         let until = request.settings.stream.clone().unwrap_or_default();
@@ -391,6 +405,9 @@ async fn send(
 pub const SKIPPED: &str = "skipped";
 
 /// What scripts reach through `pm.sendRequest`, `pm.cookies.jar()` and dynamic variables.
+/// The most of a `pm.sendRequest` response body a script gets.
+const SEND_REQUEST_MAX_BODY: usize = 16 << 20;
+
 struct AppHost {
     client: Arc<Client>,
     jar: Option<Arc<CookieJar>>,
@@ -461,6 +478,8 @@ impl Host for AppHost {
     fn send(&self, request: HostRequest, timeout: Duration) -> Result<HostResponse, String> {
         let mut options = self.options.clone();
         options.timeout = Some(options.timeout.map_or(timeout, |t| t.min(timeout)));
+        // The body is copied into the script's memory: longer ones reach it cut.
+        options.max_body_bytes = options.max_body_bytes.min(SEND_REQUEST_MAX_BODY);
         let outgoing = HttpRequest {
             method: if request.method.trim().is_empty() { "GET".into() } else { request.method.trim().to_uppercase() },
             url: request.url.trim().to_string(),

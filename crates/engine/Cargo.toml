@@ -55,6 +55,10 @@ hickory-resolver = { workspace = true, features = ["system-config"] }
 # MQTT client: rumqttc's packet codec (v3.1.1 + v5) over the engine's TCP/TLS.
 rumqttc.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# Stopping a stdio MCP server's whole process group (npx starts node as a child).
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
 # ICMP echo (ping) through IcmpSendEcho2 / Icmp6SendEcho2; port owners

@@ -245,6 +245,7 @@ export function SettingsModal() {
       width={860}
       bodyClassName="p-0"
       focusFirstField={false}
+      dirty={dirty}
       footer={
         <>
           <span className="mr-auto text-[11.5px] text-faint">

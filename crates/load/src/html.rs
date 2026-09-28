@@ -161,7 +161,11 @@ pub(crate) fn report(title: &str, s: &Summary) -> String {
     let t = &s.totals;
     out.push_str("<section class=\"tiles\">\n");
     tile(&mut out, "Requests", &thousands(t.requests), &format!("{} req/s", rate(t.rps)));
-    tile(&mut out, "Errors", &format!("{} %", number2(t.error_rate)), &format!("{} failed", thousands(t.errors)));
+    let mut failed = format!("{} failed", thousands(t.errors));
+    if t.dropped > 0 {
+        let _ = write!(failed, ", {} dropped", thousands(t.dropped));
+    }
+    tile(&mut out, "Errors", &format!("{} %", number2(t.error_rate)), &failed);
     tile(&mut out, "p95 latency", &ms(t.latency.p95), &format!("p50 {}", ms(t.latency.p50)));
     tile(&mut out, "p99 latency", &ms(t.latency.p99), &format!("max {}", ms(t.latency.max)));
     if t.timing.ttfb.count > 0 {
@@ -175,7 +179,7 @@ pub(crate) fn report(title: &str, s: &Summary) -> String {
         &format!("opened by {} % of requests", number2(share(t.connections, t.requests))),
     );
     if t.capture_misses > 0 {
-        tile(&mut out, "Capture misses", &thousands(t.capture_misses), "found nothing");
+        tile(&mut out, "Capture misses", &thousands(t.capture_misses), "found nothing or over 64 KB");
     }
     if t.dropped > 0 {
         tile(&mut out, "Dropped", &thousands(t.dropped), "not started: in-flight limit");

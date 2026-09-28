@@ -372,7 +372,7 @@ pub async fn run(
             }
             steps += 1;
             let request = match &item.request {
-                Ok(r) if matches!(r.kind, RequestKind::Http | RequestKind::Sse) => r,
+                Ok(r) if matches!(r.kind, RequestKind::Http | RequestKind::Sse | RequestKind::Mcp) => r,
                 other => {
                     let mut result = base_result(item, index);
                     match other {
@@ -468,7 +468,9 @@ pub async fn run(
             let described: Vec<String> = report.errors.iter().map(|e| e.describe()).collect();
             match scripted.result {
                 Ok(sent) => {
-                    result.method = sent.request.method.clone();
+                    if sent.request.kind != RequestKind::Mcp {
+                        result.method = sent.request.method.clone();
+                    }
                     result.url = mask_secrets(&sent.url, &secret_values(plan, vars));
                     result.status = Some(sent.response.meta.status);
                     result.duration_ms = Some(sent.response.timing.total_ms);
@@ -615,9 +617,9 @@ fn skip_reason(kind: RequestKind) -> String {
         RequestKind::SocketIo => "Socket.IO clients are live sessions",
         RequestKind::Grpc => "gRPC calls don't run in the collection runner",
         RequestKind::Dns => "DNS queries don't run in the collection runner",
-        RequestKind::Http | RequestKind::Sse => "not sent",
+        RequestKind::Http | RequestKind::Sse | RequestKind::Mcp => "not sent",
     };
-    format!("{what}; the runner sends HTTP, GraphQL and SSE requests")
+    format!("{what}; the runner sends HTTP, GraphQL, SSE and MCP requests")
 }
 
 fn base_result(item: &RunItem, iteration: u32) -> RunResult {
@@ -627,7 +629,9 @@ fn base_result(item: &RunItem, iteration: u32) -> RunResult {
         path: item.path.clone(),
         name: item.name.clone(),
         kind: request.map(|r| r.kind).unwrap_or_default(),
-        method: request.map(|r| r.method.clone()).unwrap_or_default(),
+        method: request
+            .map(|r| if r.kind == RequestKind::Mcp { "MCP".into() } else { r.method.clone() })
+            .unwrap_or_default(),
         url: request.map(|r| r.url.clone()).unwrap_or_default(),
         passed: true,
         ..Default::default()
@@ -928,6 +932,12 @@ impl Api {
             jar: jar.as_ref(),
             guard: agent.and_then(|a| a.guard),
             specs: Some(&self.inner.specs),
+            // Runs an agent starts never start programs: nobody is asked about each one.
+            programs: match by_agent {
+                true => crate::mcp::Programs::Approved(None),
+                false => crate::mcp::Programs::Trusted(&self.inner.programs),
+            },
+            mcp_session: None,
         };
         let sink = self.inner.sink.clone();
         let report = Box::pin(run(&cx, &plan, &mut vars, &cancel, |result, vars| {

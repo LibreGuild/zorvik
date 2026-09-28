@@ -156,6 +156,8 @@ pub enum ConfirmKind {
     Server,
     Workspace,
     File,
+    /// Start a program (an MCP server over stdio).
+    Program,
 }
 
 /// An agent's action waiting for the user's answer.

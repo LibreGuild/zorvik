@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>One workbench for every wire.</b><br>
-  Build, test, mock and load test APIs, and see what really happens on the network.<br>
+  Build, test, mock and load test APIs and the MCP servers AI agents use, and see what really happens on the network.<br>
   An open-source desktop app for Windows, macOS and Linux that your coding agent can drive.<br>
   <b>Every feature free.</b> No paid plans, no account, no cloud sync.
 </p>
@@ -24,6 +24,7 @@
   <a href="https://libreguild.github.io/zorvik/docs/">Docs</a> ·
   <a href="#features">Features</a> ·
   <a href="#command-line">Command line</a> ·
+  <a href="#mcp-test-the-tools-ai-agents-use">MCP</a> ·
   <a href="#ai-agents">AI agents</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
@@ -34,9 +35,10 @@
 </picture>
 
 ## Why Zorvik
-- **Your coding agent can drive it.** Claude Code, Codex, Gemini CLI, Cursor and any MCP client use Zorvik's 37 built-in tools to turn the APIs in your code into requests, test them, mock them and load test them, while you watch every step and approve anything risky. [More below](#ai-agents).
+- **Your coding agent can drive it.** Claude Code, Codex, Gemini CLI, Cursor and any MCP client use Zorvik's 38 built-in tools to turn the APIs in your code into requests, test them, mock them and load test them, while you watch every step and approve anything risky. [More below](#ai-agents).
+- **Test the tools your AI agents use.** Connect to any MCP server (over HTTP or as a local program), see its tools, resources and prompts, call them, and test the answers in CI. Build MCP servers in minutes to try tools with a real AI app or to test your own agent. [More below](#mcp-test-the-tools-ai-agents-use).
 - **Every feature is free, for good.** No paid plans, no "team" tier, no feature behind a login, and none planned. Open source under MIT or Apache-2.0.
-- **Everything in one place.** HTTP, GraphQL (with subscriptions), gRPC, WebSocket, Socket.IO, SSE, TCP, UDP, MQTT and DNS clients; mock servers; load tests; network tools. One app instead of five.
+- **Everything in one place.** HTTP, GraphQL (with subscriptions), gRPC, MCP, WebSocket, Socket.IO, SSE, TCP, UDP, MQTT and DNS clients; mock servers, MCP servers included; load tests; network tools. One app instead of five.
 - **Your API work is plain files.** A workspace is a folder of readable YAML. Commit it to Git, review it in pull requests, share it with your team. Secrets stay on your computer.
 - **Honest numbers.** Every request shows where its time went (DNS, connect, TLS, first byte, download), which certificate answered and the headers that really left your machine. Load tests measure latency without hiding a slow server's queue.
 - **Local first.** No account, no cloud sync, no tracking, and none planned. It works offline and behind corporate proxies and TLS inspection. The only thing it connects to by itself is GitHub, to check for updates, and it sends nothing about you.
@@ -47,11 +49,23 @@
   <img src=".github/assets/banner.webp" width="760" alt="">
 </p>
 
+## MCP: test the tools AI agents use
+AI apps and agents reach tools and data through the **Model Context Protocol**. A model picks tools by their descriptions and schemas, fills in the arguments itself and acts on the answers, often with nobody watching, so a vague description or an unhelpful error becomes an agent doing the wrong thing. Zorvik shows you exactly what the agent sees, and lets you test it:
+- **MCP client:** connect to any MCP server over Streamable HTTP, the older HTTP+SSE transport, or stdio (Zorvik starts `npx …`, `uvx …` or your own server, after asking you once). Browse its tools with their input schemas, resources, templates and prompts; call them with arguments started from the schema; read text, images, structured content and errors; watch every JSON-RPC message.
+- **Tests and CI:** MCP calls are requests like any other: post-response tests on the answer (`pm.response.json().structuredContent`), collection runs, and `zorvik run` in your pipeline.
+- **MCP servers:** build one from settings: tools with input and output schemas and templated answers, failed calls and delays, resources and templates, prompts. AI apps connect over HTTP, or start it with `zorvik serve … --stdio`; every call shows in its traffic panel, and edits reach connected clients at once.
+- **Auth and safety:** bearer tokens, API keys and OAuth 2.0 for remote servers; secret variables for a program's environment; a workspace starts a program only after you allowed that exact command.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/mcp-dark.webp">
+  <img alt="An MCP call in Zorvik: the tool's arguments on the left, the server's answer on the right" src=".github/assets/mcp-light.webp">
+</picture>
+
 ## AI agents
 **Zorvik is built to be driven by coding agents.** Its MCP server ships in every install, so Claude Code, Codex, Gemini CLI, Cursor or any MCP client can work with your APIs the way you do in the app:
 - **Map your code to a collection:** the agent reads your routes and saves them as requests, with path and query parameters, bodies and auth.
-- **Send and test:** it sends requests (HTTP, GraphQL, gRPC, DNS, event streams), writes tests, runs folders and collections, and reads the results and history.
-- **Mock and serve:** it builds mock APIs and servers, starts them and reads the traffic they received.
+- **Send and test:** it sends requests (HTTP, GraphQL, gRPC, DNS, event streams, MCP calls), writes tests, runs folders and collections, and reads the results and history.
+- **Mock and serve:** it builds mock APIs and servers (MCP servers too), starts them and reads the traffic they received.
 - **Load test:** it plans and runs load tests and reads the latency and errors.
 - **Hand you code:** it exports requests as cURL or code in 16 languages, from JavaScript and Python to Go, Java, C# and Rust.
 
@@ -94,8 +108,8 @@ Then ask things like *"map the API routes in this repo to a Zorvik collection"* 
 
 ### Mock and serve
 - **Mock APIs** from scratch, from a folder of requests (answering with their saved examples), from an OpenAPI spec, or from a response you just received. Routes with `:params`, templated bodies, delays, fault injection, CORS, and forwarding to a real backend.
-- **Servers:** WebSocket, Socket.IO, SSE, TCP, UDP and DNS servers, plus a TCP relay that shows both directions. Every server logs its traffic live.
-- **Headless:** `zorvik serve` runs any of them in CI next to your tests.
+- **Servers:** MCP, WebSocket, Socket.IO, SSE, TCP, UDP and DNS servers, plus a TCP relay that shows both directions. Every server logs its traffic live.
+- **Headless:** `zorvik serve` runs any of them in CI next to your tests, and serves MCP servers over stdio for AI apps.
 - **Busy port?** The error names the program holding it.
 
 <picture>
@@ -117,10 +131,10 @@ Then ask things like *"map the API routes in this repo to a Zorvik collection"* 
 </picture>
 
 ### Learn: the Training Bootcamp
-- **A course built in,** from "what is a network?" to load testing: 16 units on networks, DNS, HTTP, sending data, auth and JWT, TLS, environments, testing, GraphQL and gRPC, WebSocket and SSE, TCP and UDP, mocking, performance and automation, plus a capstone project.
+- **A course built in,** from "what is a network?" to load testing: 17 units on networks, DNS, HTTP, sending data, auth and JWT, TLS, environments, testing, GraphQL and gRPC, WebSocket and SSE, TCP and UDP, mocking, performance, automation, and MCP for AI agents, plus a capstone project.
 - **Hands-on labs** in the real workbench: **Start lab** runs practice servers on your computer and fills in a Lab environment, and the **Lab Guide** ticks each step off the moment you get it right. Hints go from a nudge to the exact clicks.
 - **Plain words and diagrams:** short readings with sequence, flow and layer diagrams, and a quick check after each lesson.
-- **Rewards:** XP, levels and ranks, daily streaks, 24 badges, and a *Zorvik Bootcamp Graduate* certificate. Open it from **Training Bootcamp**, pinned at the top of the workspace menu and on the welcome screen; inside it, a *Workbench | Academy* switch moves between the lessons and the labs. Its workspace is always there and resets in one click.
+- **Rewards:** XP, levels and ranks, daily streaks, 25 badges, and a *Zorvik Bootcamp Graduate* certificate. Open it from **Training Bootcamp**, pinned at the top of the workspace menu and on the welcome screen; inside it, a *Workbench | Academy* switch moves between the lessons and the labs. Its workspace is always there and resets in one click.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/assets/academy-dark.webp">

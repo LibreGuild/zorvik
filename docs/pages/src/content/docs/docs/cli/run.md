@@ -37,6 +37,7 @@ zorvik run ./my-api --folder Users -d users.csv --junit report.xml
 | `--timeout` | `<TIMEOUT>` | `60000` | Request timeout in milliseconds; `0` means none |
 | `-k`, `--insecure` | | Off | Don't verify TLS certificates |
 | `--allow-outside-files` | | Off | Let requests send body files from outside the workspace folder |
+| `--allow-programs` | | Off | Let MCP requests start the programs they name (stdio servers) |
 | `--json` | | Off | Print a JSON report (summary and results) instead of text |
 | `--junit` | `<FILE>` | None | Also save a JUnit XML report to this file |
 | `-h`, `--help` | | | Print help |
@@ -95,6 +96,14 @@ Skips TLS certificate verification for every request, as if **Verify TLS certifi
 
 Requests with file bodies (binary bodies and multipart file fields) may only send files inside the workspace folder, so a shared workspace can't send your private files. This option allows files anywhere. It doesn't concern the data file, which can always be anywhere.
 
+### --allow-programs
+
+An [MCP call](../../mcp/client/) whose address is a command (such as `npx -y @modelcontextprotocol/server-everything`) starts that program on the machine. A workspace can come from anyone, so `zorvik run` starts programs only with this option; without it, such requests fail with `This request starts a program (…); zorvik run starts programs only with --allow-programs`. Use it for workspaces you trust, such as your own repository in CI. MCP servers at a URL don't need it.
+
+```bash
+zorvik run . --folder "MCP checks" --allow-programs
+```
+
 ### --json
 
 Prints one JSON document with the summary and every result when the run ends, instead of the text output. Nothing else is printed to standard output, so you can pipe it:
@@ -113,7 +122,7 @@ Saves a JUnit XML report to the file, in addition to the normal output (text or 
 ## What runs
 
 - Every request under the workspace or folder, in sidebar order, once per iteration.
-- HTTP and GraphQL requests are sent. [Server-Sent Events requests](../../testing/repeat-and-streams/#event-streams-in-runs) and [GraphQL subscriptions](../../protocols/graphql/#subscriptions) are read until their stop settings say to stop.
+- HTTP, GraphQL and [MCP](../../mcp/client/#in-runs-the-cli-and-for-agents) requests are sent (an MCP call connects, calls and disconnects). [Server-Sent Events requests](../../testing/repeat-and-streams/#event-streams-in-runs) and [GraphQL subscriptions](../../protocols/graphql/#subscriptions) are read until their stop settings say to stop.
 - WebSocket, Socket.IO, TCP, UDP, MQTT, gRPC and DNS requests are listed as skipped, with the reason.
 - For each request: pre-request scripts, send, post-response scripts, then "repeat until" and the OpenAPI contract check when they apply.
 - Script values and cookies carry from one request to the next during the run, and are forgotten at the end.

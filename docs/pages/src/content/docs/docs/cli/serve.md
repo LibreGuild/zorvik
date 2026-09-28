@@ -1,6 +1,6 @@
 ---
 title: zorvik serve
-description: Start a saved mock API or server (WebSocket, Socket.IO, SSE, TCP, UDP, DNS, TCP relay) from a terminal or CI and print its traffic as text or JSON lines.
+description: Start a saved mock API or server (MCP, WebSocket, Socket.IO, SSE, TCP, UDP, DNS, TCP relay) from a terminal or CI and print its traffic as text or JSON lines, or serve an MCP server over stdio for AI apps.
 sidebar:
   order: 4
 ---
@@ -34,6 +34,7 @@ Servers are built in the app. See [Mock servers](../../servers/mock-api/) for ro
 | `--host` | `<HOST>` | The saved address | Listen on this address instead. `127.0.0.1` is this computer only; `0.0.0.0` lets other devices connect. |
 | `-k`, `--insecure` | | Off | Don't verify TLS certificates when forwarding (a mock's fallback to a real backend, and the TCP relay) |
 | `--json` | | Off | Print JSON lines (the start, then one per traffic entry) instead of text |
+| `--stdio` | | Off | MCP servers only: talk MCP over standard input and output instead of listening on a port, so an AI app can start the server as a program. The traffic log goes to standard error. |
 | `-h`, `--help` | | | Print help |
 
 ### Variables
@@ -51,6 +52,7 @@ If the port is taken, the command stops with exit code 2 and, when the system te
 | Kind | Printed as | What it does |
 |---|---|---|
 | Mock API | `Mock API` | Answers HTTP requests from its routes; can forward others to a real backend |
+| MCP | `MCP server` | Offers tools, resources and prompts to MCP clients and AI apps (the URL includes the endpoint path, such as `/mcp`) |
 | WebSocket | `WebSocket server` | Accepts WebSocket connections and answers messages by its rules |
 | Socket.IO | `Socket.IO server` | Accepts socket.io-client connections (long-polling and WebSocket) and answers events |
 | Server-Sent Events | `Event stream server` | Sends its events to each client that connects |
@@ -91,7 +93,7 @@ With `--json`, every line is one JSON object:
 
 | Line `type` | When | Fields |
 |---|---|---|
-| `started` | The server is listening | `name`, `kind` (`http`, `websocket`, `sse`, `tcp`, `udp`, `dns` or `tcpProxy`), `url` |
+| `started` | The server is listening | `name`, `kind` (`http`, `mcp`, `websocket`, `socketio`, `sse`, `tcp`, `udp`, `dns` or `tcpProxy`), `url` |
 | `traffic` | Each traffic entry | `entry` (below) |
 | `stopped` | After Ctrl+C | — |
 
@@ -113,6 +115,20 @@ The `entry` object:
 | `http` | For `http` entries: `method`, `path` (with the query), `httpVersion`, `requestHeaders`, `requestBody`, `status`, `responseHeaders`, `responseBody`, `durationMs`, `route` (the route that answered, `null` for the fallback) and `note` (an injected fault, `error`, `reset` or `hang`, or `proxy` when forwarded) |
 
 Very busy servers log at most 1,000 entries and 8 MB of payload per second; traffic beyond that is still served, just not printed.
+
+## --stdio
+
+With `--stdio`, an [MCP server](../../mcp/servers/) talks to one client over its standard input and output, the way AI apps start local MCP servers: one JSON-RPC message per line in each direction. Nothing but MCP messages goes to standard output; the traffic log goes to standard error (as JSON lines with `--json`), where AI apps show it as the server's log. The server stops when its input closes.
+
+```bash
+zorvik serve ./my-workspace "Weather mock" --stdio
+```
+
+```json title="An AI app's MCP configuration"
+{ "mcpServers": { "weather-mock": { "command": "zorvik", "args": ["serve", "/path/to/my-workspace", "Weather mock", "--stdio"] } } }
+```
+
+Other kinds of servers don't speak stdio: `error: --stdio works with MCP servers only; "Users API" is a Mock API`.
 
 ## Stopping
 

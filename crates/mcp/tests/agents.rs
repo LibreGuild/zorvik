@@ -369,6 +369,72 @@ async fn agent_builds_runs_and_inspects_a_mock() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn agent_builds_an_mcp_server_and_calls_it() {
+    let (_api, mut agent, asked, _data, ws, _listener) = connected("Agents").await;
+
+    // Settings that would confuse clients are refused.
+    let (err, _, text) = agent
+        .call("save_server", json!({ "name": "Tools", "server": { "kind": "mcp", "mcp": { "tools": [{ "name": "a", "inputSchema": "[]" }] } } }))
+        .await;
+    assert!(err && text.contains("not a JSON object"), "{text}");
+    let (err, _, text) = agent
+        .call(
+            "save_server",
+            json!({ "name": "Tools", "server": { "kind": "mcp", "port": 0, "mcp": {
+                "tools": [{ "name": "greet", "description": "Say hello",
+                            "inputSchema": "{\"type\": \"object\", \"required\": [\"who\"]}",
+                            "result": "Hello, {{args.who}}!" }],
+                "prompts": [{ "name": "intro", "messages": [{ "text": "Introduce yourself" }] }],
+            } } }),
+        )
+        .await;
+    assert!(!err, "{text}");
+    let (err, started, text) = agent.call("start_server", json!({ "name": "Tools" })).await;
+    assert!(!err, "{text}");
+    let url = started["url"].as_str().unwrap().to_string();
+    assert!(url.ends_with("/mcp"), "{url}");
+
+    let request = json!({ "kind": "mcp", "url": url });
+    let (err, catalog, text) = agent.call("mcp_catalog", json!({ "request": request })).await;
+    assert!(!err, "{text}");
+    assert_eq!(catalog["server"]["name"], "Tools");
+    assert_eq!(catalog["tools"][0]["name"], "greet");
+    assert_eq!(catalog["prompts"][0]["name"], "intro");
+
+    // Arguments as an object work as well as JSON text.
+    let call = json!({ "kind": "mcp", "url": url, "mcp": { "name": "greet", "arguments": { "who": "Ada" } } });
+    let (err, answer, text) = agent.call("send_request", json!({ "request": call })).await;
+    assert!(!err, "{text}");
+    assert_eq!(answer["status"], 200);
+    let result: Value = serde_json::from_str(answer["body"].as_str().unwrap()).unwrap();
+    assert_eq!(result["content"][0]["text"], "Hello, Ada!");
+    // With its tests, like any request.
+    let call = json!({ "kind": "mcp", "url": url, "mcp": { "name": "greet", "arguments": "{}" },
+                       "scripts": { "postResponse": "pm.test('fails', () => pm.expect(pm.response.json().isError).to.eql(true));" } });
+    let (_, answer, _) = agent.call("send_request", json!({ "request": call })).await;
+    assert!(answer["body"].as_str().unwrap().contains("\"isError\": true"), "{answer}");
+    assert_eq!(answer["tests"][0]["passed"], true, "{answer}");
+
+    // A script can't turn an approved request into a program nobody was asked about.
+    let sneaky = json!({ "kind": "mcp", "url": url, "mcp": { "name": "greet", "arguments": { "who": "x" } },
+                         "scripts": { "preRequest": "pm.request.url = 'zorvik-test-sneaky-program --stdio';" } });
+    let (err, _, text) = agent.call("send_request", json!({ "request": sneaky })).await;
+    assert!(err && text.contains("wasn't asked about"), "{text}");
+    assert!(!asked.lock().unwrap().iter().any(|(k, _)| *k == ConfirmKind::Program), "nothing asked yet");
+
+    // A program is asked about every time, with its command and environment.
+    let program = json!({ "kind": "mcp", "url": "zorvik-test-no-such-program --stdio",
+                          "mcp": { "name": "x", "env": { "MODE": "test" } } });
+    let (err, _, text) = agent.call("send_request", json!({ "request": program })).await;
+    assert!(err, "{text}");
+    let asked_now = asked.lock().unwrap().clone();
+    let (_, items) = asked_now.iter().find(|(k, _)| *k == ConfirmKind::Program).expect("asked about the program");
+    assert!(items.iter().any(|i| i == "Command: zorvik-test-no-such-program --stdio"), "{items:?}");
+    assert!(items.iter().any(|i| i == "Environment: MODE=test"), "{items:?}");
+    drop(ws);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn agent_reads_state_writes_files_and_exports() {
     let server = TestServer::start().await;
     let (_api, mut agent, _asked, _data, ws, _listener) = connected("State").await;
@@ -464,6 +530,13 @@ async fn agent_reads_state_writes_files_and_exports() {
     // Not filled in: the variable stays (cURL escapes its braces so they aren't a URL pattern).
     let curl = code["code"].as_str().unwrap();
     assert!(!err && curl.contains(r"\{\{base\}\}") && !curl.contains("127.0.0.1"), "{code}");
+    // Credentials Zorvik builds (here a Basic header) don't reach the agent.
+    let (err, code, text) = agent
+        .call("export_request", json!({ "request": { "url": "http://127.0.0.1:1/x", "auth": { "type": "basic", "username": "ada", "password": "s3cret-pass" } } }))
+        .await;
+    assert!(!err, "{text}");
+    let curl = code["code"].as_str().unwrap();
+    assert!(curl.contains("Authorization") && !curl.contains("YWRhOnMzY3JldC1wYXNz"), "{curl}");
 
     // Load test thresholds: units are checked, misspellings refused.
     let (err, _, text) = agent

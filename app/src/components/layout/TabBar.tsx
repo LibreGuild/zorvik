@@ -28,11 +28,13 @@ import { ContextMenu, cx, Menu } from "../ui";
 export function TabBar() {
   const tabs = useTabs((s) => s.tabs);
   const activeId = useTabs((s) => s.activeId);
+  // One tab stop for the tab list: the active tab (the arrow keys move between tabs).
+  const focusable = tabs.some((t) => t.id === activeId) ? activeId : tabs[0]?.id;
   return (
     <div className="flex h-11 shrink-0 items-center gap-1 px-2 pt-1" role="tablist" aria-label="Open tabs">
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]">
         {tabs.map((t) => (
-          <TabItem key={t.id} tab={t} active={t.id === activeId} />
+          <TabItem key={t.id} tab={t} active={t.id === activeId} focusable={t.id === focusable} />
         ))}
       </div>
       <Menu
@@ -53,8 +55,25 @@ export function TabBar() {
   );
 }
 
+/** Keys on a focused tab: Enter or Space opens it, the arrows, Home and End move to another tab. */
+function onTabKey(e: React.KeyboardEvent<HTMLElement>, id: string) {
+  // Keys on the close button inside are its own.
+  if (e.target !== e.currentTarget) return;
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    activate(id);
+    return;
+  }
+  const tabs = [...(e.currentTarget.closest('[role="tablist"]')?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [])];
+  const i = tabs.indexOf(e.currentTarget);
+  const next = { ArrowLeft: i - 1, ArrowRight: i + 1, Home: 0, End: tabs.length - 1 }[e.key];
+  if (next === undefined) return;
+  e.preventDefault();
+  tabs[(next + tabs.length) % tabs.length]?.focus();
+}
+
 // Memoized: the tab list changes with every keystroke and stream batch; a big server draft is costly to compare.
-const TabItem = memo(function TabItem({ tab: t, active }: { tab: AnyTab; active: boolean }) {
+const TabItem = memo(function TabItem({ tab: t, active, focusable }: { tab: AnyTab; active: boolean; focusable: boolean }) {
   const running = useServers((s) => (isServerTab(t) ? !!runningFor(t.serverId, s.running) : false));
   const loadRunning = useLoadTests((s) => (isLoadTestTab(t) ? !!runFor(t.testId, s.active) : false));
   const collectionRunning = useRunner((s) => isRunnerTab(t) && s.active === t.id);
@@ -103,11 +122,13 @@ const TabItem = memo(function TabItem({ tab: t, active }: { tab: AnyTab; active:
       <div
         role="tab"
         aria-selected={active}
+        tabIndex={focusable ? 0 : -1}
         onClick={() => activate(t.id)}
+        onKeyDown={(e) => onTabKey(e, t.id)}
         onAuxClick={(e) => e.button === 1 && void closeTab(t.id)}
         title={title}
         className={cx(
-          "group relative flex h-8 min-w-[120px] max-w-[220px] shrink-0 items-center gap-2 rounded-lg pl-3 pr-1.5 text-[12.5px] transition-colors",
+          "group relative flex h-8 min-w-[120px] max-w-[220px] shrink-0 items-center gap-2 rounded-lg pl-3 pr-1.5 text-[12.5px] outline-none transition-colors focus-visible:ring-1 focus-visible:ring-accent",
           active ? "bg-elev text-fg shadow-sm" : "text-muted hover:bg-hover/70 hover:text-fg",
         )}
       >

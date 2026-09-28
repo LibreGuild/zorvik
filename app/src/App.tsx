@@ -87,13 +87,15 @@ function useZoomKeys() {
   }, []);
 }
 
-function useShortcuts(enabled: boolean) {
+/** App-wide keys (exported for tests). */
+export function useShortcuts(enabled: boolean) {
   useEffect(() => {
     if (!enabled) return;
     const onKey = (e: KeyboardEvent) => {
       // A confirm/prompt is up: keys belong to it (a second Mod+W would replace the "Discard?" dialog).
       if (useDialogs.getState().current) return;
-      const modalOpen = useUi.getState().modal.type !== "none";
+      const modal = useUi.getState().modal.type;
+      const modalOpen = modal !== "none";
       // So does a dialog of its own (e.g. "Mock this response"): Mod+Enter must not resend the request behind it.
       if (!modalOpen && document.querySelector('[role="dialog"]')) return;
       // ⌘ on macOS, Ctrl elsewhere: on macOS Ctrl+E/K/N/P are text-editing keys in inputs.
@@ -108,7 +110,8 @@ function useShortcuts(enabled: boolean) {
       }
       if (!mod || e.altKey) return;
       const key = e.key.toLowerCase();
-      if (modalOpen && key !== "k") return;
+      // Keys belong to an open dialog, the palette's too: it would replace the dialog and lose its unsaved edits.
+      if (modalOpen && !(modal === "palette" && (key === "k" || key === "p"))) return;
       switch (key) {
         case "enter": {
           if (!activeId) break;

@@ -12,7 +12,7 @@ test("docs open from the rail and jump to a topic", async ({ page }) => {
   await expect(docs.getByRole("heading", { name: "Everything Zorvik can do" })).toBeVisible();
   // Every feature card has its illustration.
   const cards = docs.locator("[data-testid^='docs-card-']");
-  await expect(cards).toHaveCount(16);
+  await expect(cards).toHaveCount(17);
   const broken = await docs.locator("img").evaluateAll((imgs) => imgs.filter((i) => !(i as HTMLImageElement).complete || (i as HTMLImageElement).naturalWidth === 0).length);
   expect(broken).toBe(0);
 

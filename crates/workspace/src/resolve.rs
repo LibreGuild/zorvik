@@ -9,8 +9,8 @@ use base64::Engine as _;
 use bytes::Bytes;
 use zorvik_engine::{Header, HttpRequest};
 use zorvik_formats::{
-    ApiKeyLocation, Auth, BodyType, FolderMeta, GraphqlTransport, KeyValue, OAuth2Config, Request, RequestKind,
-    WorkspaceMeta,
+    ApiKeyLocation, Auth, BodyType, FolderMeta, GraphqlTransport, KeyValue, McpCallKind, McpTransport, OAuth2Config,
+    Request, RequestKind, WorkspaceMeta,
 };
 
 use crate::signing::{Challenge, Signer};
@@ -45,8 +45,35 @@ pub struct Resolved {
     pub subscription: Option<Subscription>,
     /// Socket.IO: the connection's `auth` payload.
     pub socketio_auth: Option<serde_json::Value>,
+    /// MCP: how to reach the server (`request.url` is its URL or command line) and the call.
+    pub mcp: Option<ResolvedMcp>,
     /// Variables referenced but not defined.
     pub unresolved: Vec<String>,
+}
+
+/// An MCP request, variables filled in.
+#[derive(Debug, Clone)]
+pub struct ResolvedMcp {
+    pub transport: McpTransport,
+    /// stdio: environment variables for the program.
+    pub env: Vec<(String, String)>,
+    /// stdio: the program's working directory (the workspace folder when not set).
+    pub cwd: std::path::PathBuf,
+    pub call: McpCallKind,
+    /// The tool or prompt name, or the resource URI.
+    pub name: String,
+    pub arguments: serde_json::Map<String, serde_json::Value>,
+}
+
+impl ResolvedMcp {
+    /// Whether the server is a program Zorvik starts (stdio), given the resolved address.
+    pub fn is_program(&self, address: &str) -> bool {
+        match self.transport {
+            McpTransport::Stdio => true,
+            McpTransport::Auto => !(address.starts_with("http://") || address.starts_with("https://")),
+            _ => false,
+        }
+    }
 }
 
 /// A GraphQL subscription, variables filled in.
@@ -170,6 +197,31 @@ pub fn resolve(request: &Request, inherit: &Inheritance<'_>, vars: &VarContext) 
         RequestKind::SocketIo => json_payload(&render(&request.socketio.auth), "The auth payload is")?,
         _ => None,
     };
+    let mcp = match request.kind {
+        RequestKind::Mcp => {
+            let options = &request.mcp;
+            let arguments = match json_payload(&render(&options.arguments), "The arguments are")? {
+                None => serde_json::Map::new(),
+                Some(serde_json::Value::Object(map)) => map,
+                Some(_) => {
+                    return Err(Error::invalid("The arguments must be a JSON object, like {\"city\": \"Lisbon\"}"));
+                }
+            };
+            let cwd = render(options.cwd.trim());
+            Some(ResolvedMcp {
+                transport: options.transport,
+                env: enabled(&options.env)
+                    .filter(|kv| !kv.key.trim().is_empty())
+                    .map(|kv| (render(kv.key.trim()), render(&kv.value)))
+                    .collect(),
+                cwd: if cwd.is_empty() { inherit.base_dir.to_path_buf() } else { inherit.base_dir.join(cwd) },
+                call: options.call,
+                name: render(options.name.trim()),
+                arguments,
+            })
+        }
+        _ => None,
+    };
 
     let mut http = HttpRequest { method: request.method.trim().to_string(), url, headers, body };
     // Signatures cover the final method, URL, headers and body.
@@ -182,6 +234,7 @@ pub fn resolve(request: &Request, inherit: &Inheritance<'_>, vars: &VarContext) 
         challenge,
         subscription,
         socketio_auth,
+        mcp,
         unresolved: missing.into_iter().chain(empty_path_params).collect(),
     })
 }

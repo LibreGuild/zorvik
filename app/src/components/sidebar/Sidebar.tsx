@@ -76,6 +76,7 @@ export const NEW_REQUEST_KINDS: { kind: NewRequestType; label: string; icon: Rea
   { kind: "dns", label: "DNS query", icon: <Search size={14} /> },
   { kind: "mqtt", label: "MQTT client", icon: <MessagesSquare size={14} /> },
   { kind: "socketio", label: "Socket.IO client", icon: <Unplug size={14} /> },
+  { kind: "mcp", label: "MCP call (AI tools)", icon: <Bot size={14} /> },
 ];
 
 async function createRequestIn(parent: string, kind: NewRequestType = "http") {

@@ -21,10 +21,11 @@ Agents are off until you allow them (**Settings → AI agents → Allow AI agent
 |---|---|---|---|
 | **Reading** the workspace, variables, history, server traffic, run and load test status | `get_workspace`, `list_*`, `read_*`, `get_variables`, `read_history`, `get_server_traffic`, `get_run_status`, `get_load_test_status`, `export_request`, `open_in_app` | Allowed | none |
 | **Edits**: requests, folders, environments (and switching the active one), imports, load tests, servers, mocks, files added with `write_file` | `save_requests`, `save_folder_settings`, `move_item`, `save_environment`, `set_active_environment`, `import`, `update_from_openapi`, `save_load_test`, `save_server`, `create_mock`, `write_file` | Allowed | **Edits by agents**: *Allow* or *Ask me* |
-| **Requests** to other systems: sends, collection runs, GraphQL and gRPC schema lookups, downloads for imports and mocks | `send_request`, `run_collection`, `graphql_schema`, `grpc_describe`, and `import` / `update_from_openapi` / `create_mock` with a URL | Asks for outside hosts | **Requests sent by agents**: *Ask for outside hosts*, *Ask every time* or *Allow* |
+| **Requests** to other systems: sends, collection runs, GraphQL and gRPC schema lookups, MCP catalogs, downloads for imports and mocks | `send_request`, `run_collection`, `graphql_schema`, `grpc_describe`, `mcp_catalog`, and `import` / `update_from_openapi` / `create_mock` with a URL | Asks for outside hosts | **Requests sent by agents**: *Ask for outside hosts*, *Ask every time* or *Allow* |
 | **Deleting** (to the trash) | `delete_items` | Always asks | none |
 | **Running a load test** | `run_load_test` | Always asks | none |
 | **Starting a server** (any port) | `start_server` | Always asks | none |
+| **Starting a program** (an MCP server over stdio) | `send_request` and `mcp_catalog` with an MCP request whose address is a command | Always asks, every time | none |
 | **Opening or creating a workspace** | `open_workspace` | Always asks | none |
 | **Reading a file outside the workspace** | `import`, `update_from_openapi` and `create_mock` with an absolute `file` path | Always asks | none |
 | **Stopping** a run, load test or server | `stop_collection_run`, `stop_load_test`, `stop_server` | Allowed | none |
@@ -41,13 +42,19 @@ The **Requests sent by agents** setting decides which hosts need your approval:
 | **Ask every time** | Every host, local ones included. |
 | **Allow** | Nothing. |
 
-Before a call sends anything, Zorvik works out the hosts it will reach (the request's URL and, for OAuth 2.0, the token URL; for DNS queries, the resolver) and asks once for all of them, for example "Send GET {{baseUrl}}/users?" with "Claude Code wants to send requests to:" and the host list. **Send** allows them for this call; **Allow for this session** allows those hosts for the rest of the agent's session, so the same hosts don't ask again.
+Before a call sends anything, Zorvik works out the hosts it will reach (the request's URL and, for OAuth 2.0, the token URL; for DNS queries, the resolver and the name looked up, since resolvers pass it on) and asks once for all of them, for example "Send GET {{baseUrl}}/users?" with "Claude Code wants to send requests to:" and the host list. **Send** allows them for this call; **Allow for this session** allows those hosts for the rest of the agent's session, so the same hosts don't ask again.
 
 **Requests can't wander.** Every agent call starts with no network access at all, and then gets only the hosts your setting and your answers allow: the approved hosts, plus any local host with *Ask for outside hosts*, or every host with *Allow*. A host guard in the engine enforces it on everything the call sends: redirects, OAuth token requests, gRPC channels, DNS resolvers and collection runs (a run keeps its call's limits even after the call returns). A request that would reach another host (a redirect to a new domain, a script-built URL) is stopped, and the agent is told:
 
 > Zorvik stopped a request to other.example.com (a script, redirect or token URL leads there, and the user hasn't approved it). Send it again to ask the user.
 
 The stopped host is remembered, and the next call asks about it.
+
+## Programs
+
+An MCP request can name a program instead of a URL (`npx -y @modelcontextprotocol/server-filesystem ./docs`): sending it starts that program on your computer, with your permissions. So `send_request` and `mcp_catalog` ask **every time** before they start one, whatever the settings, even for programs you allowed in the app: "Claude Code wants to start this program on your computer (an MCP server). Allow it only if you know what it does:", listing the command, the folder it starts in and its environment (secret values as `{{name}}`), with a red **Start program** button. A program talks over stdio, so nothing goes to the network from Zorvik itself.
+
+Only the program you were asked about starts: if a pre-request script or a variable changes the command, folder or environment afterwards, the send is refused. Collection runs started by an agent (`run_collection`) start no programs at all; those requests fail with a message saying so.
 
 ## Load tests
 
@@ -105,7 +112,7 @@ Agents never see Zorvik's settings, the cookie jar, OAuth tokens or the secret s
 **Settings → AI agents → Work without the app** (off by default) lets agents use Zorvik while the app is closed. Instead of opening the app, `zorvik mcp` runs the tools itself, on the same data folder and the last workspace you opened.
 
 - It applies only when **Allow AI agents** is also on, and it is checked on each call, so turning it off takes effect at once.
-- Nothing can be approved without the window, so every action that would ask is **refused** with a message telling the agent to ask you to open Zorvik. With the default settings that means deletes, load tests, starting servers, opening workspaces, reading outside files, and requests to outside hosts; edits too when **Edits by agents** is *Ask me*.
+- Nothing can be approved without the window, so every action that would ask is **refused** with a message telling the agent to ask you to open Zorvik. With the default settings that means deletes, load tests, starting servers and programs, opening workspaces, reading outside files, and requests to outside hosts; edits too when **Edits by agents** is *Ask me*.
 - When you open the app later, the next call moves to the app.
 - The app's windows show nothing of what happened in headless mode (there was no window); the effects are in your files and history.
 

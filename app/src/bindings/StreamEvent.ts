@@ -3,6 +3,7 @@ import type { AcademyUpdate } from "./AcademyUpdate";
 import type { AgentEvent } from "./AgentEvent";
 import type { GrpcEvent } from "./GrpcEvent";
 import type { LoadEvent } from "./LoadEvent";
+import type { McpEvent } from "./McpEvent";
 import type { RunEvent } from "./RunEvent";
 import type { ServerEvent } from "./ServerEvent";
 import type { Settings } from "./Settings";
@@ -14,7 +15,7 @@ import type { WsEvent } from "./WsEvent";
 /**
  * Events pushed to the UI.
  */
-export type StreamEvent = { "type": "ws", connId: string, event: WsEvent, } | { "type": "sse", connId: string, event: SseStreamEvent, } | { "type": "workspaceChanged", paths: Array<string>, } | { "type": "openUrl", url: string, } | { "type": "socket", connId: string, event: SocketEvent, } | { "type": "server", runId: string, event: ServerEvent, } | { "type": "tool", runId: string, event: ToolEvent, } | { "type": "quitRequested", running: number, loadTest: boolean, } | { "type": "load", runId: string, event: LoadEvent, } | { "type": "grpc", sessionId: string, event: GrpcEvent, } | { "type": "runner", runId: string, event: RunEvent, 
+export type StreamEvent = { "type": "ws", connId: string, event: WsEvent, } | { "type": "sse", connId: string, event: SseStreamEvent, } | { "type": "workspaceChanged", paths: Array<string>, } | { "type": "openUrl", url: string, } | { "type": "socket", connId: string, event: SocketEvent, } | { "type": "mcp", connId: string, event: McpEvent, } | { "type": "server", runId: string, event: ServerEvent, } | { "type": "tool", runId: string, event: ToolEvent, } | { "type": "quitRequested", running: number, loadTest: boolean, } | { "type": "load", runId: string, event: LoadEvent, } | { "type": "grpc", sessionId: string, event: GrpcEvent, } | { "type": "runner", runId: string, event: RunEvent, 
 /**
  * An AI agent started the run (the UI shows it only when following agents).
  */

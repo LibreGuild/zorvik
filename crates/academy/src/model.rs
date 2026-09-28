@@ -248,12 +248,12 @@ impl Answer {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Probe {
-    /// `http`, `tcp` or `udp`.
+    /// `http`, `tcp`, `udp` or `mcp`.
     pub kind: ProbeKind,
     /// Only servers whose name matches (default: any running one of that kind).
     #[serde(default)]
     pub name: Option<String>,
-    /// HTTP method (default GET).
+    /// HTTP method (default GET); MCP: the JSON-RPC method (default `tools/list`).
     #[serde(default)]
     pub method: Option<String>,
     /// HTTP path and query (default `/`).
@@ -261,10 +261,11 @@ pub struct Probe {
     pub path: Option<String>,
     #[serde(default)]
     pub headers: IndexMap<String, String>,
-    /// HTTP body, or the text sent over TCP/UDP.
+    /// HTTP body, the text sent over TCP/UDP, or the MCP method's parameters (JSON).
     #[serde(default)]
     pub body: Option<String>,
-    /// Pattern on the answer: `{status, headers, body, json}` for HTTP, `{text}` otherwise.
+    /// Pattern on the answer: `{status, headers, body, json}` for HTTP, `{result}` or `{error}`
+    /// for MCP, `{text}` otherwise.
     pub expect: Value,
 }
 
@@ -274,6 +275,8 @@ pub enum ProbeKind {
     Http,
     Tcp,
     Udp,
+    /// An MCP server: connected to over Streamable HTTP, then asked one method.
+    Mcp,
 }
 
 /// One thing "Do it for me" (and the course tests) do.

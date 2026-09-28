@@ -31,6 +31,7 @@ The exact path on your computer is shown in **Settings → Data & privacy → Ap
 | `local-values.json` | Values that scripts set with `pm.environment.set`, `pm.collectionVariables.set` and `pm.globals.set` (global variables live only here). Owner-only. At most 32 MB. |
 | `oauth-tokens.json` | OAuth 2.0 access and refresh tokens. Owner-only. |
 | `cookies/<workspace key>.json` | The cookie jar of each workspace. |
+| `trusted-programs.json` | Fingerprints of the programs (command, folder and environment) you allowed each workspace's MCP requests to start. |
 | `trusted-servers.json` | Fingerprints of the server configurations this computer has started or saved, so only those start with their workspace. |
 | `load-runs/<workspace key>/<load test id>/<run id>.json` | Load test run history: the newest 30 runs per load test. See [Results and reports](../../load-testing/results-and-reports/#run-history). |
 | `agent.json` | While the app runs: the local port and token that `zorvik mcp` uses to reach it (owner-only on macOS and Linux). Removed when the app quits. |

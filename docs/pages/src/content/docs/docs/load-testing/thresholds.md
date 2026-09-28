@@ -46,15 +46,15 @@ thresholds:
 | `p999` | p99.9 latency | ms | 99.9th percentile. |
 | `avg` | Average latency | ms | Mean latency. |
 | `max` | Max latency | ms | The slowest request. |
-| `errorRate` | Error rate | % | Failed requests (network errors and HTTP status 400 or higher) as a percent of completed requests, from 0 to 100. `1` means 1 %, not 100 %. |
-| `rps` | Throughput | req/s | Completed requests divided by the elapsed time of the whole run. |
+| `errorRate` | Error rate | % | Failed requests (network errors and HTTP status 400 or higher) and dropped ones, as a percent of all requests (completed and dropped), from 0 to 100. `1` means 1 %, not 100 %. |
+| `rps` | Throughput | req/s | Completed requests divided by the time requests were being started (the run up to its planned end, or up to a stop). |
 
 Latency is measured as described in the [overview](../overview/#what-it-measures): from send (virtual users) or from the scheduled start (request rate) to the last byte of the response, including timed-out and cut-off requests with the time they waited. Percentiles come from an HdrHistogram with 3 significant digits and are reported in milliseconds with microsecond precision.
 
 Things worth knowing about the numbers:
 
-- **Everything counts**, including the ramp-up and ramp-down stages. An `rps` threshold compares against the average over the whole run, not the peak. `rps` also divides by the real elapsed time, which includes the short wait for requests in flight after the planned end.
-- **Dropped requests** (request-rate model, over `maxInFlight`) are not requests and not errors, so they change neither `errorRate` nor latency. They do lower `rps`.
+- **Everything counts**, including the ramp-up and ramp-down stages. An `rps` threshold compares against the average over the whole run, not the peak. The short wait for requests still in flight after the planned end is left out of `rps`.
+- **Dropped requests** (request-rate model, over `maxInFlight`) count as failed in `errorRate`: the system couldn't take the load. They have no latency, so they don't change the percentiles. A request whose every run was dropped fails its latency thresholds with "no data".
 - **A 3xx** is an answer, not an error (redirects are not followed).
 - **Capture misses** are not errors.
 

@@ -6,6 +6,7 @@ import { modKey } from "../../lib/platform";
 import { syncPathParams } from "../../lib/url";
 import { loadTestRequest } from "../../store/loadtests";
 import { isSubscription } from "../../store/graphql";
+import { cancelCall } from "../../store/grpc";
 import { cancel, disconnect, isDirty, isLive, saveTab, send, type Tab, updateDraft } from "../../store/tabs";
 import { toast } from "../../store/toasts";
 import { openModal } from "../../store/ui";
@@ -55,7 +56,13 @@ export function UrlBar({ tab }: { tab: Tab }) {
       </div>
       {oneShot ? (
         loading ? (
-          <Button variant="secondary" onClick={() => cancel(tab.id)} icon={<Square size={13} />} className="h-9 w-[104px] rounded-xl">
+          <Button
+            variant="secondary"
+            // A gRPC stream is also cancelled on its session (and ended if the server never answers).
+            onClick={() => (kind === "grpc" ? cancelCall(tab.id) : cancel(tab.id))}
+            icon={<Square size={13} />}
+            className="h-9 w-[104px] rounded-xl"
+          >
             Cancel
           </Button>
         ) : (

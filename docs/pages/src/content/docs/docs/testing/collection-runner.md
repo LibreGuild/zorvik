@@ -46,11 +46,12 @@ Changes made while a run is in progress apply to the next run.
 | HTTP, including GraphQL | Sent |
 | Server-Sent Events (SSE) | Sent by `zorvik run` and by runs an AI agent starts: read until the request's stream settings say to stop. See [event streams in runs](../repeat-and-streams/#event-streams-in-runs). |
 | GraphQL subscriptions | Read like SSE requests: until the request's stream settings say to stop. See [GraphQL subscriptions](../../protocols/graphql/#subscriptions). |
+| MCP calls | Sent: each connects to the MCP server, makes its call (a tool, a resource or a prompt) and disconnects; its tests get the answer as the body. A program (stdio server) starts only if you allowed it in the app; `zorvik run` needs `--allow-programs`. See [MCP client](../../mcp/client/#in-runs-the-cli-and-for-agents). |
 | WebSocket, Socket.IO, TCP, UDP, MQTT | Skipped: they are live sessions |
 | gRPC, DNS | Skipped: they don't run in the collection runner |
 
 :::note
-The Runner tab in the app, `zorvik run` and runs an AI agent starts all send HTTP, GraphQL and SSE requests.
+The Runner tab in the app, `zorvik run` and runs an AI agent starts all send HTTP, GraphQL, SSE and MCP requests.
 :::
 
 Skipped requests are listed in `zorvik run` output and reports with the reason (see [skip reasons](../reports/#skip-reasons)). They don't count as passed or failed, and they don't wait for the delay.

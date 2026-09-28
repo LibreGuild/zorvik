@@ -5,12 +5,17 @@
 
 use serde_json::Value;
 
+use crate::openapi::percent_decode;
+
 /// Problems reported at most per response.
 const MAX_PROBLEMS: usize = 20;
 /// Array items checked at most (the rest are assumed alike).
 const MAX_ITEMS: usize = 1000;
 /// Nesting followed at most (recursive schemas).
 const MAX_DEPTH: usize = 64;
+/// Schemas checked at most per response. `allOf`, `anyOf` and `oneOf` that refer back to their
+/// own schema branch at every level; past this the rest of the response is assumed to match.
+const MAX_VISITS: usize = 200_000;
 
 /// The outcome of one check.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,7 +76,7 @@ pub fn check_response(
         Err(e) => return Some(SpecCheck { label, problems: vec![format!("The body is not valid JSON ({e})")] }),
     };
     let mut problems = Vec::new();
-    let mut checker = Checker { doc, problems: &mut problems };
+    let mut checker = Checker { doc, problems: &mut problems, visits: 0 };
     checker.check(schema, &value, "$", 0);
     if problems.len() > MAX_PROBLEMS {
         let more = problems.len() - MAX_PROBLEMS;
@@ -113,28 +118,17 @@ fn resolve<'a>(doc: &'a Value, mut value: &'a Value) -> Option<&'a Value> {
     None
 }
 
-/// A local JSON pointer reference (`#/a/b~1c`).
+/// A local JSON pointer reference (`#/a/b~1c`, or percent-encoded as in a URI: `#/paths/~1pets~1%7Bid%7D`).
 fn pointer<'a>(doc: &'a Value, reference: &str) -> Option<&'a Value> {
     let path = reference.strip_prefix('#')?;
-    if path.is_empty() {
-        return Some(doc);
-    }
-    let decoded: String =
-        path.split('/').map(|p| p.replace("~1", "/").replace("~0", "~")).collect::<Vec<_>>().join("/");
-    let mut at = doc;
-    for part in decoded.trim_start_matches('/').split('/') {
-        at = match at {
-            Value::Object(m) => m.get(part)?,
-            Value::Array(a) => a.get(part.parse::<usize>().ok()?)?,
-            _ => return None,
-        };
-    }
-    Some(at)
+    doc.pointer(path).or_else(|| percent_decode(path).and_then(|p| doc.pointer(&p)))
 }
 
 struct Checker<'a, 'p> {
     doc: &'a Value,
     problems: &'p mut Vec<String>,
+    /// Schemas checked so far, up to [`MAX_VISITS`].
+    visits: usize,
 }
 
 impl Checker<'_, '_> {
@@ -148,9 +142,10 @@ impl Checker<'_, '_> {
     }
 
     fn check(&mut self, schema: &Value, value: &Value, at: &str, depth: usize) {
-        if depth > MAX_DEPTH {
+        if depth > MAX_DEPTH || self.visits >= MAX_VISITS {
             return;
         }
+        self.visits += 1;
         // A `$ref` the document doesn't have (or an external one): nothing to check against.
         let Some(schema) = resolve(self.doc, schema) else { return };
         let Some(s) = schema.as_object() else { return };
@@ -160,17 +155,17 @@ impl Checker<'_, '_> {
                 self.check(sub, value, at, depth + 1);
             }
         }
+        // Only "matches none" is reported, so `oneOf` stops at its first match too: options
+        // that overlap are common in real documents.
         for (key, need_one) in [("anyOf", false), ("oneOf", true)] {
             if let Some(options) = s.get(key).and_then(Value::as_array)
                 && !options.is_empty()
                 && !value.is_null()
+                && !options.iter().any(|o| self.matches(o, value, depth + 1))
             {
-                let matches = options.iter().filter(|o| self.matches(o, value, depth + 1)).count();
-                if matches == 0 {
-                    let which = if need_one { "one of the oneOf schemas" } else { "any of the anyOf schemas" };
-                    self.report(format!("`{at}` matches none of {which}"));
-                    return;
-                }
+                let which = if need_one { "one of the oneOf schemas" } else { "any of the anyOf schemas" };
+                self.report(format!("`{at}` matches none of {which}"));
+                return;
             }
         }
 
@@ -292,10 +287,12 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// Whether `value` matches `schema` (without reporting).
-    fn matches(&self, schema: &Value, value: &Value, depth: usize) -> bool {
+    /// Whether `value` matches `schema` (without reporting). Counts toward [`MAX_VISITS`].
+    fn matches(&mut self, schema: &Value, value: &Value, depth: usize) -> bool {
         let mut problems = Vec::new();
-        Checker { doc: self.doc, problems: &mut problems }.check(schema, value, "$", depth);
+        let mut checker = Checker { doc: self.doc, problems: &mut problems, visits: self.visits };
+        checker.check(schema, value, "$", depth);
+        self.visits = checker.visits;
         problems.is_empty()
     }
 }
@@ -465,5 +462,47 @@ mod tests {
         assert!(
             check_response(&d, "GET /t", 200, Some("application/json"), body.to_string().as_bytes()).unwrap().passed()
         );
+    }
+
+    #[test]
+    fn schemas_that_branch_into_themselves_end() {
+        // Every level checks the schema again for each of its three branches: without a limit on
+        // the work, these take 3^64 steps and hang the check.
+        for (keyword, value, passes) in [
+            ("allOf", json!({ "a": 1 }), true),
+            ("anyOf", json!({ "a": 1 }), true),
+            ("oneOf", json!({ "a": 1 }), true),
+            // Nothing matches, so every option is tried at every level.
+            ("anyOf", json!("text"), false),
+            ("oneOf", json!("text"), false),
+        ] {
+            let a = json!({ "$ref": "#/components/schemas/A" });
+            let d = json!({ "openapi": "3.0.0", "paths": { "/t": { "get": { "responses": { "200": { "content": {
+                "application/json": { "schema": a } } } } } } },
+                "components": { "schemas": { "A": { "type": "object", keyword: [a, a, a] } } } });
+            let started = std::time::Instant::now();
+            let check = check_response(&d, "GET /t", 200, Some("application/json"), value.to_string().as_bytes());
+            assert!(started.elapsed() < std::time::Duration::from_secs(10), "{keyword} took {:?}", started.elapsed());
+            assert_eq!(check.unwrap().passed(), passes, "{keyword} {value}");
+        }
+    }
+
+    #[test]
+    fn refs_are_json_pointers() {
+        let d = json!({ "openapi": "3.0.0",
+            "paths": {
+                "/pets": { "get": { "responses": { "200": { "content": { "application/json": {
+                    "schema": { "$ref": "#/components/schemas/a~1b~0c" } } } } } } },
+                "/pets/{id}": { "get": { "responses": { "200": { "$ref": "#/paths/~1pets/get/responses/200" } } } },
+                "/copy": { "get": { "$ref": "#/paths/~1pets~1%7Bid%7D/get" } }
+            },
+            "components": { "schemas": { "a/b~c": { "type": "object", "required": ["id"] } } } });
+        for op in ["GET /pets", "GET /pets/{id}", "GET /copy"] {
+            let missing = check_response(&d, op, 200, Some("application/json"), b"{}").unwrap();
+            assert_eq!(missing.problems, ["`$` is missing the required field `id`"], "{op}");
+        }
+        assert_eq!(pointer(&d, "#"), Some(&d));
+        assert_eq!(pointer(&d, "#/components/schemas/a~1b~0c/required/0"), Some(&json!("id")));
+        assert_eq!(pointer(&d, "#/components/schemas/a~01b"), None);
     }
 }

@@ -427,6 +427,7 @@ impl Round<'_> {
             ProbeKind::Http => ServerKind::Http,
             ProbeKind::Tcp => ServerKind::Tcp,
             ProbeKind::Udp => ServerKind::Udp,
+            ProbeKind::Mcp => ServerKind::Mcp,
         };
         let root = self.ws.root().to_string_lossy().into_owned();
         let targets: Vec<(String, u16)> = self
@@ -446,6 +447,7 @@ impl Round<'_> {
                 ProbeKind::Http => self.probe_http(probe, &url, body.as_deref()).await,
                 ProbeKind::Tcp => probe_tcp(port, body.as_deref().unwrap_or("")).await,
                 ProbeKind::Udp => probe_udp(port, body.as_deref().unwrap_or("")).await,
+                ProbeKind::Mcp => self.probe_mcp(probe, &url, body.as_deref()).await,
             };
             if answer.is_some_and(|a| matches(&expect, Some(&a))) {
                 return true;
@@ -481,6 +483,34 @@ impl Round<'_> {
             "json": serde_json::from_str::<Value>(&text).ok(),
             "body": text,
         }))
+    }
+}
+
+impl Round<'_> {
+    /// Connect to the learner's MCP server (its URL ends with the endpoint path) and ask it the
+    /// probe's method, with the body as the parameters: `{result}` or `{error}`.
+    async fn probe_mcp(&self, probe: &Probe, url: &str, body: Option<&str>) -> Option<Value> {
+        let params = match body.map(str::trim).filter(|b| !b.is_empty()) {
+            Some(b) => serde_json::from_str::<Value>(b).ok()?,
+            None => Value::Null,
+        };
+        let method = probe.method.as_deref().unwrap_or("tools/list");
+        let target = zorvik_engine::mcp::McpTarget {
+            address: url.to_string(),
+            transport: zorvik_engine::mcp::McpTransport::StreamableHttp,
+            headers: Vec::new(),
+            env: Vec::new(),
+            cwd: None,
+        };
+        let opts = zorvik_engine::RequestOptions { timeout: Some(Duration::from_secs(3)), ..Default::default() };
+        let run = async {
+            let connected = Box::pin(self.api.inner.client.mcp(target, &opts, None)).await.ok()?;
+            Some(match connected.client.request(method, params, Duration::from_secs(3)).await {
+                Ok(result) => json!({ "result": result }),
+                Err(e) => json!({ "error": { "code": e.code, "message": e.message } }),
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(5), run).await.ok().flatten()
     }
 }
 
