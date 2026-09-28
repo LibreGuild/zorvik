@@ -2,6 +2,7 @@
 
 pub mod curl;
 pub mod filter;
+pub mod graphql;
 pub mod import;
 pub mod loadtest;
 pub mod mock;

@@ -10,6 +10,7 @@ import type { OpenApiOperation } from "./OpenApiOperation";
 import type { RequestKind } from "./RequestKind";
 import type { RequestSettings } from "./RequestSettings";
 import type { Scripts } from "./Scripts";
+import type { SocketIoOptions } from "./SocketIoOptions";
 import type { SocketOptions } from "./SocketOptions";
 
 /**
@@ -40,7 +41,7 @@ paramDescriptions?: Array<KeyValue>, headers?: Array<KeyValue>, body?: Body, aut
 /**
  * TCP/UDP options.
  */
-socket?: SocketOptions, dns?: DnsOptions, mqtt?: MqttOptions, grpc?: GrpcOptions, scripts?: Scripts, docs?: string, 
+socket?: SocketOptions, dns?: DnsOptions, mqtt?: MqttOptions, grpc?: GrpcOptions, socketio?: SocketIoOptions, scripts?: Scripts, docs?: string, 
 /**
  * The OpenAPI operation this request was imported from (see [`OpenApiSource`]).
  */

@@ -2,7 +2,7 @@
 title: TCP & UDP
 description: Raw TCP (with or without TLS) and UDP sockets, with text or hex messages, framing and line endings.
 sidebar:
-  order: 5
+  order: 6
 ---
 
 TCP and UDP requests talk to a server below HTTP: you connect, send messages from the composer and see every byte that comes back. Use them for line protocols (Redis, SMTP, custom daemons), binary protocols with length prefixes, game or IoT servers, and anything else that isn't HTTP.

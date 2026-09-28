@@ -134,6 +134,7 @@ No wasted questions, no delay. The price: the server must keep many connections 
 | **WebSocket** | both ways, any time | chat, games, live collaboration |
 | **Server-Sent Events** (SSE) | server to client only, over plain HTTP | notifications, live scores, AI answers typed out word by word |
 | **MQTT** | publish/subscribe through a broker | sensors, smart homes, fleets of devices |
+| **Socket.IO** | both ways, as named events, over WebSocket or long-polling | chat rooms, multiplayer games, live dashboards |
 
 (Server-to-server push also exists: a **webhook** is the server calling *your* URL when something happens.)
 

@@ -55,12 +55,18 @@ pub enum ServerKind {
     Dns,
     /// Relay to another TCP server, showing the traffic in both directions.
     TcpProxy,
+    /// Socket.IO server (Socket.IO 3 and 4: WebSocket and HTTP long-polling).
+    #[serde(rename = "socketio")]
+    SocketIo,
 }
 
 impl ServerKind {
     /// Whether the server can listen with TLS.
     pub fn supports_tls(self) -> bool {
-        matches!(self, ServerKind::Http | ServerKind::Websocket | ServerKind::Sse | ServerKind::Tcp)
+        matches!(
+            self,
+            ServerKind::Http | ServerKind::Websocket | ServerKind::Sse | ServerKind::Tcp | ServerKind::SocketIo
+        )
     }
 }
 
@@ -311,6 +317,119 @@ pub struct SseServerConfig {
     pub repeat: bool,
 }
 
+// ---- Socket.IO ---------------------------------------------------------------
+
+fn socketio_path() -> String {
+    "/socket.io/".to_string()
+}
+fn is_socketio_path(v: &String) -> bool {
+    v == "/socket.io/"
+}
+
+/// "When a client emits `event` (and its arguments match), acknowledge and/or emit a reply."
+/// Arguments are JSON: an array for several, or a single value. Replies may use templates
+/// (`{{event.args}}`, `{{event.arg0}}`, `{{$uuid}}`, environment variables).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SocketIoRule {
+    /// Event name, or `*` for any.
+    #[serde(default)]
+    pub event: String,
+    /// How the arguments (as JSON text) must match `pattern`.
+    #[serde(default = "any_match", rename = "match", skip_serializing_if = "is_any_match")]
+    #[ts(optional, as = "Option<MatchKind>")]
+    pub matcher: MatchKind,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub pattern: String,
+    /// Arguments of the acknowledgement, when the client asks for one (empty: no arguments).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub ack: String,
+    /// Event to emit back (empty: none).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub reply_event: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub reply_args: String,
+    /// Emit the reply to every client of the namespace, not just the sender.
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional, as = "Option<bool>")]
+    pub broadcast: bool,
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    #[ts(optional, as = "Option<u32>")]
+    pub delay_ms: u64,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    #[ts(optional, as = "Option<bool>")]
+    pub enabled: bool,
+}
+
+fn any_match() -> MatchKind {
+    MatchKind::Any
+}
+fn is_any_match(v: &MatchKind) -> bool {
+    *v == MatchKind::Any
+}
+
+impl Default for SocketIoRule {
+    fn default() -> Self {
+        Self {
+            event: String::new(),
+            matcher: MatchKind::Any,
+            pattern: String::new(),
+            ack: String::new(),
+            reply_event: String::new(),
+            reply_args: String::new(),
+            broadcast: false,
+            delay_ms: 0,
+            enabled: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SocketIoServerConfig {
+    /// Echo: emit every event back to its sender (and acknowledge with its arguments).
+    #[serde(default, skip_serializing_if = "is_default")]
+    #[ts(optional, as = "Option<ReplyMode>")]
+    pub mode: ReplyMode,
+    /// Emitted to each client right after it connects (empty: nothing).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub greeting_event: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub greeting_args: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<SocketIoRule>>")]
+    pub rules: Vec<SocketIoRule>,
+    /// Where the server answers (socket.io's `path` option).
+    #[serde(default = "socketio_path", skip_serializing_if = "is_socketio_path")]
+    #[ts(optional, as = "Option<String>")]
+    pub path: String,
+    /// Allow browsers on other origins to connect (CORS for long-polling).
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional, as = "Option<bool>")]
+    pub cors: bool,
+}
+
+impl Default for SocketIoServerConfig {
+    fn default() -> Self {
+        Self {
+            mode: ReplyMode::Echo,
+            greeting_event: String::new(),
+            greeting_args: String::new(),
+            rules: Vec::new(),
+            path: socketio_path(),
+            cors: false,
+        }
+    }
+}
+
 // ---- TCP / UDP ---------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -456,6 +575,9 @@ pub struct Server {
     #[serde(default, skip_serializing_if = "is_default")]
     #[ts(optional, as = "Option<TcpProxyConfig>")]
     pub proxy: TcpProxyConfig,
+    #[serde(default, skip_serializing_if = "is_default")]
+    #[ts(optional, as = "Option<SocketIoServerConfig>")]
+    pub socketio: SocketIoServerConfig,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     #[ts(optional, as = "Option<String>")]
     pub docs: String,
@@ -471,6 +593,7 @@ impl Server {
             // Not 5353: that is mDNS, already taken on macOS and often on Windows.
             ServerKind::Dns => 1053,
             ServerKind::TcpProxy => 9100,
+            ServerKind::SocketIo => 3003,
         };
         Self {
             name: name.into(),
@@ -486,6 +609,7 @@ impl Server {
             socket: SocketServerConfig::default(),
             dns: DnsServerConfig::default(),
             proxy: TcpProxyConfig::default(),
+            socketio: SocketIoServerConfig::default(),
             docs: String::new(),
         }
     }

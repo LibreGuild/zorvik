@@ -41,13 +41,13 @@ Every tool is annotated for the client: `readOnlyHint` (reads only), `destructiv
 | `save_folder_settings` | Auth, headers, scripts and docs that requests in a folder inherit, merged into what is there. `folder: ""` is the collection, which also has variables (merged by key). | `folder`, `auth`, `headers`, `scripts`, `docs`, `variables` | edit |
 | `move_item` | Move a request or folder to another folder and/or rename it. Load tests that send it follow. | `path`, `toFolder`, `newName` | edit |
 | `delete_items` | Move requests, folders, environments, load tests or servers to the trash. Deleting a load test also deletes its run history. | `paths`, `environments`, `loadTests`, `servers` | always |
-| `export_request` | A request as a ready-to-run command or code: cURL for bash (`curl`), Windows cmd (`curlCmd`) or PowerShell (`curlPowerShell`), Kotlin with OkHttp, Swift with URLSession, JavaScript with fetch or Python with requests. Variables are filled in unless `resolveVariables: false`; secret values come back as `••••••` (you can copy the full version in Zorvik). | `path` or `request` (+ `folder`), `format`, `resolveVariables` | no |
+| `export_request` | A request as a ready-to-run command or code: cURL for bash (`curl`), Windows cmd (`curlCmd`) or PowerShell (`curlPowerShell`), or code: `javascript` (fetch), `javascriptAxios`, `python` (requests), `pythonHttpx`, `go`, `java`, `kotlin` (OkHttp), `swift`, `csharp`, `php`, `ruby`, `rust`, `dart`, `c` (libcurl), `powerShell`, `httpie` or `wget`. Comments at the top say what the code can't do that Zorvik does (answer a Digest challenge, sign each request). Variables are filled in unless `resolveVariables: false`; secret values come back as `••••••` (you can copy the full version in Zorvik). | `path` or `request` (+ `folder`), `format`, `resolveVariables` | no |
 
 Request fields for `save_requests` and `send_request`:
 
 | Field | Notes |
 |---|---|
-| `kind` | `http` (default), `grpc`, `dns`, `websocket`, `sse`, `tcp`, `udp`, `mqtt`. GraphQL is `http` with a `graphql` body. |
+| `kind` | `http` (default), `grpc`, `dns`, `websocket`, `socketio`, `sse`, `tcp`, `udp`, `mqtt`. GraphQL is `http` with a `graphql` body. |
 | `method` | HTTP method (default GET). gRPC: `package.Service/Method`. DNS: the record type. |
 | `url` | Full URL with `{{variables}}`; `:name` path segments take `pathParams`. gRPC: `grpc://` or `grpcs://`. DNS: the name. |
 | `query` | `[{key, value, enabled, description}]`: enabled ones replace the URL's query string, disabled ones are kept switched off. |
@@ -85,7 +85,7 @@ Request fields for `save_requests` and `send_request`:
 | `graphql_schema` | The schema of a GraphQL endpoint by introspection, as SDL. | `path` or `request`, `maxChars` (default and at most 60,000) | traffic |
 | `grpc_describe` | Services and methods of a gRPC server, from the request's `.proto` files or server reflection. | `path` or `request` | traffic |
 
-`send_request` supports HTTP, GraphQL, gRPC (unary calls), DNS and Server-Sent Events. An SSE request is read until the first event named `stream.untilEvent` (`message` for unnamed events), `stream.maxEvents` events (default 100; 0 for only the time limit), or `stream.timeoutMs` (default 10,000, at most 120,000), and returns the events. WebSocket, TCP, UDP and MQTT are live sessions that agents can't use yet: the tool says so.
+`send_request` supports HTTP, GraphQL, gRPC (unary calls), DNS and Server-Sent Events. An SSE request is read until the first event named `stream.untilEvent` (`message` for unnamed events), `stream.maxEvents` events (default 100; 0 for only the time limit), or `stream.timeoutMs` (default 10,000, at most 120,000), and returns the events. A GraphQL subscription is read the same way, each result an event named `next`. WebSocket, Socket.IO, TCP, UDP and MQTT are live sessions that agents can't use yet: the tool says so.
 
 To keep a large JSON response short, give `send_request` a `filter`: `{language: "jsonPath", expression: "$.items[*].id"}` or `{language: "jq", expression: ".items | map(.id)"}`. It runs on the whole body; the matches replace `body`, with `filtered: {matches, truncated}`, or `filterError` when the expression is wrong.
 
@@ -114,7 +114,7 @@ The `test` object uses the [load test file format](../../reference/workspace-for
 
 | Tool | What it does | Main inputs | Asks |
 |---|---|---|---|
-| `list_servers` | Saved mock APIs and servers (HTTP, WebSocket, SSE, TCP, UDP, DNS, relay): kind, address, route count, and which are running. | none | no |
+| `list_servers` | Saved mock APIs and servers (HTTP, WebSocket, Socket.IO, SSE, TCP, UDP, DNS, relay): kind, address, route count, and which are running. | none | no |
 | `read_server` | A server's full definition, in the shape `save_server` takes. | `name` | no |
 | `save_server` | Create a server or change one. Changes merge like a JSON Merge Patch: objects merge, arrays (routes, rules, records) replace the whole list, `null` resets a field; `replace: true` saves exactly what is given. A running server takes the change at once (a new address, port, TLS or kind needs a restart). | `name`, `server` (the [server format](../../reference/workspace-format/#servers-serversyaml)), `replace` | edit |
 | `create_mock` | Build a mock API from a folder (each HTTP request becomes a route answering with its saved example response or a 200) or from an OpenAPI 3 / Swagger 2 document (each operation answers with its first 2xx example). Returns the new server; start it with `start_server`. | `name` (default "Mock API"), one of `folder`, `openapiText`, `openapiUrl`, `openapiFile`; `port` (default: the next free port from 4000) | edit; `openapiUrl` also traffic; `openapiFile` always |
@@ -132,7 +132,7 @@ The `test` object uses the [load test file format](../../reference/workspace-for
 ## What agents can't do
 
 - Read or change **settings**, **cookies** or **secret values**. There is no tool for them.
-- Use **live sessions**: WebSocket, TCP, UDP and MQTT requests (they can save them, not send them).
+- Use **live sessions**: WebSocket, Socket.IO, TCP, UDP and MQTT requests (they can save them, not send them).
 - **Delete permanently**: deletes go to the trash, after you confirm.
 - Read files **outside the workspace** during a call, except a file you approve for `import`, `update_from_openapi` or `create_mock`.
 

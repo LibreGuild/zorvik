@@ -45,7 +45,8 @@ Changes made while a run is in progress apply to the next run.
 |---|---|
 | HTTP, including GraphQL | Sent |
 | Server-Sent Events (SSE) | Sent by `zorvik run` and by runs an AI agent starts: read until the request's stream settings say to stop. See [event streams in runs](../repeat-and-streams/#event-streams-in-runs). |
-| WebSocket, TCP, UDP, MQTT | Skipped: they are live sessions |
+| GraphQL subscriptions | Read like SSE requests: until the request's stream settings say to stop. See [GraphQL subscriptions](../../protocols/graphql/#subscriptions). |
+| WebSocket, Socket.IO, TCP, UDP, MQTT | Skipped: they are live sessions |
 | gRPC, DNS | Skipped: they don't run in the collection runner |
 
 :::note

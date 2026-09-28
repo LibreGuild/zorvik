@@ -56,7 +56,7 @@ pub(super) fn server_schema() -> Value {
     obj(
         json!({
             "name": string("Display name (also its file name). Renames the server when it differs from the one being saved."),
-            "kind": { "type": "string", "enum": ["http", "websocket", "sse", "tcp", "udp", "dns", "tcpProxy"], "description": "http = mock API (default). Only the section of the kind is used." },
+            "kind": { "type": "string", "enum": ["http", "websocket", "socketio", "sse", "tcp", "udp", "dns", "tcpProxy"], "description": "http = mock API (default). Only the section of the kind is used." },
             "host": string("127.0.0.1 (default, this computer only) or 0.0.0.0 (other devices too)."),
             "port": { "type": "integer", "description": "Port to listen on; 0 = any free port when it starts." },
             "tls": obj(json!({
@@ -91,6 +91,28 @@ pub(super) fn server_schema() -> Value {
                 "cors": { "type": "boolean", "description": "Answer CORS preflights and add Access-Control-Allow-* headers, so a web app on another origin can call the mock." },
             }), &[]),
             "websocket": obj(json!({ "mode": mode(), "greeting": string("Sent to each client right after it connects."), "rules": reply_rules() }), &[]),
+            "socketio": obj(json!({
+                "mode": { "type": "string", "enum": ["echo", "rules", "manual", "discard"], "description": "echo (default): emit every event back and acknowledge with its arguments; rules: the first matching rule answers; manual: only what the user emits; discard." },
+                "greetingEvent": string("Emitted to each client that joins a namespace (empty: none)."),
+                "greetingArgs": string("Its arguments as JSON (an array for several)."),
+                "rules": {
+                    "type": "array",
+                    "description": "Answers can use {{event.name}}, {{event.args}}, {{event.arg0}}… (the client's values as JSON), dynamic variables and environment variables.",
+                    "items": obj(json!({
+                        "event": string("Event name, or * for any."),
+                        "match": { "type": "string", "enum": ["any", "contains", "exact", "regex"], "description": "How the arguments (as JSON, or one text argument as text) must match pattern. Default any." },
+                        "pattern": { "type": "string" },
+                        "ack": string("Acknowledgement arguments (JSON) when the client asks for one; empty = no arguments."),
+                        "replyEvent": string("Event to emit back (empty: none)."),
+                        "replyArgs": string("Its arguments as JSON."),
+                        "broadcast": { "type": "boolean", "description": "Emit the reply to every client of the namespace." },
+                        "delayMs": { "type": "integer" },
+                        "enabled": { "type": "boolean" },
+                    }), &[]),
+                },
+                "path": string("Where the server answers (default /socket.io/)."),
+                "cors": { "type": "boolean", "description": "Allow browsers on other origins (long-polling)." },
+            }), &[]),
             "sse": obj(json!({
                 "events": {
                     "type": "array",
@@ -137,7 +159,7 @@ pub(super) fn defs() -> Vec<Def> {
         Def {
             name: "list_servers",
             title: "List servers",
-            description: "Saved mock APIs and servers (HTTP, WebSocket, SSE, TCP, UDP, DNS, relay): kind, address, route count, and which are running.",
+            description: "Saved mock APIs and servers (HTTP, WebSocket, Socket.IO, SSE, TCP, UDP, DNS, relay): kind, address, route count, and which are running.",
             schema: obj(json!({}), &[]),
             read_only: true,
             destructive: false,
@@ -386,7 +408,7 @@ impl Api {
                 let kind: ServerKind = match patch.get("kind") {
                     Some(k) => serde_json::from_value(k.clone()).map_err(|_| {
                         Fail::Invalid(format!(
-                            "server.kind: unknown kind {k} (http, websocket, sse, tcp, udp, dns, tcpProxy)"
+                            "server.kind: unknown kind {k} (http, websocket, socketio, sse, tcp, udp, dns, tcpProxy)"
                         ))
                     })?,
                     None => ServerKind::Http,
@@ -675,6 +697,7 @@ mod tests {
             "tls": { "enabled": true, "certPath": "", "keyPath": "" },
             "http": { "routes": [{ "name": "", "method": "*", "path": "/", "status": 200, "headers": [{ "key": "a", "value": "b", "enabled": true }], "body": "", "delayMs": 0, "matchQuery": [], "matchHeaders": [], "matchBody": "", "fault": "none", "faultPercent": 100, "enabled": true }], "fallback": "proxy", "proxyUrl": "", "cors": true },
             "websocket": { "mode": "rules", "greeting": "", "rules": [{ "match": "regex", "pattern": "", "reply": "", "delayMs": 0, "enabled": true }] },
+            "socketio": { "mode": "rules", "greetingEvent": "", "greetingArgs": "", "path": "/io/", "cors": true, "rules": [{ "event": "*", "match": "contains", "pattern": "", "ack": "", "replyEvent": "", "replyArgs": "", "broadcast": true, "delayMs": 0, "enabled": true }] },
             "sse": { "events": [{ "event": "", "data": "", "id": "" }], "intervalMs": 0, "repeat": true },
             "socket": { "mode": "echo", "greeting": "", "rules": [], "encoding": "hex", "framing": "lengthPrefixed", "lengthBytes": 4, "lineEnding": "crLf" },
             "dns": { "records": [{ "name": "a", "type": "A", "value": "1.2.3.4", "ttl": 60, "enabled": true }], "upstream": "" },

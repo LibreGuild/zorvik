@@ -12,8 +12,9 @@ Three workflows:
 | Rust (Windows) | `cargo test` on real Windows networking, paths and trash |
 | UI | TypeScript typecheck, Vitest unit tests, production build |
 | E2E | Playwright drives the real UI against the real Rust API and local test servers |
+| Code export | the code "Copy as cURL or code" writes, checked by each language's compiler or parser (Node, Python, Go, Java, .NET, PHP, Ruby, rustfmt, C with libcurl, PowerShell, bash) |
 
-A pull request can merge only when all four pass. Pull requests from first-time contributors wait for a maintainer to approve the workflow run.
+A pull request can merge only when the Rust, UI and E2E checks pass; a release also waits for Code export. Pull requests from first-time contributors wait for a maintainer to approve the workflow run.
 
 ## Release channels
 | Channel | Made by | Where | Version |

@@ -1,6 +1,6 @@
 ---
 title: zorvik serve
-description: Start a saved mock API or server (WebSocket, SSE, TCP, UDP, DNS, TCP relay) from a terminal or CI and print its traffic as text or JSON lines.
+description: Start a saved mock API or server (WebSocket, Socket.IO, SSE, TCP, UDP, DNS, TCP relay) from a terminal or CI and print its traffic as text or JSON lines.
 sidebar:
   order: 4
 ---
@@ -52,6 +52,7 @@ If the port is taken, the command stops with exit code 2 and, when the system te
 |---|---|---|
 | Mock API | `Mock API` | Answers HTTP requests from its routes; can forward others to a real backend |
 | WebSocket | `WebSocket server` | Accepts WebSocket connections and answers messages by its rules |
+| Socket.IO | `Socket.IO server` | Accepts socket.io-client connections (long-polling and WebSocket) and answers events |
 | Server-Sent Events | `Event stream server` | Sends its events to each client that connects |
 | TCP | `TCP server` | Accepts TCP connections and answers by its rules |
 | UDP | `UDP server` | Receives datagrams and answers by its rules |

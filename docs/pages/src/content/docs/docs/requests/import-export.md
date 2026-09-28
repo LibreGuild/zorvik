@@ -193,24 +193,34 @@ Copy any HTTP request as a command or as a short program:
 - the request's **More actions** (⋯) → **Copy as cURL or code…**;
 - or right-click a request in the sidebar → **Copy as cURL or code…**.
 
-The **Copy as cURL or code** dialog shows the result; choose a format and **Copy**.
+The dialog lists the languages on the left (type in the search box to find one by name, library or platform: `axios`, `android`, `flutter`, `.net`; <kbd>↑</kbd> and <kbd>↓</kbd> move through the list), shows the code with syntax highlighting, and **Copy** copies it. Where a language has several libraries (or shells), pick one above the code. Zorvik remembers your last choice.
 
-| Format | For |
-|---|---|
-| **cURL for bash / zsh (macOS, Linux)** | POSIX shells; the default on macOS and Linux |
-| **cURL for Windows Command Prompt** | `cmd.exe`; the default on Windows |
-| **cURL for Windows PowerShell** | Calls `curl.exe` |
-| **Kotlin (OkHttp, Android)** | OkHttp 4 |
-| **Swift (URLSession)** | iOS and macOS |
-| **JavaScript (fetch)** | Browsers and Node.js 18+ |
-| **Python (requests)** | The `requests` library |
+| Language | Libraries | Notes |
+|---|---|---|
+| **cURL** | bash / zsh, Windows cmd, PowerShell (`curl.exe`) | bash / zsh is the default on macOS and Linux, Windows cmd on Windows |
+| **HTTPie** | HTTPie 3 | A shell command |
+| **Wget** | Wget 1.15+ | A shell command; binary bodies go through a temporary file |
+| **PowerShell** | `Invoke-WebRequest` | PowerShell 7 |
+| **JavaScript** | `fetch`, axios | `fetch`: browsers and Node.js 18+; axios: Node.js (an ES module) |
+| **Python** | requests, HTTPX | |
+| **Go** | `net/http` | A complete program, standard library only |
+| **Java** | `java.net.http.HttpClient` | Java 11+; runs with `java Main.java` |
+| **Kotlin** | OkHttp | OkHttp 4 (Android) |
+| **Swift** | URLSession | iOS and macOS |
+| **C#** | `HttpClient` | .NET 6+ top-level program |
+| **PHP** | the curl extension | |
+| **Ruby** | `Net::HTTP` | |
+| **Rust** | reqwest | With Tokio |
+| **Dart** | `package:http` | Flutter and Dart |
+| **C** | libcurl | |
 
 What's in it:
 
 - The method, the URL, the headers and the body **as Zorvik would send them**: inherited headers, auth (including the cached OAuth 2.0 token, or `<access-token>` when there is none), `Content-Type` and the encoded body.
 - **Substitute variables** (on by default) resolves `{{variables}}` with the active environment. Switch it off to keep them as `{{name}}`. Dynamic variables such as `{{$uuid}}` get a value either way.
 - Not included: headers Zorvik adds at send time (`User-Agent`, `Accept`, `Accept-Encoding`), cookies from the jar, pre-request scripts, and the request's settings (timeout, redirects, TLS verification, HTTP version).
-- The code snippets leave out `Content-Length` and `Host`, which the libraries set themselves; OkHttp and URLSession also leave out `Accept-Encoding` (a comment says why). OkHttp, URLSession and `fetch` can't send a body with `GET` or `HEAD`, so it is left out with a comment. Bodies that aren't text are embedded as Base64.
+- Each snippet leaves out what its library does by itself, with a comment saying why: `Content-Length` and `Host` everywhere; `Accept-Encoding` where the library adds it and decompresses (OkHttp, URLSession, axios, Dart, PowerShell); a body with `GET` or `HEAD` where the library can't send one (OkHttp, URLSession, `fetch`, PowerShell). Java's `HttpClient` refuses `Connection`, `Expect` and `Upgrade`, so those are left out too. A header sent twice is kept twice where the library allows it, and joined (`, `, or `; ` for `Cookie`) where it holds one value per name. Bodies that aren't text are embedded as Base64 (C and Rust: as bytes).
+- **Comments at the top say what the code can't do** that Zorvik does: answer a Digest or NTLM challenge (the code sends no credentials), and sign each request for AWS Signature V4, OAuth 1.0, JWT, Hawk, Akamai EdgeGrid and ASAP (the copied signature soon expires). `<access-token>` is explained when there is no OAuth 2.0 token yet.
 
 :::caution
 With **Substitute variables** on, the result contains the real values, secrets included. Be careful where you paste it.

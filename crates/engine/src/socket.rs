@@ -74,6 +74,19 @@ pub enum SocketOutgoing {
     Unsubscribe {
         topic: String,
     },
+    /// Socket.IO: emit `event` with `args` (JSON: an array for several arguments, else one),
+    /// or with one binary argument (`base64`).
+    #[serde(rename_all = "camelCase")]
+    Emit {
+        event: String,
+        #[serde(default)]
+        args: String,
+        #[serde(default)]
+        base64: Option<String>,
+        /// Ask the server to acknowledge.
+        #[serde(default)]
+        ack: bool,
+    },
 }
 
 impl SocketOutgoing {
@@ -82,6 +95,20 @@ impl SocketOutgoing {
         Ok(match self {
             SocketOutgoing::Text { text } => Some((text.as_bytes().to_vec(), true)),
             SocketOutgoing::Binary { base64 } => Some((decode_base64(base64)?, false)),
+            SocketOutgoing::Emit { event, args, base64, .. } => {
+                if event.trim().is_empty() {
+                    return Err(EngineError::invalid("Enter the name of the event to emit"));
+                }
+                match base64 {
+                    Some(data) => {
+                        decode_base64(data)?;
+                    }
+                    None => {
+                        crate::socketio::packet::parse_args(args).map_err(EngineError::invalid)?;
+                    }
+                }
+                None
+            }
             _ => None,
         })
     }
@@ -171,6 +198,8 @@ impl SocketSession {
 
 pub struct SocketConnected {
     pub opened: SocketOpened,
+    /// The HTTP answer that started it, for sessions that begin with one (WebSocket, SSE).
+    pub meta: Option<crate::http::ResponseMeta>,
     pub session: SocketSession,
     pub events: mpsc::UnboundedReceiver<SocketEvent>,
 }
@@ -253,7 +282,7 @@ impl Client {
         let (out_tx, out_rx) = mpsc::unbounded_channel();
         let (ev_tx, ev_rx) = mpsc::unbounded_channel();
         tokio::spawn(run_tcp(conn.stream, config, out_rx, ev_tx));
-        Ok(SocketConnected { opened, session: SocketSession { tx: out_tx }, events: ev_rx })
+        Ok(SocketConnected { opened, meta: None, session: SocketSession { tx: out_tx }, events: ev_rx })
     }
 }
 

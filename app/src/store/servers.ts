@@ -83,9 +83,10 @@ export const SERVER_KIND_NAMES: Record<ServerKind, string> = {
   udp: "UDP server",
   dns: "DNS server",
   tcpProxy: "TCP relay",
+  socketio: "Socket.IO server",
 };
 
-const DEFAULT_PORTS: Record<ServerKind, number> = { http: 3000, websocket: 3001, sse: 3002, tcp: 9000, udp: 9001, dns: 1053, tcpProxy: 9100 };
+const DEFAULT_PORTS: Record<ServerKind, number> = { http: 3000, websocket: 3001, sse: 3002, tcp: 9000, udp: 9001, dns: 1053, tcpProxy: 9100, socketio: 3003 };
 
 export function newServerDraft(kind: ServerKind, name = SERVER_KIND_NAMES[kind]): Server {
   // A port not used by another saved server, so a new one starts right away.
@@ -97,6 +98,7 @@ export function newServerDraft(kind: ServerKind, name = SERVER_KIND_NAMES[kind])
   if (kind === "sse") server.sse = { events: [{ event: "tick", data: '{"n": 1}' }], intervalMs: 1000, repeat: true };
   if (kind === "dns") server.dns = { records: [{ name: "api.example.test", type: "A", value: "127.0.0.1", ttl: 60 }], upstream: "system" };
   if (kind === "tcpProxy") server.proxy = { target: "example.com:80" };
+  if (kind === "socketio") server.socketio = { greetingEvent: "welcome", greetingArgs: '{"id": "{{$uuid}}"}' };
   return server;
 }
 

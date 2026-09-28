@@ -11,12 +11,13 @@ crates/api/          RPC dispatcher and app state: in-flight requests, stream se
       │              jars, history, secrets, file watcher, runner, load runs, servers, agents
 crates/workspace/    Workspace on disk, variables, auth and OAuth 2.0, request resolution,
       │              history (SQLite), settings, secret store
-crates/formats/      Data model (YAML files) and import/export: cURL, Postman, OpenAPI
+crates/formats/      Data model (YAML files) and import/export: cURL, Postman, OpenAPI, code in 16 languages
 crates/script/       Sandboxed JavaScript (QuickJS) for pre-request and post-response scripts
 crates/load/         Load generator: own runtime, pooled client, HdrHistogram metrics, reports
-crates/servers/      Servers the user runs: mock HTTP, WebSocket, SSE, TCP, UDP, DNS, TCP relay
+crates/servers/      Servers the user runs: mock HTTP, WebSocket, Socket.IO, SSE, TCP, UDP, DNS, TCP relay
 crates/engine/       Networking only: HTTP/1.1, HTTP/2, HTTP/3, TLS, proxy, WebSocket, SSE,
-                     TCP/UDP/DNS/MQTT/gRPC clients, cookies, decoding, timing, network tools
+                     TCP/UDP/DNS/MQTT/gRPC/Socket.IO clients, GraphQL subscriptions,
+                     cookies, decoding, timing, network tools
 crates/cli/          `zorvik`: run, load, serve and mcp (the command line inside every install)
 crates/mcp/          MCP for AI agents: the stdio bridge (`zorvik mcp`) and the app's listener
 crates/testkit/      Local test servers used by the tests (HTTP, TLS, proxy, OAuth, GraphQL, gRPC),
@@ -41,6 +42,12 @@ crates/academy/      Training Bootcamp: the course (lessons, labs, quizzes as fi
 5. `engine::Client::send`: DNS, TCP (Happy Eyeballs), proxy tunnel, TLS, HTTP/1.1 or HTTP/2 (or QUIC for HTTP/3), redirects, decoding. Digest and NTLM are a `ChallengeAuth` in the request options: when the server answers 401 with a challenge, the engine sends the request again with the answer on the same connection (NTLM forces HTTP/1.1).
 6. Post-response scripts run the tests and fill the console. A request imported from an OpenAPI document the workspace keeps also gets a "Matches the API spec" test (see below).
 7. A history row is written. The response goes back with timing, TLS details, cookies, the headers really sent and the script results.
+
+## Live sessions
+WebSocket and SSE requests have their own session APIs (`ws.*`, `sse.*`). TCP, UDP, MQTT, Socket.IO and GraphQL subscriptions share one (`socket.*` in `crates/api/src/sockets.rs`): `socket.connect` resolves the request, opens the engine's session for its kind, and forwards its `SocketEvent`s to the UI; `socket.send` passes `SocketOutgoing` messages (text, binary, MQTT publishes, Socket.IO emits).
+
+- **GraphQL subscriptions** are HTTP requests with a GraphQL body whose operation is a `subscription` (`crates/formats/src/graphql.rs` reads the operation type without a full parser; the UI does the same with graphql-js's lexer). `resolve` adds the subscription's URL and connection params. `crates/engine/src/graphql.rs` speaks `graphql-transport-ws` and `subscriptions-transport-ws` over the engine's WebSocket, and graphql-sse over a streaming POST. Collection runs, the CLI and agents read a subscription to an end like an SSE request (`crates/api/src/sse_read.rs`): results become `next` events, and the response body is the results as a JSON array.
+- **Socket.IO** (`crates/engine/src/socketio/`): `packet.rs` encodes Engine.IO 4 and Socket.IO packets (namespaces, acknowledgement ids, binary attachments as placeholders) for both the client and the server. The client runs the same session over WebSocket or long-polling (a GET loop and POSTs through the engine's HTTP client), falling back to polling when the server refuses the upgrade.
 
 ## Workspace format
 A workspace is a plain folder of YAML files, meant to be committed to Git.
@@ -83,7 +90,7 @@ scripts:
   postResponse: |
     pm.test("Status is 201", () => pm.response.to.have.status(201));
 ```
-Other request kinds add `kind:` (`websocket`, `sse`, `grpc`, `tcp`, `udp`, `dns`, `mqtt`). Default values are left out so files stay small and diffs stay clean.
+Other request kinds add `kind:` (`websocket`, `socketio`, `sse`, `grpc`, `tcp`, `udp`, `dns`, `mqtt`). Default values are left out so files stay small and diffs stay clean.
 
 An environment file marks secrets; their real values stay on each computer:
 ```yaml
@@ -155,7 +162,7 @@ The API is a Postman-compatible subset (`crates/script/src/prelude.js`), so impo
 ## Servers and mocks
 `crates/servers` has one listener per saved server, reporting traffic through a `Reporter`; `crates/api/src/servers.rs` starts and stops them, applies live edits and keeps bounded logs. Every kind follows one contract: serve until `ctx.cancel`, read the latest settings from `ctx.live`, answer `ctx.control` (send, disconnect).
 
-Kinds: **mock API** (routes with `:params`, templated bodies, delays, faults, matching on query, headers and body, CORS, forward to a real backend), **WebSocket**, **SSE**, **TCP**, **UDP**, **DNS** and a **TCP relay** that logs both directions. Templates can use environment and workspace variables but never secret ones, and text sent by clients is never expanded. A server starts with its workspace only if this computer already started or saved that exact configuration.
+Kinds: **mock API** (routes with `:params`, templated bodies, delays, faults, matching on query, headers and body, CORS, forward to a real backend), **WebSocket**, **Socket.IO**, **SSE**, **TCP**, **UDP**, **DNS** and a **TCP relay** that logs both directions. The Socket.IO server (`crates/servers/src/socketio.rs`) is built on the mock's hyper stack with upgrades on: one task per Engine.IO session owns its namespaces and heartbeat, long-polling GETs and POSTs and the WebSocket only carry packets in and out, and the upgrade from polling to WebSocket (probe, noop, upgrade) moves a session's output to the socket. Templates can use environment and workspace variables but never secret ones, and text sent by clients is never expanded. A server starts with its workspace only if this computer already started or saved that exact configuration.
 
 ## AI agents
 Coding agents (Claude Code, Codex, Gemini CLI, Cursor and others) control Zorvik through MCP.
@@ -168,7 +175,7 @@ Agent ──MCP over stdio──► zorvik mcp ──127.0.0.1 TCP + token──
 - **Headless** (off by default): when the app is closed, the tools run inside `zorvik mcp`. Nothing can be approved there, so actions that would ask are refused.
 - **Permissions**, checked in Rust on every call: reading is allowed; edits (requests, folders, environments, servers, load tests, files added with `write_file`) are allowed or asked (setting); requests to outside hosts are asked once per host and agent session; deletes, load tests, starting servers, reading files outside the workspace and opening workspaces always ask. Settings, cookies and secret values are not available to agents; history, variables, server traffic and everything returned have credentials redacted.
 - **Input**: tools that save files (`save_requests`, `save_server`, `save_load_test`) refuse fields the model doesn't have, with the nearest known name ("did you mean `status`?"), so a typo is never saved silently. Their JSON schemas document every field, unit and placeholder.
-- **Tools** (`crates/api/src/agents/tools/`): workspace, requests (read several at once, save with query and path parameters), environments and variables (with values scripts saved), import and `update_from_openapi`, `send_request` (HTTP, GraphQL, gRPC, DNS, SSE read to an end), collection runs, GraphQL schemas, gRPC services, load tests, servers (`read_server`, `save_server`, `create_mock`, `start_server` with any port, `get_server_traffic`), `read_history`, `export_request` (cURL, Kotlin, Swift, JavaScript, Python), `write_file` (up to 10 MB, not into Zorvik's own folders).
+- **Tools** (`crates/api/src/agents/tools/`): workspace, requests (read several at once, save with query and path parameters), environments and variables (with values scripts saved), import and `update_from_openapi`, `send_request` (HTTP, GraphQL, gRPC, DNS, SSE read to an end), collection runs, GraphQL schemas, gRPC services, load tests, servers (`read_server`, `save_server`, `create_mock`, `start_server` with any port, `get_server_traffic`), `read_history`, `export_request` (cURL and code in 16 languages), `write_file` (up to 10 MB, not into Zorvik's own folders).
 - **Where requests go**: each tool call runs in an agent scope. A host guard in the engine keeps every request (redirects, OAuth token requests, gRPC channels, DNS resolvers, collection runs) on the approved hosts. During an agent's call no files outside the workspace are read.
 - **Visible**: the title bar shows the connected agent; the Agents panel lists every tool call; the app opens what the agent works on (setting).
 

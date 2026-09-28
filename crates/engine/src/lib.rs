@@ -8,6 +8,7 @@ mod decode;
 pub mod dns;
 pub mod error;
 pub mod framing;
+pub mod graphql;
 pub mod grpc;
 mod h3;
 pub mod http;
@@ -17,6 +18,7 @@ pub mod pool;
 pub mod proxy;
 pub mod relay_connect;
 pub mod socket;
+pub mod socketio;
 pub mod sse;
 pub mod tls;
 pub mod tools;
@@ -27,6 +29,7 @@ pub use cookies::{CookieInfo, CookieJar};
 pub use decode::pretty_json;
 pub use dns::{DnsFlags, DnsQuery, DnsQuestion, DnsResolver, DnsResult, DnsResultRecord};
 pub use error::{EngineError, ErrorKind, Result};
+pub use graphql::GraphqlWsProtocol;
 pub use grpc::{GrpcDescriptors, GrpcEvent, GrpcResponse, GrpcSession, GrpcStatus, GrpcTarget};
 pub use http::{
     BodyStream, ChallengeAuth, ChallengeAuthRef, Client, Header, HostGuard, HttpRequest, HttpResponse, HttpVersionPref,

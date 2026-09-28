@@ -21,13 +21,13 @@ pub(super) fn defs() -> Vec<Def> {
         Def {
             name: "export_request",
             title: "Export as code",
-            description: "A request as a ready-to-run cURL command (bash, Windows cmd or PowerShell) or code: Kotlin (OkHttp, for Android), Swift (URLSession), JavaScript (fetch) or Python (requests). Give path (a saved request) or request (unsaved), like send_request. Variables are filled in unless resolveVariables is false; secret values come back as •••••• (the user can copy the full version in Zorvik: Copy as cURL or code).",
+            description: "A request as a ready-to-run cURL command (bash, Windows cmd or PowerShell) or code: JavaScript (fetch, axios), Python (requests, HTTPX), Go, Java, Kotlin (OkHttp), Swift, C#, PHP, Ruby, Rust, Dart, C (libcurl), PowerShell, HTTPie or Wget. Comments at the top say what the code can't do that Zorvik does (answer a Digest challenge, sign each request). Give path (a saved request) or request (unsaved), like send_request. Variables are filled in unless resolveVariables is false; secret values come back as •••••• (the user can copy the full version in Zorvik: Copy as cURL or code).",
             schema: obj(
                 json!({
                     "path": string("Saved request path as list_requests shows it."),
                     "request": super::request_schema(),
                     "folder": string("Unsaved request: the folder whose auth and headers it inherits."),
-                    "format": { "type": "string", "enum": ["curl", "curlCmd", "curlPowerShell", "kotlin", "swift", "javascript", "python"], "description": "Default curl (bash/zsh)." },
+                    "format": { "type": "string", "enum": format_names(), "description": "Default curl (bash/zsh)." },
                     "resolveVariables": { "type": "boolean", "description": "Fill in {{variables}} (default true); false keeps them as written." },
                 }),
                 &[],
@@ -94,10 +94,35 @@ fn target_path(root: &Path, path: &str) -> Result<PathBuf, String> {
     Ok(at)
 }
 
+/// Code a request can be exported as (besides cURL), by `export_request`'s `format` name.
+const SNIPPET_FORMATS: [&str; 17] = [
+    "javascript",
+    "javascriptAxios",
+    "python",
+    "pythonHttpx",
+    "go",
+    "java",
+    "kotlin",
+    "swift",
+    "csharp",
+    "php",
+    "ruby",
+    "rust",
+    "dart",
+    "c",
+    "powerShell",
+    "httpie",
+    "wget",
+];
+
+fn format_names() -> Vec<&'static str> {
+    ["curl", "curlCmd", "curlPowerShell"].into_iter().chain(SNIPPET_FORMATS).collect()
+}
+
 impl Api {
     pub(super) fn tool_export_request(&self, c: &Call<'_>) -> Outcome {
-        use zorvik_workspace::formats::curl::{CurlFlavor, to_curl};
-        use zorvik_workspace::formats::snippet::{SnippetLanguage, to_snippet};
+        use zorvik_workspace::formats::curl::{CurlFlavor, noted as noted_curl, to_curl};
+        use zorvik_workspace::formats::snippet::{SnippetLanguage, noted, to_snippet};
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct A {
@@ -107,23 +132,23 @@ impl Api {
         let A { format, resolve_variables } = c.args()?;
         let ws = self.agent_ws()?;
         let (request, path) = self.request_to_send(&ws, c)?;
-        let http = self
+        let (http, notes) = self
             .request_for_export(&request, path.as_deref(), resolve_variables.unwrap_or(true))
             .map_err(Fail::from)?;
         let format = format.unwrap_or_else(|| "curl".into());
         let text = match format.as_str() {
-            "curl" => to_curl(&http, CurlFlavor::Bash),
-            "curlCmd" => to_curl(&http, CurlFlavor::Cmd),
-            "curlPowerShell" => to_curl(&http, CurlFlavor::PowerShell),
-            "kotlin" => to_snippet(&http, SnippetLanguage::Kotlin),
-            "swift" => to_snippet(&http, SnippetLanguage::Swift),
-            "javascript" => to_snippet(&http, SnippetLanguage::JavaScript),
-            "python" => to_snippet(&http, SnippetLanguage::Python),
-            other => {
-                return Err(Fail::Invalid(format!(
-                    "format: unknown \"{other}\" (curl, curlCmd, curlPowerShell, kotlin, swift, javascript, python)"
-                )));
-            }
+            "curl" => noted_curl(to_curl(&http, CurlFlavor::Bash), CurlFlavor::Bash, &notes),
+            "curlCmd" => noted_curl(to_curl(&http, CurlFlavor::Cmd), CurlFlavor::Cmd, &notes),
+            "curlPowerShell" => noted_curl(to_curl(&http, CurlFlavor::PowerShell), CurlFlavor::PowerShell, &notes),
+            other => match serde_json::from_value::<SnippetLanguage>(json!(other)) {
+                Ok(lang) => noted(to_snippet(&http, lang), lang, &notes),
+                Err(_) => {
+                    return Err(Fail::Invalid(format!(
+                        "format: unknown \"{other}\" (curl, curlCmd, curlPowerShell, {})",
+                        SNIPPET_FORMATS.join(", ")
+                    )));
+                }
+            },
         };
         Ok(Done::new(json!({ "format": format, "code": text }), format!("{} as {format}", request.name)))
     }
@@ -208,5 +233,14 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         std::os::unix::fs::symlink(outside.path(), dir.path().join("out")).unwrap();
         assert!(target_path(dir.path(), "out/x.txt").unwrap_err().contains("link"));
+    }
+
+    #[test]
+    fn every_snippet_format_is_a_language() {
+        use zorvik_workspace::formats::snippet::SnippetLanguage;
+        for name in super::SNIPPET_FORMATS {
+            let lang: SnippetLanguage = serde_json::from_value(serde_json::json!(name)).expect(name);
+            assert_eq!(serde_json::to_value(lang).unwrap(), name);
+        }
     }
 }

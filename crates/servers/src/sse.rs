@@ -54,6 +54,9 @@ pub(crate) async fn run(listener: TcpListener, ctx: Ctx) -> Result<(), String> {
             let pushed = match message {
                 OutgoingMessage::Event { event, data, id } => Ok(Pushed { event, data, id }),
                 OutgoingMessage::Text { text } => Ok(Pushed { event: String::new(), data: text, id: String::new() }),
+                OutgoingMessage::Emit { .. } => {
+                    Err("Event streams send events with data, not Socket.IO events".to_string())
+                }
                 OutgoingMessage::Binary { .. } => {
                     Err("Event streams carry text: send an event or text instead of binary data".to_string())
                 }

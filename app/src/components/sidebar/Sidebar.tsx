@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Activity, BookOpen, Bot, Boxes, Braces, Cable, ChevronRight, Copy, FilePlus2, Folder, FolderInput, FolderOpen, FolderPlus, History, Import, Layers, ListChecks, MessagesSquare, MoreHorizontal, Network, Pencil, Plus, Radio, RefreshCw, Search, Server as ServerIcon, Settings2, Terminal, Trash2, TriangleAlert, Wrench, Zap } from "lucide-react";
+import { Activity, BookOpen, Bot, Boxes, Braces, Cable, ChevronRight, Copy, FilePlus2, Folder, FolderInput, FolderOpen, FolderPlus, History, Import, Layers, ListChecks, MessagesSquare, MoreHorizontal, Network, Pencil, Plus, Radio, RefreshCw, Search, Server as ServerIcon, Settings2, Terminal, Trash2, TriangleAlert, Unplug, Wrench, Zap } from "lucide-react";
 import type { TreeNode } from "../../bindings/TreeNode";
 import { GRAPHQL_BADGE, methodColor, methodLabel } from "../../lib/http";
 import { api, errorMessage } from "../../lib/rpc";
@@ -75,6 +75,7 @@ export const NEW_REQUEST_KINDS: { kind: NewRequestType; label: string; icon: Rea
   { kind: "udp", label: "UDP socket", icon: <Network size={14} /> },
   { kind: "dns", label: "DNS query", icon: <Search size={14} /> },
   { kind: "mqtt", label: "MQTT client", icon: <MessagesSquare size={14} /> },
+  { kind: "socketio", label: "Socket.IO client", icon: <Unplug size={14} /> },
 ];
 
 async function createRequestIn(parent: string, kind: NewRequestType = "http") {

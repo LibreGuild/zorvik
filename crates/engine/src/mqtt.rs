@@ -673,7 +673,7 @@ impl Client {
             session.subscribe(filter.trim(), *qos);
         }
         tokio::spawn(run(stream, session, leftover, Duration::from_secs(u64::from(keep_alive)), out_rx));
-        Ok(SocketConnected { opened, session: SocketSession { tx: out_tx }, events: ev_rx })
+        Ok(SocketConnected { opened, meta: None, session: SocketSession { tx: out_tx }, events: ev_rx })
     }
 }
 
@@ -886,6 +886,7 @@ impl Session {
             SocketOutgoing::Subscribe { topic, qos } => self.subscribe(topic.trim(), qos),
             SocketOutgoing::Unsubscribe { topic } => self.unsubscribe(topic.trim()),
             SocketOutgoing::Text { .. } | SocketOutgoing::Binary { .. } => self.error("Enter a topic"),
+            SocketOutgoing::Emit { .. } => self.error("MQTT publishes to topics; it has no events"),
         }
     }
 

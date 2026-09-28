@@ -11,12 +11,13 @@ export const KIND_BADGE: Partial<Record<RequestKind, { label: string; color: str
   dns: { label: "DNS", color: "var(--m-dns)" },
   mqtt: { label: "MQTT", color: "var(--m-mqtt)" },
   grpc: { label: "gRPC", color: "var(--m-grpc)" },
+  socketio: { label: "SIO", color: "var(--m-socketio)" },
 };
 
 /** Request kinds that keep a connection open (message log + composer). */
-export const STREAM_KINDS: RequestKind[] = ["websocket", "sse", "tcp", "udp", "mqtt"];
-/** Stream kinds handled by the generic socket session API. */
-export const SOCKET_KINDS: RequestKind[] = ["tcp", "udp", "mqtt"];
+export const STREAM_KINDS: RequestKind[] = ["websocket", "sse", "tcp", "udp", "mqtt", "socketio"];
+/** Stream kinds handled by the generic socket session API (GraphQL subscriptions too). */
+export const SOCKET_KINDS: RequestKind[] = ["tcp", "udp", "mqtt", "socketio"];
 
 export function methodColor(method: string | null | undefined, kind?: RequestKind | null): string {
   const badge = kind ? KIND_BADGE[kind] : undefined;

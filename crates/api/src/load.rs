@@ -362,6 +362,12 @@ impl Api {
                     request.name
                 )));
             }
+            if request.is_graphql_subscription() {
+                return Err(ApiError::invalid(format!(
+                    "'{}' is a GraphQL subscription, a live session: load tests send queries and mutations",
+                    request.name
+                )));
+            }
             let folders = ws.ancestors(&target.request);
             // Checked with every user variable defined: a URL may use them.
             let inherit = Inheritance { workspace: &meta, folders: &folders, base_dir: ws.root(), outside_files };

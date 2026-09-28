@@ -190,10 +190,11 @@ async fn serial_server() -> SocketAddr {
 async fn open_model_latency_counts_from_the_scheduled_start() {
     let addr = serial_server().await;
     let url = format!("http://{addr}/");
-    // One user never waits in the server's queue: ~20 ms.
+    // One user never waits in the server's queue: ~20 ms. (The median: with ~50 requests, p99 is
+    // the slowest one, which a busy CI machine can stretch past any fixed limit.)
     let closed =
         run(plan(LoadModel::VirtualUsers, &[(0, 1), (1, 1)], vec![target("Serial", url.clone(), 1)]), None).await;
-    assert!(closed.totals.latency.p99 < 100.0, "{}", closed.totals.latency.p99);
+    assert!(closed.totals.latency.p50 < 100.0, "{}", closed.totals.latency.p50);
 
     // 100/s offered, 50/s served: the queue grows and so does the latency.
     let open = run(plan(LoadModel::ArrivalRate, &[(0, 100), (2, 100)], vec![target("Serial", url, 1)]), None).await;

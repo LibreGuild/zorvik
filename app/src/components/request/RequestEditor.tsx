@@ -5,6 +5,7 @@ import type { Request } from "../../bindings/Request";
 import type { RequestSettings } from "../../bindings/RequestSettings";
 import { COMMON_HEADERS } from "../../lib/http";
 import { applyParamRows, paramRows, syncPathParams } from "../../lib/url";
+import { isSubscription } from "../../store/graphql";
 import { send, type Tab, updateDraft, updateTab } from "../../store/tabs";
 import { CodeEditor } from "../CodeEditor";
 import { KeyValueEditor } from "../KeyValueEditor";
@@ -12,7 +13,7 @@ import { Button, cx, Input, Select, Switch, Tabs } from "../ui";
 import { AuthEditor } from "./AuthEditor";
 import { BodyEditor } from "./BodyEditor";
 import { ExamplesTab } from "./ExamplesTab";
-import { KIND_EDITOR_TABS } from "./kinds";
+import { KIND_EDITOR_TABS, WITH_HTTP_TABS } from "./kinds";
 import { ScriptsEditor, ScriptsTabLabel } from "./ScriptsEditor";
 
 const AUTH_LABEL: Record<string, string> = {
@@ -55,7 +56,7 @@ export function RequestEditor({ tab, toolbar }: { tab: Tab; toolbar?: React.Reac
 
   const kindTabs = KIND_EDITOR_TABS[kind];
   const authItem = { id: "auth", label: "Auth", badge: req.auth && req.auth.type !== "inherit" ? AUTH_LABEL[req.auth.type] : undefined };
-  const items = kindTabs
+  const items = kindTabs && !WITH_HTTP_TABS.includes(kind)
     ? [
         ...kindTabs.map((t) => ({ id: t.id, label: t.label })),
         ...(kind === "mqtt" || kind === "grpc" ? [authItem] : []),
@@ -63,6 +64,7 @@ export function RequestEditor({ tab, toolbar }: { tab: Tab; toolbar?: React.Reac
         { id: "docs", label: "Docs" },
       ]
     : [
+        ...(kindTabs ?? []).map((t) => ({ id: t.id, label: t.label })),
         { id: "params", label: "Params", badge: count(params) + pathParams.length },
         { id: "headers", label: "Headers", badge: count(req.headers) },
         ...(kind === "http" ? [{ id: "body", label: "Body", badge: req.body && req.body.type !== "none" ? BODY_LABEL[req.body.type] : undefined }] : []),
@@ -118,6 +120,7 @@ export function RequestEditor({ tab, toolbar }: { tab: Tab; toolbar?: React.Reac
           <SettingsTab settings={req.settings ?? {}} onChange={(settings) => update((r) => ({ ...r, settings }))} httpOnly={kind === "http" || kind === "sse" || kind === "websocket"}
             timeout={kind !== "tcp" && kind !== "udp" && kind !== "mqtt"}
             kind={kind}
+            subscription={isSubscription(req)}
           />
         )}
         {current === "scripts" && kind === "http" && (
@@ -194,12 +197,15 @@ function SettingsTab({
   httpOnly = true,
   timeout = true,
   kind,
+  subscription = false,
 }: {
   settings: RequestSettings;
   onChange: (s: RequestSettings) => void;
   httpOnly?: boolean;
   timeout?: boolean;
   kind: string;
+  /** A GraphQL subscription: runs read its results like an event stream. */
+  subscription?: boolean;
 }) {
   const set = (patch: Partial<RequestSettings>) => {
     const next: RequestSettings = { ...settings, ...patch };
@@ -264,21 +270,30 @@ function SettingsTab({
       </SettingRow>
         </>
       )}
-      {kind === "sse" && <StreamSettings settings={settings} set={set} />}
+      {(kind === "sse" || subscription) && <StreamSettings settings={settings} set={set} subscription={subscription} />}
       {(kind === "http" || kind === "sse") && <RepeatSettings settings={settings} set={set} />}
     </div>
   );
 }
 
 /** When a collection run (or an AI agent) stops reading an event stream. */
-function StreamSettings({ settings, set }: { settings: RequestSettings; set: (p: Partial<RequestSettings>) => void }) {
+function StreamSettings({ settings, set, subscription }: { settings: RequestSettings; set: (p: Partial<RequestSettings>) => void; subscription?: boolean }) {
   const stream = settings.stream ?? { maxEvents: 100, timeoutMs: 10000 };
   const change = (patch: Partial<typeof stream>) => set({ stream: { ...stream, ...patch } });
   return (
     <>
       <h3 className="mt-2 text-[11.5px] font-semibold uppercase tracking-wide text-faint">In collection runs</h3>
       <p className="-mt-2 text-[12px] text-muted">
-        A run reads events until the first of these, then its post-response scripts test them (<code className="font-mono">pm.response.events</code>).
+        {subscription ? (
+          <>
+            A run reads the subscription's results (events named <code className="font-mono">next</code>) until the first of these, then its
+            post-response scripts test them (<code className="font-mono">pm.response.json()</code> is the list of results).
+          </>
+        ) : (
+          <>
+            A run reads events until the first of these, then its post-response scripts test them (<code className="font-mono">pm.response.events</code>).
+          </>
+        )}
       </p>
       <SettingRow label="Stop at event" hint="Event name; empty = any event may be the last.">
         <Input className="w-56 font-mono" value={stream.event ?? ""} placeholder="e.g. done" onChange={(e) => change({ event: e.target.value || undefined })} data-testid="stream-event" />

@@ -223,6 +223,7 @@ A request is **skipped** when it's of a kind the runner doesn't send. It counts 
 | TCP | `TCP connections are live sessions; the runner sends HTTP, GraphQL and SSE requests` |
 | UDP | `UDP sockets are live sessions; the runner sends HTTP, GraphQL and SSE requests` |
 | MQTT | `MQTT clients are live sessions; the runner sends HTTP, GraphQL and SSE requests` |
+| Socket.IO | `Socket.IO clients are live sessions; the runner sends HTTP, GraphQL and SSE requests` |
 | gRPC | `gRPC calls don't run in the collection runner; the runner sends HTTP, GraphQL and SSE requests` |
 | DNS | `DNS queries don't run in the collection runner; the runner sends HTTP, GraphQL and SSE requests` |
 

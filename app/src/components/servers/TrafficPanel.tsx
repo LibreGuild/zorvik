@@ -325,21 +325,26 @@ function Composer({
   open: Map<number, string>;
 }) {
   const sse = server.kind === "sse";
+  const io = server.kind === "socketio";
   const [mode, setMode] = useState<"text" | "hex">("text");
   const [text, setText] = useState("");
-  const [event, setEvent] = useState("");
+  const [event, setEvent] = useState(io ? "message" : "");
+  const [namespace, setNamespace] = useState("/");
   const [sending, setSending] = useState(false);
   const submit = async () => {
-    if (!text || sending) return;
-    const base64 = !sse && mode === "hex" ? hexToBase64(text) : null;
-    if (!sse && mode === "hex" && base64 === null) {
+    if ((!text && !io) || sending) return;
+    const base64 = !sse && !io && mode === "hex" ? hexToBase64(text) : null;
+    if (!sse && !io && mode === "hex" && base64 === null) {
       toast("error", "Invalid hex", "Enter bytes like 48 65 6c 6c 6f");
       return;
     }
     // Busy while variables render too, so a second Mod+Enter doesn't send twice.
     setSending(true);
     try {
-      const message: OutgoingMessage = sse
+      // Socket.IO arguments are rendered by the server, like its rules' answers.
+      const message: OutgoingMessage = io
+        ? { type: "emit", event: event.trim(), args: text, namespace }
+        : sse
         ? { type: "event", event, data: text, id: "" }
         : base64 !== null
           ? { type: "binary", base64 }
@@ -353,7 +358,7 @@ function Composer({
   };
   return (
     <div className="mx-3 mb-3 flex shrink-0 flex-col gap-2 rounded-xl border border-line bg-input p-2 has-[textarea:focus]:border-accent" data-testid="server-composer">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <select
           aria-label="Send to"
           value={target === null ? "all" : String(target)}
@@ -367,7 +372,25 @@ function Composer({
             </option>
           ))}
         </select>
-        {sse ? (
+        {io ? (
+          <>
+            <input
+              aria-label="Event name"
+              value={event}
+              onChange={(e) => setEvent(e.target.value)}
+              placeholder="event"
+              className="h-7 w-28 min-w-0 rounded-md border border-line bg-panel-2 px-2 font-mono text-[12px] outline-none focus:border-accent"
+            />
+            <input
+              aria-label="Namespace"
+              value={namespace}
+              onChange={(e) => setNamespace(e.target.value)}
+              placeholder="/"
+              title="Namespace"
+              className="h-7 w-20 min-w-0 rounded-md border border-line bg-panel-2 px-2 font-mono text-[12px] outline-none focus:border-accent"
+            />
+          </>
+        ) : sse ? (
           <input
             aria-label="Event name"
             value={event}
@@ -380,8 +403,8 @@ function Composer({
         )}
         <div className="flex-1" />
         <span className="text-[11px] text-faint">{modKey}+Enter</span>
-        <Button size="sm" variant="primary" icon={<Send size={13} />} disabled={!text || sending} onClick={() => void submit()}>
-          Send
+        <Button size="sm" variant="primary" icon={<Send size={13} />} disabled={(io ? !event.trim() : !text) || sending} onClick={() => void submit()}>
+          {io ? "Emit" : "Send"}
         </Button>
       </div>
       <textarea
@@ -397,7 +420,7 @@ function Composer({
         }}
         rows={3}
         spellCheck={false}
-        placeholder={sse ? "Event data" : mode === "hex" ? "48 65 6c 6c 6f" : "Message to send"}
+        placeholder={io ? 'Arguments as JSON, e.g. ["hi", {"n": 1}]' : sse ? "Event data" : mode === "hex" ? "48 65 6c 6c 6f" : "Message to send"}
         className="min-h-[60px] resize-y rounded-md bg-transparent px-1.5 py-1 font-mono text-[12px] text-fg outline-none placeholder:text-faint"
       />
     </div>

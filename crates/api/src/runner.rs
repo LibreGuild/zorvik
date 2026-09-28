@@ -612,6 +612,7 @@ fn skip_reason(kind: RequestKind) -> String {
         RequestKind::Tcp => "TCP connections are live sessions",
         RequestKind::Udp => "UDP sockets are live sessions",
         RequestKind::Mqtt => "MQTT clients are live sessions",
+        RequestKind::SocketIo => "Socket.IO clients are live sessions",
         RequestKind::Grpc => "gRPC calls don't run in the collection runner",
         RequestKind::Dns => "DNS queries don't run in the collection runner",
         RequestKind::Http | RequestKind::Sse => "not sent",

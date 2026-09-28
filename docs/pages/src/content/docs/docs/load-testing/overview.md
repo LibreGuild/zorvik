@@ -25,7 +25,7 @@ Open **Load tests** in the left rail, then:
 
 A new test starts with the same plan: virtual users, 10 s ramp to 10 users, 40 s hold, 10 s ramp down to 0 (60 s in total), and two thresholds, `p95 < 500 ms` and `errorRate < 1 %`. Change anything before you press **Start**.
 
-Only **HTTP** requests can be load tested (GraphQL requests are HTTP requests, so they count). WebSocket, SSE, gRPC, TCP, UDP, DNS and MQTT requests are refused with "only HTTP requests can be load tested".
+Only **HTTP** requests can be load tested (GraphQL requests are HTTP requests, so they count). WebSocket, Socket.IO, SSE, gRPC, TCP, UDP, DNS and MQTT requests are refused with "only HTTP requests can be load tested", and so are GraphQL subscriptions (they are live sessions).
 
 ## The load test tab
 

@@ -3,4 +3,8 @@
 /**
  * Something to send on a socket session.
  */
-export type SocketOutgoing = { "type": "text", text: string, } | { "type": "binary", base64: string, } | { "type": "publish", topic: string, text: string | null, base64: string | null, qos: number, retain: boolean, } | { "type": "subscribe", topic: string, qos: number, } | { "type": "unsubscribe", topic: string, };
+export type SocketOutgoing = { "type": "text", text: string, } | { "type": "binary", base64: string, } | { "type": "publish", topic: string, text: string | null, base64: string | null, qos: number, retain: boolean, } | { "type": "subscribe", topic: string, qos: number, } | { "type": "unsubscribe", topic: string, } | { "type": "emit", event: string, args: string, base64: string | null, 
+/**
+ * Ask the server to acknowledge.
+ */
+ack: boolean, };

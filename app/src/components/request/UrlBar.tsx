@@ -1,11 +1,12 @@
 import { useRef, useState } from "react";
 import { Activity, ChevronDown, Loader2, MoreHorizontal, Plug, PlugZap, Save, Send, Square, Terminal } from "lucide-react";
 import type { Request } from "../../bindings/Request";
-import { METHODS, methodColor, methodLabel, STREAM_KINDS } from "../../lib/http";
+import { METHODS, methodColor, methodLabel } from "../../lib/http";
 import { modKey } from "../../lib/platform";
 import { syncPathParams } from "../../lib/url";
 import { loadTestRequest } from "../../store/loadtests";
-import { cancel, disconnect, isDirty, saveTab, send, type Tab, updateDraft } from "../../store/tabs";
+import { isSubscription } from "../../store/graphql";
+import { cancel, disconnect, isDirty, isLive, saveTab, send, type Tab, updateDraft } from "../../store/tabs";
 import { toast } from "../../store/toasts";
 import { openModal } from "../../store/ui";
 import { VarInput } from "../VarInput";
@@ -18,7 +19,8 @@ export function UrlBar({ tab }: { tab: Tab }) {
   const kind = req.kind ?? "http";
   const loading = tab.response.status === "loading";
   const streamActive = tab.stream.status === "open" || tab.stream.status === "connecting";
-  const oneShot = !STREAM_KINDS.includes(kind);
+  const subscription = isSubscription(req);
+  const oneShot = !isLive(tab);
   const urlRef = useRef<HTMLInputElement>(null);
   const Prefix = URL_PREFIXES[kind];
 
@@ -68,11 +70,11 @@ export function UrlBar({ tab }: { tab: Tab }) {
           icon={tab.stream.status === "connecting" ? <Loader2 size={14} className="zv-spin" /> : <Plug size={14} />}
           className="h-9 w-[124px] rounded-xl"
         >
-          Disconnect
+          {subscription ? "Unsubscribe" : "Disconnect"}
         </Button>
       ) : (
-        <Button variant="primary" onClick={() => send(tab.id)} icon={<PlugZap size={14} />} className="h-9 w-[124px] rounded-xl">
-          Connect
+        <Button variant="primary" onClick={() => send(tab.id)} icon={<PlugZap size={14} />} className="h-9 w-[124px] rounded-xl" title={`${modKey}+Enter`}>
+          {subscription ? "Subscribe" : "Connect"}
         </Button>
       )}
       <IconButton label={`Save (${modKey}+S)`} onClick={() => saveTab(tab.id)} size={36} className={cx("rounded-xl", isDirty(tab) && "text-accent")}>
@@ -86,8 +88,8 @@ export function UrlBar({ tab }: { tab: Tab }) {
           </button>
         }
         entries={[
-          ...(kind === "http" ? [{ label: "Copy as cURL or code…", icon: <Terminal size={14} />, onSelect: () => openModal({ type: "export", tabId: tab.id }) }] : []),
-          ...(kind === "http" ? [{ label: "Load test this request…", icon: <Activity size={14} />, onSelect: () => void loadTestThis(tab) }] : []),
+          ...(kind === "http" && !subscription ? [{ label: "Copy as cURL or code…", icon: <Terminal size={14} />, onSelect: () => openModal({ type: "export", tabId: tab.id }) }] : []),
+          ...(kind === "http" && !subscription ? [{ label: "Load test this request…", icon: <Activity size={14} />, onSelect: () => void loadTestThis(tab) }] : []),
           { label: "Save as…", icon: <Save size={14} />, onSelect: () => openModal({ type: "saveAs", tabId: tab.id }) },
         ]}
       />

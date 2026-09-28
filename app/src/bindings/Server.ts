@@ -3,6 +3,7 @@ import type { DnsServerConfig } from "./DnsServerConfig";
 import type { HttpMockConfig } from "./HttpMockConfig";
 import type { ServerKind } from "./ServerKind";
 import type { ServerTls } from "./ServerTls";
+import type { SocketIoServerConfig } from "./SocketIoServerConfig";
 import type { SocketServerConfig } from "./SocketServerConfig";
 import type { SseServerConfig } from "./SseServerConfig";
 import type { TcpProxyConfig } from "./TcpProxyConfig";
@@ -33,4 +34,4 @@ autoStart?: boolean, http?: HttpMockConfig, websocket?: WsServerConfig, sse?: Ss
 /**
  * TCP and UDP servers.
  */
-socket?: SocketServerConfig, dns?: DnsServerConfig, proxy?: TcpProxyConfig, docs?: string, };
+socket?: SocketServerConfig, dns?: DnsServerConfig, proxy?: TcpProxyConfig, socketio?: SocketIoServerConfig, docs?: string, };

@@ -114,7 +114,7 @@ docs: Handler in `src/users/create.ts`.
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `name` | string | | Display name (also the file name). |
-| `kind` | string | `http` | `http`, `websocket`, `sse`, `grpc`, `tcp`, `udp`, `dns` or `mqtt`. |
+| `kind` | string | `http` | `http`, `websocket`, `socketio`, `sse`, `grpc`, `tcp`, `udp`, `dns` or `mqtt`. |
 | `seq` | number | `0` | Position among siblings. |
 | `method` | string | `GET` | HTTP method. gRPC: `package.Service/Method`. DNS: the record type (`A`, `AAAA`, `MX` …). |
 | `url` | string | `""` | The URL as typed, **including the enabled query parameters**. `:name` path segments take their values from `pathParams`. |
@@ -130,6 +130,7 @@ docs: Handler in `src/users/create.ts`.
 | `dns` | [dns](#dns-dns) | | DNS options. |
 | `mqtt` | [mqtt](#mqtt-mqtt) | | MQTT options. |
 | `grpc` | [grpc](#grpc-grpc) | | gRPC options. |
+| `socketio` | [socketio](#socketio-socketio) | | Socket.IO options. |
 | `docs` | string | | Markdown notes. |
 | `openapi` | object | | Set by an OpenAPI import: `operation` (`"GET /pets/{petId}"`) and `removed: true` when the operation is no longer in the document. |
 
@@ -151,12 +152,12 @@ Data for every body type is kept, so switching the type in the app never loses w
 | Field | Meaning |
 |---|---|
 | `type` | `none` (default), `json`, `text`, `xml`, `formUrlencoded`, `multipart`, `binary` or `graphql`. |
-| `text` | The JSON, text or XML body. For WebSocket requests, the message draft; for gRPC, the JSON message; for MQTT, the message to publish. |
+| `text` | The JSON, text or XML body. For WebSocket requests, the message draft; for Socket.IO, the arguments to emit; for gRPC, the JSON message; for MQTT, the message to publish. |
 | `contentType` | Content-Type of `text` bodies (default `text/plain`). |
 | `form` | [Key/values](#key-values) of a `formUrlencoded` body. |
 | `multipart` | Parts: `key`, `value` (text, or a file path when `file: true`), `file`, `contentType`, `enabled`. |
 | `file` | The file of a `binary` body: absolute, or relative to the workspace folder. |
-| `graphql` | `query`, `variables` (JSON text, may contain `{{variables}}`), `operationName`. Sent as JSON `{"query", "variables", "operationName"}`. |
+| `graphql` | `query`, `variables` (JSON text, may contain `{{variables}}`), `operationName`. Sent as JSON `{"query", "variables", "operationName"}`. For subscriptions also `transport` (`websocket`, `websocketLegacy` or `sse`), `subscriptionUrl` and `connectionParams` (JSON text); see [GraphQL subscriptions](../../protocols/graphql/#subscriptions). |
 
 Body files (binary bodies and multipart files) must be inside the workspace folder unless **Files outside the workspace** is on in Settings.
 
@@ -262,6 +263,18 @@ Workspace scripts run first, then the folders' (outer to inner), then the reques
 | `protoFiles` | `.proto` files, relative to the workspace folder or absolute. Empty: server reflection. |
 | `importPaths` | Folders searched for `import`s (the proto files' folders are always searched). |
 
+#### Socket.IO (`socketio`)
+
+`url` is the server and the namespace (`http://localhost:3000/chat`); `body.text` holds the arguments the composer emits.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `path` | `/socket.io/` | The server's Socket.IO path. |
+| `transport` | `auto` | `auto` (WebSocket, else long-polling), `websocket` or `polling`. |
+| `auth` | `""` | The connection's auth payload as JSON text (may contain `{{variables}}`). |
+| `event` | `""` | The event the composer emits. |
+| `ack` | `false` | The composer asks for an acknowledgement. |
+
 #### WebSocket and SSE
 
 WebSocket requests use `ws://` or `wss://` URLs and keep the message draft in `body.text`. SSE requests use `http://` or `https://` URLs; `settings.stream` says when runs stop reading.
@@ -356,14 +369,15 @@ http:
 | Field | Default | Meaning |
 |---|---|---|
 | `name` | | Display name. |
-| `kind` | `http` | `http` (mock API), `websocket`, `sse`, `tcp`, `udp`, `dns` or `tcpProxy` (a TCP relay that shows both directions). |
+| `kind` | `http` | `http` (mock API), `websocket`, `socketio`, `sse`, `tcp`, `udp`, `dns` or `tcpProxy` (a TCP relay that shows both directions). |
 | `seq` | `0` | Position in the sidebar. |
 | `host` | `127.0.0.1` | Address to listen on: `127.0.0.1` (this computer only) or `0.0.0.0` (other devices too). |
-| `port` | `0` | Port; `0` = any free port. New servers made in the app get 3000 (HTTP, SSE), 3001 (WebSocket), 9000 (TCP), 9001 (UDP), 1053 (DNS) or 9100 (relay). |
-| `tls` | off | `enabled`, `certPath`, `keyPath` (PEM). Without paths, a self-signed certificate for `localhost` is generated. For `http`, `websocket`, `sse` and `tcp`. |
+| `port` | `0` | Port; `0` = any free port. New servers made in the app get 3000 (HTTP), 3001 (WebSocket), 3002 (SSE), 3003 (Socket.IO), 9000 (TCP), 9001 (UDP), 1053 (DNS) or 9100 (relay). |
+| `tls` | off | `enabled`, `certPath`, `keyPath` (PEM). Without paths, a self-signed certificate for `localhost` is generated. For `http`, `websocket`, `socketio`, `sse` and `tcp`. |
 | `autoStart` | `false` | Start with the workspace. Only configurations this computer has started or saved before start by themselves; one that is new or changed outside Zorvik (e.g. by a Git pull) must be started once by hand. |
 | `http` | | Mock API: routes and fallback (below). |
 | `websocket` | | WebSocket server: `mode`, `greeting`, `rules`. |
+| `socketio` | | Socket.IO server (below). |
 | `sse` | | SSE server: `events`, `intervalMs`, `repeat`. |
 | `socket` | | TCP and UDP servers: `mode`, `greeting`, `rules`, `encoding`, `framing`, `lengthBytes`, `lineEnding`. |
 | `dns` | | DNS server: `records`, `upstream`. |
@@ -410,6 +424,18 @@ Status, headers and body are templates: `{{request.params.id}}`, `{{request.quer
 | `framing` | `raw` | TCP: `raw`, `line` or `lengthPrefixed`. |
 | `lengthBytes` | `2` | TCP, `lengthPrefixed`: 1, 2 or 4. |
 | `lineEnding` | `none` | Appended to text replies: `none`, `lf`, `crLf`. |
+
+### Socket.IO server (`socketio`)
+
+| Field | Default | Meaning |
+|---|---|---|
+| `mode` | `echo` | `echo` (emit every event back, acknowledge with its arguments), `rules`, `manual` or `discard`. |
+| `greetingEvent`, `greetingArgs` | `""` | An event (and its JSON arguments) emitted to each client that joins a namespace. |
+| `rules` | `[]` | For `mode: rules`: `event` (`*` for any), `match` (`any` (default), `contains`, `exact`, `regex`) and `pattern` on the arguments, `ack` (acknowledgement arguments), `replyEvent` and `replyArgs`, `broadcast`, `delayMs`, `enabled`. |
+| `path` | `/socket.io/` | Where the server answers. |
+| `cors` | `false` | Allow browsers on other origins. |
+
+See [Socket.IO servers](../../servers/socketio-server/).
 
 ### SSE server (`sse`)
 

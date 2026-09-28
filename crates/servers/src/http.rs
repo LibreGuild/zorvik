@@ -201,7 +201,7 @@ async fn serve_connection<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     builder.http1().timer(TokioTimer::new()).header_read_timeout(HEADER_TIMEOUT);
     builder.http2().timer(TokioTimer::new()).max_concurrent_streams(256u32).max_header_list_size(64 << 10);
     // Malformed requests and resets end the connection; there is nothing more to report.
-    let _ = builder.serve_connection(TokioIo::new(io), service).await;
+    let _ = builder.serve_connection_with_upgrades(TokioIo::new(io), service).await;
 }
 
 pub(crate) fn version_label(v: Version) -> &'static str {
@@ -674,7 +674,7 @@ fn connection_listed(headers: &HeaderMap) -> Vec<String> {
 
 // ---- CORS -------------------------------------------------------------------------------
 
-fn add_cors(headers: &mut HeaderMap, origin: Option<&HeaderValue>) {
+pub(crate) fn add_cors(headers: &mut HeaderMap, origin: Option<&HeaderValue>) {
     if !headers.contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN) {
         match origin {
             // Echo the origin (with credentials allowed) so cookies and auth headers work too.
@@ -702,7 +702,7 @@ fn add_cors(headers: &mut HeaderMap, origin: Option<&HeaderValue>) {
 }
 
 /// Answer to a CORS preflight: allow whatever the browser asks for.
-fn preflight(request: &HeaderMap) -> HeaderMap {
+pub(crate) fn preflight(request: &HeaderMap) -> HeaderMap {
     let mut headers = HeaderMap::new();
     add_cors(&mut headers, request.get(header::ORIGIN));
     headers.remove(header::ACCESS_CONTROL_EXPOSE_HEADERS);

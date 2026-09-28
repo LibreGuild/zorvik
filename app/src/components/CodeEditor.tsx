@@ -7,12 +7,21 @@ import { html } from "@codemirror/lang-html";
 import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { xml } from "@codemirror/lang-xml";
+import { c, csharp, dart, java, kotlin } from "@codemirror/legacy-modes/mode/clike";
+import { go } from "@codemirror/legacy-modes/mode/go";
+import { powerShell } from "@codemirror/legacy-modes/mode/powershell";
+import { python } from "@codemirror/legacy-modes/mode/python";
+import { ruby } from "@codemirror/legacy-modes/mode/ruby";
+import { rust } from "@codemirror/legacy-modes/mode/rust";
+import { shell } from "@codemirror/legacy-modes/mode/shell";
+import { swift } from "@codemirror/legacy-modes/mode/swift";
 import {
   bracketMatching,
   foldGutter,
   foldKeymap,
   HighlightStyle,
   indentOnInput,
+  StreamLanguage,
   syntaxHighlighting,
 } from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
@@ -32,7 +41,29 @@ import {
 } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
 
-export type EditorLanguage = "json" | "xml" | "html" | "javascript" | "text";
+export type EditorLanguage =
+  | "json"
+  | "xml"
+  | "html"
+  | "javascript"
+  | "text"
+  // Generated code (highlighting only).
+  | "shell"
+  | "powershell"
+  | "python"
+  | "go"
+  | "java"
+  | "kotlin"
+  | "swift"
+  | "csharp"
+  | "php"
+  | "ruby"
+  | "rust"
+  | "dart"
+  | "c";
+
+/** Highlighting of generated code (CodeMirror's stream modes). PHP reads well enough as C. */
+const LEGACY_MODES = { shell, powershell: powerShell, python, go, java, kotlin, swift, csharp, php: c, ruby, rust, dart, c } as const;
 
 const highlight = HighlightStyle.define([
   { tag: t.string, color: "var(--syn-string)" },
@@ -56,8 +87,10 @@ function languageExtension(lang: EditorLanguage): Extension {
       return html();
     case "javascript":
       return javascript();
-    default:
+    case "text":
       return [];
+    default:
+      return StreamLanguage.define(LEGACY_MODES[lang]);
   }
 }
 

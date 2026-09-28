@@ -30,7 +30,8 @@ pm.environment.set("userId", body.id);
 | `zorvik run` (HTTP, GraphQL and Server-Sent Events requests) | Yes |
 | HTTP requests an AI agent sends with `send_request`, and runs it starts with `run_collection` | Yes |
 | The live Server-Sent Events tab in the app | No, only collection runs run scripts for SSE requests |
-| WebSocket, gRPC, TCP, UDP, MQTT and DNS requests | No |
+| GraphQL subscriptions in the app (live) | No, only collection runs run scripts for them |
+| WebSocket, Socket.IO, gRPC, TCP, UDP, MQTT and DNS requests | No |
 
 ## Where scripts live
 

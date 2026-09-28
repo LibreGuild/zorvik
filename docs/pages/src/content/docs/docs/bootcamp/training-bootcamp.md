@@ -22,7 +22,7 @@ The Academy's own menu (**…** at the top right) has **Badges and certificate**
 
 ## The course
 
-The course has 16 units and 71 lessons; 66 lessons have a lab.
+The course has 16 units and 73 lessons; 68 lessons have a lab.
 
 | # | Unit | Lessons | Badge |
 |---|---|---|---|
@@ -35,8 +35,8 @@ The course has 16 units and 71 lessons; 66 lessons have a lab.
 | 6 | Secure transport | 4 | TLS Guardian |
 | 7 | Organized like a pro | 4 | Workspace Architect |
 | 8 | Testing APIs | 7 | Test Pilot |
-| 9 | Beyond REST: GraphQL & gRPC | 4 | Query Crafter |
-| 10 | Real-time: WebSocket, SSE, MQTT | 4 | Stream Surfer |
+| 9 | Beyond REST: GraphQL & gRPC | 5 | Query Crafter |
+| 10 | Real-time: WebSocket, SSE, MQTT, Socket.IO | 5 | Stream Surfer |
 | 11 | Raw sockets: TCP & UDP | 4 | Socket Smith |
 | 12 | Mocking APIs | 6 | Mock Master |
 | 13 | Performance & load testing | 4 | Load Legend |

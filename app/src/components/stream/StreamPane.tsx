@@ -1,4 +1,5 @@
-// Live message log of WebSocket / SSE / TCP / UDP / MQTT connections, with a composer.
+// Live message log of WebSocket / SSE / TCP / UDP / MQTT / Socket.IO connections and GraphQL
+// subscriptions, with a composer.
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownLeft, ArrowUpRight, Ban, ChevronRight, CircleAlert, Copy, Info, Search, Send, Trash2 } from "lucide-react";
 import { formatBytes, formatClock } from "../../lib/format";
@@ -20,8 +21,8 @@ function statusDot(status: Tab["stream"]["status"]) {
   return map[status];
 }
 
-/** Kinds whose messages are typed in the composer (SSE only receives). */
-const COMPOSER_KINDS = ["websocket", "tcp", "udp", "mqtt"];
+/** Kinds whose messages are typed in the composer (SSE and subscriptions only receive). */
+const COMPOSER_KINDS = ["websocket", "tcp", "udp", "mqtt", "socketio"];
 
 export function StreamPane({ tab }: { tab: Tab }) {
   const kind = tab.draft.kind ?? "http";
@@ -48,7 +49,7 @@ export function StreamPane({ tab }: { tab: Tab }) {
           {label}
         </span>
         <span className="truncate whitespace-nowrap text-[12px] text-muted">
-          {isWs ? `${sent} sent · ${received} received` : `${received} events`}
+          {isWs ? `${sent} sent · ${received} received` : `${received} ${kind === "http" ? "results" : "events"}`}
         </span>
         <div className="flex-1" />
         <div className="flex h-7 w-52 items-center gap-1.5 rounded-lg border border-transparent bg-panel-2 px-2 focus-within:border-accent">
@@ -77,6 +78,8 @@ const EMPTY_HINT: Record<string, string> = {
   tcp: "Connect, then send messages below. Bytes from the server appear here.",
   udp: "Send a datagram below. Replies from the host appear here.",
   mqtt: "Connect to receive messages on your subscriptions, and publish below.",
+  socketio: "Connect, then emit events below. Events from the server appear here.",
+  http: "Subscribe to receive the subscription's results here.",
 };
 
 const MessageLog = memo(function MessageLog({ messages, empty, isWs, kind }: { messages: StreamMessage[]; empty: boolean; isWs: boolean; kind: string }) {
@@ -106,7 +109,7 @@ const MessageLog = memo(function MessageLog({ messages, empty, isWs, kind }: { m
       data-testid="message-log"
     >
       {messages.map((m) => (
-        <MessageRow key={m.id} m={m} isWs={isWs} />
+        <MessageRow key={m.id} m={m} isWs={isWs} sse={kind === "sse"} />
       ))}
     </div>
   );
@@ -121,7 +124,16 @@ function decodeBase64(b64: string): string {
   }
 }
 
-const MessageRow = memo(function MessageRow({ m, isWs }: { m: StreamMessage; isWs: boolean }) {
+/** A Socket.IO acknowledgement note in a few words: "ack #3" or "wants ack #3". */
+function ackChip(detail: string | null | undefined): string | null {
+  const id = detail?.match(/#(\d+)/)?.[1];
+  if (!id) return null;
+  if (detail?.startsWith("acknowledgement")) return `ack #${id}`;
+  if (detail?.startsWith("asks for")) return `wants ack #${id}`;
+  return null;
+}
+
+const MessageRow = memo(function MessageRow({ m, isWs, sse }: { m: StreamMessage; isWs: boolean; sse: boolean }) {
   const [open, setOpen] = useState(false);
   // The one-line row shows the start: a TCP message can be megabytes (400 base64 characters are 300 bytes).
   const line = m.text != null ? m.text.slice(0, 300) : m.base64 ? decodeBase64(m.base64.slice(0, 400)) : "";
@@ -148,13 +160,14 @@ const MessageRow = memo(function MessageRow({ m, isWs }: { m: StreamMessage; isW
         {!meta ? <ChevronRight size={11} className={cx("shrink-0 text-faint transition-transform", open && "rotate-90")} /> : <span className="w-[11px]" />}
         {icon}
         <span className="shrink-0 text-[11px] tabular-nums text-faint">{formatClock(m.timestamp)}</span>
-        {!isWs && m.direction === "received" && (
+        {sse && m.direction === "received" && (
           <span className="shrink-0 rounded bg-accent-soft px-1.5 text-[10.5px] font-semibold text-accent">{m.kind}</span>
         )}
         {isWs && (m.kind === "binary" || m.kind === "ping" || m.kind === "pong") && (
           <span className="shrink-0 rounded bg-hover px-1.5 text-[10.5px] font-semibold uppercase text-muted">{m.kind}</span>
         )}
         {m.topic && <span className="max-w-[40%] shrink-0 truncate rounded bg-accent-soft px-1.5 text-[10.5px] font-semibold text-accent" title={m.topic}>{m.topic}</span>}
+        {ackChip(m.detail) && <span className="shrink-0 rounded bg-hover px-1.5 text-[10.5px] font-semibold text-muted">{ackChip(m.detail)}</span>}
         {m.peer && <span className="shrink-0 text-[11px] text-faint">{m.peer}</span>}
         <span className={cx("min-w-0 flex-1 truncate", meta ? "font-sans text-muted" : "text-fg")}>{line || <i className="text-faint">empty</i>}</span>
         {!meta && <span className="shrink-0 text-[11px] text-faint">{formatBytes(m.size)}</span>}
@@ -183,8 +196,10 @@ function Composer({ tab }: { tab: Tab }) {
   const [mode, setMode] = useState<"text" | "json" | "binary">(() => (tab.draft.body?.type === "json" ? "json" : "text"));
   const text = tab.draft.body?.text ?? "";
   const open = tab.stream.status === "open";
+  // A Socket.IO event may have no arguments.
+  const ready = open && (text.length > 0 || tab.draft.kind === "socketio");
   const submit = () => {
-    if (open && text.length) void wsSend(tab.id, text, mode === "binary");
+    if (ready) void wsSend(tab.id, text, mode === "binary");
   };
   return (
     <div className="m-3 flex h-48 shrink-0 flex-col overflow-hidden rounded-xl border border-line bg-input">
@@ -206,8 +221,8 @@ function Composer({ tab }: { tab: Tab }) {
         <span className="text-[11px] text-faint">
           {modKey}+Enter
         </span>
-        <Button size="sm" variant="primary" icon={<Send size={13} />} disabled={!open || !text.length} onClick={submit}>
-          Send
+        <Button size="sm" variant="primary" icon={<Send size={13} />} disabled={!ready} onClick={submit}>
+          {tab.draft.kind === "socketio" ? "Emit" : "Send"}
         </Button>
       </div>
       <div className="min-h-0 flex-1">
@@ -218,7 +233,15 @@ function Composer({ tab }: { tab: Tab }) {
           variables={names}
           onSubmit={submit}
           lineNumbers={false}
-          placeholder={mode === "binary" ? "48 65 6c 6c 6f" : "Message to send"}
+          placeholder={
+            mode === "binary"
+              ? "48 65 6c 6c 6f"
+              : tab.draft.kind === "socketio"
+                ? mode === "json"
+                  ? 'Arguments as JSON, e.g. ["hi", {"n": 1}]'
+                  : "Text, sent as one argument"
+                : "Message to send"
+          }
         />
       </div>
     </div>

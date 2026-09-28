@@ -80,7 +80,7 @@ Sending doesn't save. What you send is always what is in the tab, saved or not.
 
 In the **Collection** sidebar:
 
-- Choose **+** (next to **Filter**) for **New folder**, or for a new request of any kind: HTTP, GraphQL, gRPC, WebSocket, SSE, TCP, UDP, DNS or MQTT. Requests created this way ask for a name and are saved right away.
+- Choose **+** (next to **Filter**) for **New folder**, or for a new request of any kind: HTTP, GraphQL, gRPC, WebSocket, Socket.IO, SSE, TCP, UDP, DNS or MQTT. Requests created this way ask for a name and are saved right away.
 - Drag requests and folders to reorder them, or drop them onto a folder to move them there.
 - Right-click an item for **Rename…**, **Duplicate**, **Move to…** and **Delete**. Deleted items go to your system's trash.
 - Type in **Filter** to show only matching requests.

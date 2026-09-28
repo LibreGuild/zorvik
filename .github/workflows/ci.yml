@@ -45,6 +45,22 @@ jobs:
           git add -N app/src/bindings
           git diff --exit-code -- app/src/bindings docs/pages/src/content/docs/docs/variables/dynamic-variables.md
 
+  code-export:
+    name: Code export — toolchains
+    # Every language "Copy as cURL or code" writes, checked by its own compiler or parser
+    # (the runner has Node, Python, Go, Java, .NET, PHP, Ruby, Rust, C, PowerShell and bash).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: libcurl headers
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev
+      - name: Generated code compiles
+        run: cargo test -p zorvik-formats snippet_syntax -- --ignored --nocapture
+
   rust-windows:
     name: Rust (Windows) — tests
     runs-on: windows-latest
@@ -110,7 +126,7 @@ jobs:
 
   release-draft:
     name: Start the release
-    needs: [rust-linux, rust-windows, ui, e2e]
+    needs: [rust-linux, rust-windows, ui, e2e, code-export]
     if: >-
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
       (github.event_name == 'workflow_dispatch' &&

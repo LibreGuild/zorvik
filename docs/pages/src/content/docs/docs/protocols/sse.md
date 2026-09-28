@@ -2,7 +2,7 @@
 title: Server-Sent Events (SSE)
 description: Open an event stream, watch events arrive live, and test streams in collection runs.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 An event stream request opens a Server-Sent Events (SSE) stream, the `text/event-stream` format that `EventSource` in browsers reads, and shows each event as it arrives. Streams only go one way: from the server to you.

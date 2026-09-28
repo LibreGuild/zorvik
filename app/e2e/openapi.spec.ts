@@ -122,9 +122,17 @@ test("copies a request as code", async ({ page }) => {
   await page.getByRole("button", { name: "More actions" }).click();
   await page.getByRole("menuitem", { name: "Copy as cURL or code…" }).click();
   const dialog = page.getByRole("dialog", { name: "Copy as cURL or code" });
-  await expect(dialog.locator(".cm-content")).toContainText("curl");
-  await dialog.getByLabel("Format").selectOption("kotlin");
-  await expect(dialog.locator(".cm-content")).toContainText("OkHttpClient");
-  await dialog.getByLabel("Format").selectOption("python");
-  await expect(dialog.locator(".cm-content")).toContainText("requests.request");
+  const code = dialog.getByTestId("export-code").locator(".cm-content");
+  await expect(code).toContainText("curl");
+  await dialog.getByRole("option", { name: "Kotlin" }).click();
+  await expect(code).toContainText("OkHttpClient");
+  await dialog.getByRole("option", { name: "Python" }).click();
+  await expect(code).toContainText("requests.request");
+  await dialog.getByRole("button", { name: "HTTPX", exact: true }).click();
+  await expect(code).toContainText("httpx.request");
+  // Found by platform; Up and Down pick from the search box.
+  await dialog.getByLabel("Search languages").fill("flutter");
+  await expect(dialog.getByRole("option")).toHaveCount(1);
+  await page.keyboard.press("ArrowDown");
+  await expect(code).toContainText("package:http");
 });

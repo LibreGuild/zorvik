@@ -36,7 +36,7 @@
 ## Why Zorvik
 - **Your coding agent can drive it.** Claude Code, Codex, Gemini CLI, Cursor and any MCP client use Zorvik's 37 built-in tools to turn the APIs in your code into requests, test them, mock them and load test them, while you watch every step and approve anything risky. [More below](#ai-agents).
 - **Every feature is free, for good.** No paid plans, no "team" tier, no feature behind a login, and none planned. Open source under MIT or Apache-2.0.
-- **Everything in one place.** HTTP, GraphQL, gRPC, WebSocket, SSE, TCP, UDP, MQTT and DNS clients; mock servers; load tests; network tools. One app instead of five.
+- **Everything in one place.** HTTP, GraphQL (with subscriptions), gRPC, WebSocket, Socket.IO, SSE, TCP, UDP, MQTT and DNS clients; mock servers; load tests; network tools. One app instead of five.
 - **Your API work is plain files.** A workspace is a folder of readable YAML. Commit it to Git, review it in pull requests, share it with your team. Secrets stay on your computer.
 - **Honest numbers.** Every request shows where its time went (DNS, connect, TLS, first byte, download), which certificate answered and the headers that really left your machine. Load tests measure latency without hiding a slow server's queue.
 - **Local first.** No account, no cloud sync, no tracking, and none planned. It works offline and behind corporate proxies and TLS inspection. The only thing it connects to by itself is GitHub, to check for updates, and it sends nothing about you.
@@ -53,7 +53,7 @@
 - **Send and test:** it sends requests (HTTP, GraphQL, gRPC, DNS, event streams), writes tests, runs folders and collections, and reads the results and history.
 - **Mock and serve:** it builds mock APIs and servers, starts them and reads the traffic they received.
 - **Load test:** it plans and runs load tests and reads the latency and errors.
-- **Hand you code:** it exports requests as cURL, Kotlin, Swift, JavaScript or Python.
+- **Hand you code:** it exports requests as cURL or code in 16 languages, from JavaScript and Python to Go, Java, C# and Rust.
 
 You see every action in the app as it happens. Deleting, load testing, starting servers and sending requests to hosts outside your computer ask you first, and secrets are masked in everything the agent sees.
 
@@ -75,9 +75,9 @@ Then ask things like *"map the API routes in this repo to a Zorvik collection"* 
 ### Build and send
 - **HTTP/1.1, HTTP/2 and HTTP/3** with a timing waterfall, TLS certificate details, redirects, cookies and the exact headers sent.
 - **Bodies of every kind:** JSON, text, XML, forms, multipart, binary files and GraphQL, with syntax highlighting, search and pretty printing.
-- **GraphQL:** schema from introspection, autocomplete, a schema explorer and variables.
+- **GraphQL:** schema from introspection, autocomplete, a schema explorer and variables; subscriptions over WebSocket (graphql-transport-ws and the legacy protocol) or SSE.
 - **gRPC:** server reflection or `.proto` files; unary, server, client and bidirectional streaming; metadata; TLS.
-- **Realtime and sockets:** WebSocket, Server-Sent Events, TCP, UDP, MQTT 3.1.1 and 5, and DNS queries over UDP, TCP, TLS or HTTPS.
+- **Realtime and sockets:** WebSocket, Socket.IO 3 and 4 (events, acknowledgements, namespaces), Server-Sent Events, TCP, UDP, MQTT 3.1.1 and 5, and DNS queries over UDP, TCP, TLS or HTTPS.
 - **Responses you can dig into:** filter with JSONPath, jq or XPath, and save responses as examples that document the request and feed your mocks.
 - **Environments and variables:** Local, Staging, Production; secret values that never enter the workspace files; 170 dynamic values (every one of Postman's and more: `{{$randomFullName}}`, `{{$randomInt(1, 100)}}`, `{{$isoDate(+3d)}}`, valid test card numbers and IBANs); auth and headers inherited from folders.
 - **Auth:** Basic, Bearer, API keys, OAuth 2.0 (client credentials, password, authorization code with PKCE, implicit, refresh) and OAuth 1.0; JWT, AWS Signature v4, Hawk, Akamai EdgeGrid and Atlassian ASAP signed fresh for every send; Digest and NTLM.
@@ -94,7 +94,7 @@ Then ask things like *"map the API routes in this repo to a Zorvik collection"* 
 
 ### Mock and serve
 - **Mock APIs** from scratch, from a folder of requests (answering with their saved examples), from an OpenAPI spec, or from a response you just received. Routes with `:params`, templated bodies, delays, fault injection, CORS, and forwarding to a real backend.
-- **Servers:** WebSocket, SSE, TCP, UDP and DNS servers, plus a TCP relay that shows both directions. Every server logs its traffic live.
+- **Servers:** WebSocket, Socket.IO, SSE, TCP, UDP and DNS servers, plus a TCP relay that shows both directions. Every server logs its traffic live.
 - **Headless:** `zorvik serve` runs any of them in CI next to your tests.
 - **Busy port?** The error names the program holding it.
 
@@ -132,7 +132,7 @@ TLS inspector (chain, expiry, protocol versions, cipher suites), DNS lookup, por
 
 ### Work your way
 - **Import** Postman collections and environments, OpenAPI 3 and Swagger 2 (realistic examples, path parameters as variables), and cURL commands. When the API changes, **update from the spec**: new operations come in, your edits stay.
-- **Export** any request as cURL, or as Kotlin (OkHttp), Swift, JavaScript or Python code.
+- **Export** any request as cURL, HTTPie or Wget, or as code: JavaScript (fetch, axios), Python (requests, HTTPX), Go, Java, Kotlin (OkHttp), Swift, C#, PHP, Ruby, Rust, Dart, C (libcurl) or PowerShell.
 - **Built-in docs** for every feature (the book icon in the left rail), a command palette (<kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>K</kbd>) and keyboard shortcuts.
 - **Updates itself** from GitHub Releases: it downloads in the background and installs when you quit, or tells you and waits (Settings → Updates). Stable or nightly channel.
 - **Light and dark themes,** zoom (<kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>+</kbd> <kbd>−</kbd> <kbd>0</kbd>), and your choice of interface and code fonts.

@@ -1,13 +1,15 @@
-//! Reading a Server-Sent Events stream to an end: a named event, a number of events or a
-//! time limit. Agents (`send_request`) and the collection runner use it; the app's live
-//! SSE tab streams events to the UI instead (`sse.connect`).
+//! Reading a Server-Sent Events stream, or a GraphQL subscription's results, to an end: a named
+//! event, a number of events or a time limit. Agents (`send_request`) and the collection runner
+//! use it; the app's live tabs stream events to the UI instead (`sse.connect`, `socket.connect`).
 
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
-use zorvik_engine::{EngineError, ResponseMeta, SseEvent, SseParser, StreamingResponse, Timing};
+use zorvik_engine::{
+    Direction, EngineError, ResponseMeta, SocketConnected, SocketEvent, SseEvent, SseParser, StreamingResponse, Timing,
+};
 use zorvik_workspace::Workspace;
 use zorvik_workspace::formats::{Request, StreamUntil};
 
@@ -78,6 +80,43 @@ impl Api {
             self.save_jar(ws, jar);
         }
         Ok((stream, resolved.unresolved))
+    }
+
+    /// Start `request`'s GraphQL subscription and read its results until `until` says to stop
+    /// (or `cancel`). Each result is an event named `next`.
+    pub(crate) async fn read_subscription(
+        &self,
+        ws: &Workspace,
+        request: &Request,
+        path: Option<&str>,
+        until: &StreamUntil,
+        cancel: &CancellationToken,
+    ) -> ApiResult<SseRead> {
+        let started = Instant::now();
+        let deadline = tokio::time::Instant::now() + wait_of(until);
+        let settings = self.settings();
+        let opened = async {
+            let mut resolved = self.prepare(ws, request, path)?;
+            let opts = request_options(&settings, &request.settings)?;
+            self.authorize(ws, &mut resolved, &opts).await?;
+            let unresolved = resolved.unresolved.clone();
+            let jar = settings.cookie_jar.then(|| self.jar(ws));
+            let conn = self.connect_socket(request, resolved, &opts, jar.as_ref()).await?;
+            if let Some(jar) = &jar {
+                self.save_jar(ws, jar);
+            }
+            Ok::<_, ApiError>((conn, unresolved))
+        };
+        let (conn, unresolved) = tokio::select! {
+            r = opened => r?,
+            _ = cancel.cancelled() => return Err(EngineError::cancelled().into()),
+            _ = tokio::time::sleep_until(deadline) => {
+                return Err(ApiError::new("timeout", format!("No answer within {} ms", wait_of(until).as_millis())));
+            }
+        };
+        let mut read = collect_results(conn, until, cancel, started, deadline).await?;
+        read.unresolved = unresolved;
+        Ok(read)
     }
 
     /// Send `request` and read its events until `until` says to stop (or `cancel`).
@@ -190,6 +229,74 @@ pub(crate) async fn collect_events(
     };
     read.duration = started.elapsed();
     Ok(read)
+}
+
+/// Read a started subscription's results (as `next` events) until `until` says to stop (or
+/// `deadline`, or `cancel`). The session ends when this returns.
+pub(crate) async fn collect_results(
+    conn: SocketConnected,
+    until: &StreamUntil,
+    cancel: &CancellationToken,
+    started: Instant,
+    deadline: tokio::time::Instant,
+) -> ApiResult<SseRead> {
+    let SocketConnected { opened, meta, session, mut events } = conn;
+    let Some(meta) = meta else { return Err(ApiError::invalid("This connection has no results to read")) };
+    let mut read = SseRead {
+        meta,
+        timing: opened.timing,
+        events: Vec::new(),
+        end: SseEnd::Timeout,
+        dropped: 0,
+        body: None,
+        error: None,
+        unresolved: Vec::new(),
+        duration: Duration::ZERO,
+    };
+    let mut seen: u32 = 0;
+    read.end = 'read: loop {
+        tokio::select! {
+            _ = cancel.cancelled() => return Err(EngineError::cancelled().into()),
+            _ = tokio::time::sleep_until(deadline) => break 'read SseEnd::Timeout,
+            event = events.recv() => match event {
+                Some(SocketEvent::Message { direction: Direction::Received, text, base64, .. }) => {
+                    seen += 1;
+                    let mut data = text.or(base64).unwrap_or_default();
+                    if let Some((at, _)) = data.char_indices().nth(MAX_EVENT_DATA) {
+                        data.truncate(at);
+                    }
+                    let event = SseEvent { event: "next".into(), data, id: None, retry: None };
+                    let matched = !until.event.is_empty() && event.event == until.event;
+                    if read.events.len() < MAX_EVENTS {
+                        read.events.push(event);
+                    } else {
+                        read.dropped += 1;
+                    }
+                    if matched {
+                        break 'read SseEnd::Event;
+                    }
+                    if until.max_events > 0 && seen >= until.max_events {
+                        break 'read SseEnd::Count;
+                    }
+                }
+                Some(SocketEvent::Error { message }) => read.error = Some(message),
+                Some(SocketEvent::Closed { .. }) | None => break 'read SseEnd::Closed,
+                Some(_) => {}
+            }
+        }
+    };
+    drop(session);
+    read.duration = started.elapsed();
+    Ok(read)
+}
+
+/// A subscription's results as a JSON array, for `pm.response.json()`.
+pub(crate) fn results_json(events: &[SseEvent]) -> String {
+    let results: Vec<serde_json::Value> = events
+        .iter()
+        .map(|e| serde_json::from_str(&e.data).unwrap_or_else(|_| serde_json::Value::String(e.data.clone())))
+        .collect();
+    serde_json::to_string_pretty(&results).unwrap_or_default()
 }
 
 /// The events as the wire had them (`event:`, `id:`, `data:` lines), for `pm.response.text()`.

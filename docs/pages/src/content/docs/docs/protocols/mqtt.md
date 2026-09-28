@@ -2,7 +2,7 @@
 title: MQTT
 description: Connect to an MQTT broker (3.1.1 or 5), subscribe to topic filters and publish messages with QoS 0, 1 or 2.
 sidebar:
-  order: 6
+  order: 7
 ---
 
 An MQTT client request connects to a broker, subscribes to topic filters and publishes messages. Incoming messages appear live with their topic, QoS and retain flag.

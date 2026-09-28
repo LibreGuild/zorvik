@@ -103,7 +103,7 @@ The **Collection** section of the sidebar shows the requests of `requests/` as a
 **Create a request:**
 
 - Press <kbd>Mod</kbd>+<kbd>N</kbd> for a new, unsaved HTTP request in a tab. <kbd>Mod</kbd>+<kbd>S</kbd> then asks for a name and a folder.
-- Or choose **+** at the top of the sidebar (or right-click an empty part of the tree, or right-click a folder) and pick a kind: **HTTP request**, **GraphQL request**, **gRPC request**, **WebSocket**, **Event stream (SSE)**, **TCP connection**, **UDP socket**, **DNS query** or **MQTT client**. Zorvik asks for a name and saves the request right away.
+- Or choose **+** at the top of the sidebar (or right-click an empty part of the tree, or right-click a folder) and pick a kind: **HTTP request**, **GraphQL request**, **gRPC request**, **WebSocket**, **Event stream (SSE)**, **TCP connection**, **UDP socket**, **DNS query**, **MQTT client** or **Socket.IO client**. Zorvik asks for a name and saves the request right away.
 
 **Right-click a request** (or hover it and choose **⋯**) for:
 

@@ -60,6 +60,13 @@ pub fn parse_curl(input: &str) -> Result<CurlImport, ImportError> {
     cmd.finish()
 }
 
+/// `command` with `notes` as comments before it (`REM` for the Windows Command Prompt).
+pub fn noted(command: String, flavor: CurlFlavor, notes: &[String]) -> String {
+    let prefix = if flavor == CurlFlavor::Cmd { "REM" } else { "#" };
+    let block: String = notes.iter().map(|n| format!("{prefix} {n}\n")).collect();
+    format!("{block}{command}")
+}
+
 /// Render a fully resolved request as a cURL command line.
 pub fn to_curl(req: &HttpRequest, flavor: CurlFlavor) -> String {
     let quote = |s: &str| match flavor {
@@ -371,7 +378,7 @@ fn split_cmd(input: &str, w: &mut Words) -> Option<String> {
 }
 
 /// Characters that open and close a PowerShell single-quoted string (it accepts typographic quotes too).
-const PS_SINGLE_QUOTES: [char; 5] = ['\'', '\u{2018}', '\u{2019}', '\u{201a}', '\u{201b}'];
+pub(crate) const PS_SINGLE_QUOTES: [char; 5] = ['\'', '\u{2018}', '\u{2019}', '\u{201a}', '\u{201b}'];
 
 /// PowerShell quoting with backtick escapes.
 fn split_powershell(input: &str, w: &mut Words) -> Option<String> {
@@ -960,7 +967,7 @@ fn graphql_body(body: &Body, url: &str) -> Option<Body> {
     if !(path.to_ascii_lowercase().ends_with("/graphql") || starts_like_graphql(&query)) {
         return None;
     }
-    let graphql = GraphqlBody { query, variables, operation_name };
+    let graphql = GraphqlBody { query, variables, operation_name, ..Default::default() };
     Some(Body { body_type: BodyType::Graphql, graphql, ..Body::default() })
 }
 
@@ -1137,11 +1144,11 @@ fn clip(s: &str) -> String {
 // Quoting for to_curl
 // ---------------------------------------------------------------------------
 
-fn quote_bash(s: &str) -> String {
+pub(crate) fn quote_bash(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-fn ansi_c_quote(bytes: &[u8]) -> String {
+pub(crate) fn ansi_c_quote(bytes: &[u8]) -> String {
     let mut out = String::from("$'");
     for &b in bytes {
         match b {
@@ -1376,6 +1383,7 @@ line2^!^\\^\"^}^\"";
                 query: "query U($id: ID!) { user(id: $id) { name } }".into(),
                 variables: "{\n  \"id\": \"7\"\n}".into(),
                 operation_name: Some("U".into()),
+                ..Default::default()
             }
         );
         // Any URL, when the query reads like GraphQL; null variables and operation name are dropped.

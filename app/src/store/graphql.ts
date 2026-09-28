@@ -158,6 +158,75 @@ export function operationNames(query: string): string[] | null {
   }
 }
 
+export type OperationType = "query" | "mutation" | "subscription";
+
+/**
+ * The operations of a document: their type and name, in order. Only the definitions' first words
+ * are read (like the backend does), so a document still being typed says what it runs.
+ */
+export function operations(query: string): { type: OperationType; name: string | null }[] {
+  const out: { type: OperationType; name: string | null }[] = [];
+  const lexer = new Lexer(new Source(query));
+  // start: expecting a definition; keyword: after query/mutation/subscription; header: up to "{".
+  let state: "start" | "keyword" | "header" | "other" = "start";
+  let pending: OperationType = "query";
+  // Inside a selection set, and inside arguments or variable definitions (whose values have braces too).
+  let depth = 0;
+  let parens = 0;
+  try {
+    for (let token = lexer.advance(); token.kind !== TokenKind.EOF; token = lexer.advance()) {
+      if (depth > 0) {
+        if (token.kind === TokenKind.BRACE_L) depth++;
+        else if (token.kind === TokenKind.BRACE_R) depth--;
+        continue;
+      }
+      if (parens > 0) {
+        if (token.kind === TokenKind.PAREN_L) parens++;
+        else if (token.kind === TokenKind.PAREN_R) parens--;
+        continue;
+      }
+      if (token.kind === TokenKind.PAREN_L) parens = 1;
+      if (token.kind === TokenKind.BRACE_L) {
+        if (state === "start") out.push({ type: "query", name: null });
+        else if (state === "keyword") out.push({ type: pending, name: null });
+        state = "start";
+        depth = 1;
+      } else if (state === "start" && token.kind === TokenKind.NAME) {
+        const word = token.value;
+        if (word === "query" || word === "mutation" || word === "subscription") {
+          pending = word;
+          state = "keyword";
+        } else state = "other";
+      } else if (state === "keyword") {
+        out.push({ type: pending, name: token.kind === TokenKind.NAME ? token.value : null });
+        state = "header";
+      }
+    }
+  } catch {
+    // A character the lexer rejects: what came before still counts.
+  }
+  if (state === "keyword") out.push({ type: pending, name: null });
+  return out;
+}
+
+let lastOperation: { query: string; name: string; type: OperationType | null } | null = null;
+
+/** The type of the operation that runs: the one named `operationName`, or the only one. */
+export function operationType(query: string, operationName?: string | null): OperationType | null {
+  const name = operationName?.trim() ?? "";
+  if (lastOperation?.query === query && lastOperation.name === name) return lastOperation.type;
+  const ops = operations(query);
+  const type = name ? (ops.find((o) => o.name === name)?.type ?? null) : ops.length === 1 ? ops[0].type : null;
+  lastOperation = { query, name, type };
+  return type;
+}
+
+/** An HTTP request whose GraphQL operation is a subscription: sent over WebSocket or SSE, live. */
+export function isSubscription(request: Request): boolean {
+  if ((request.kind ?? "http") !== "http" || request.body?.type !== "graphql") return false;
+  return operationType(request.body.graphql?.query ?? "", request.body.graphql?.operationName) === "subscription";
+}
+
 /** The operation name to keep after an edit: a name that no longer exists is dropped. */
 export function keptOperationName(query: string, current: string | null | undefined): string | undefined {
   if (!current) return undefined;

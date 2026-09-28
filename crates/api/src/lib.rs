@@ -1739,38 +1739,73 @@ impl Api {
     }
 
     fn export_curl(&self, p: ExportCurlParams) -> ApiResult<String> {
-        let request = self.request_for_export(&p.request, p.path.as_deref(), p.resolve_variables)?;
-        Ok(to_curl(&request, p.flavor))
+        let (request, notes) = self.request_for_export(&p.request, p.path.as_deref(), p.resolve_variables)?;
+        Ok(zorvik_workspace::formats::curl::noted(to_curl(&request, p.flavor), p.flavor, &notes))
     }
 
     fn export_snippet(&self, p: ExportSnippetParams) -> ApiResult<String> {
-        let request = self.request_for_export(&p.request, p.path.as_deref(), p.resolve_variables)?;
-        Ok(zorvik_workspace::formats::snippet::to_snippet(&request, p.language))
+        use zorvik_workspace::formats::snippet::{noted, to_snippet};
+        let (request, notes) = self.request_for_export(&p.request, p.path.as_deref(), p.resolve_variables)?;
+        Ok(noted(to_snippet(&request, p.language), p.language, &notes))
     }
 
-    /// `request` as it would be sent, for copying as cURL or code. Without resolving,
+    /// `request` as it would be sent, for copying as cURL or code, and notes on what the copy
+    /// can't do (answer a Digest challenge, sign each request). Without resolving,
     /// `{{variables}}` stay as written; an OAuth 2.0 token is the cached one or a placeholder.
     pub(crate) fn request_for_export(
         &self,
         request: &Request,
         path: Option<&str>,
         resolve_variables: bool,
-    ) -> ApiResult<zorvik_engine::HttpRequest> {
+    ) -> ApiResult<(zorvik_engine::HttpRequest, Vec<String>)> {
         let ws = self.ws()?;
+        let folders = path.map(|x| ws.ancestors(x)).unwrap_or_default();
+        let meta = ws.meta().clone();
+        let outside_files = self.settings().files_outside_workspace;
+        let inherit = Inheritance { workspace: &meta, folders: &folders, base_dir: ws.root(), outside_files };
         let mut resolved = if resolve_variables {
             self.resolve_only(&ws, request, path)?
         } else {
-            let folders = path.map(|x| ws.ancestors(x)).unwrap_or_default();
-            let meta = ws.meta().clone();
-            let outside_files = self.settings().files_outside_workspace;
-            let inherit = Inheritance { workspace: &meta, folders: &folders, base_dir: ws.root(), outside_files };
             resolve(request, &inherit, &VarContext::new())?
         };
+        let mut notes = Vec::new();
         if let Some(config) = &resolved.oauth2 {
             let token = self.inner.tokens.get(&oauth2::cache_key(&ws.local_key(), config)).map(|t| t.access_token);
+            if token.is_none() {
+                notes.push("<access-token> stands for an OAuth 2.0 access token: get one first.".to_string());
+            }
             apply_token(&mut resolved, token.as_deref().unwrap_or("<access-token>"));
         }
-        Ok(resolved.request)
+        let auth = zorvik_workspace::resolve::effective_auth(&request.auth, &inherit);
+        match &resolved.challenge {
+            Some(zorvik_workspace::signing::Challenge::Digest { .. }) => notes.push(
+                "This request uses Digest auth, which Zorvik answers when the server asks: this code sends no credentials."
+                    .into(),
+            ),
+            Some(zorvik_workspace::signing::Challenge::Ntlm { .. }) => notes.push(
+                "This request uses NTLM auth, which Zorvik answers when the server asks: this code sends no credentials."
+                    .into(),
+            ),
+            None if zorvik_workspace::signing::signs_each_send(auth) => notes.push(format!(
+                "The {} signature was made for this copy and soon expires: sign each request in your code.",
+                signing_label(auth)
+            )),
+            None => {}
+        }
+        Ok((resolved.request, notes))
+    }
+}
+
+/// How export notes name a signing auth type.
+fn signing_label(auth: &zorvik_workspace::formats::Auth) -> &'static str {
+    use zorvik_workspace::formats::Auth;
+    match auth {
+        Auth::AwsSigV4(_) => "AWS Signature V4",
+        Auth::OAuth1(_) => "OAuth 1.0",
+        Auth::Jwt(_) => "JWT",
+        Auth::Hawk(_) => "Hawk",
+        Auth::EdgeGrid(_) => "Akamai EdgeGrid",
+        _ => "ASAP",
     }
 }
 

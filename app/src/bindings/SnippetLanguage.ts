@@ -3,4 +3,4 @@
 /**
  * Languages a request can be exported to as code.
  */
-export type SnippetLanguage = "kotlin" | "swift" | "javascript" | "python";
+export type SnippetLanguage = "kotlin" | "swift" | "javascript" | "javascriptAxios" | "python" | "pythonHttpx" | "go" | "java" | "csharp" | "php" | "ruby" | "rust" | "dart" | "c" | "powerShell" | "httpie" | "wget";
