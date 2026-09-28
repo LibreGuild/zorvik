@@ -6,9 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
-## [0.1.1] - 2026-09-28
+## [0.1.2] - 2026-09-28
+
+0.1.1 was never published on its own: its changes ship here.
 
 ### Added
+- **Website and developer docs** at <https://libreguild.github.io/zorvik/>: every feature explained, with the complete scripting (`pm`) and command-line references and the workspace file format. Download buttons pick your system and always point at the newest release.
 - **Training Bootcamp:** a course inside Zorvik, from networking basics to load testing. 16 units of short lessons with diagrams, hands-on labs in the real workbench (practice servers start on your computer; a Lab Guide checks each step, with hints and "Do it for me"), quick checks, XP, levels, streaks, badges and a graduation certificate. Open it from **Training Bootcamp** at the top of the workspace menu or on the welcome screen; the Training Bootcamp workspace is always there and can be reset.
 - AI agents can create and change mock servers (`read_server`, `save_server`), build a mock from a folder or an OpenAPI document (`create_mock`), start a server on any free port, and read what it received (`get_server_traffic`).
 - AI agents can read Server-Sent Events streams with `send_request`, read several requests at once, set query parameters (also switched-off ones, with descriptions) and path parameters, read current variables (`get_variables`) and history (`read_history`), export a request as code (`export_request`), and add a small file to the workspace (`write_file`).
@@ -20,11 +23,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Load tests: a data file gives each virtual user its own row; captures (JSON path, header or regex) pass values from a response to the same user's next requests; timing shows time to first byte, transfer, connect and `Server-Timing`; Compare shows a run next to an earlier one.
 
 ### Changed
+- Nightly builds come once a day, when `main` has changed, instead of after every merge.
 - Tools that save requests, servers and load tests refuse unknown or misspelled fields, with a suggestion, instead of ignoring them. Their input schemas document every field, unit and placeholder.
 - Load-test threshold units are documented (`errorRate` is a percent, 0-100); `waitSeconds: 0` returns the run id at once.
 - Collection runs say why a request was skipped.
 
 ### Fixed
+- The app's Runner tab now sends event-stream (SSE) requests too, like `zorvik run` and agents do.
+- Load tests: an arrival-rate run could drop its last request on Windows (a timer woke too late and the end of the run won).
 - Long menus now fit the window and scroll.
 - `save_environment` reported `active: false` for an environment that was active.
 
@@ -46,5 +52,6 @@ The first public release.
 - In-app docs, light and dark themes, zoom and font settings.
 - Installers for Windows, macOS (universal) and Linux (deb, rpm, AppImage).
 
-[Unreleased]: https://github.com/LibreGuild/zorvik/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/LibreGuild/zorvik/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/LibreGuild/zorvik/compare/v0.1.0...v0.1.2
 [0.1.0]: https://github.com/LibreGuild/zorvik/releases/tag/v0.1.0

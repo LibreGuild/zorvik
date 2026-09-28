@@ -19,6 +19,8 @@
 
 <p align="center">
   <a href="https://github.com/LibreGuild/zorvik/releases/latest"><b>Download</b></a> ·
+  <a href="https://libreguild.github.io/zorvik/">Website</a> ·
+  <a href="https://libreguild.github.io/zorvik/docs/">Docs</a> ·
   <a href="#features">Features</a> ·
   <a href="#command-line">Command line</a> ·
   <a href="#ai-agents">AI agents</a> ·
@@ -93,6 +95,11 @@
 - **Hands-on labs** in the real workbench: **Start lab** runs practice servers on your computer and fills in a Lab environment, and the **Lab Guide** ticks each step off the moment you get it right. Hints go from a nudge to the exact clicks.
 - **Plain words and diagrams:** short readings with sequence, flow and layer diagrams, and a quick check after each lesson.
 - **Rewards:** XP, levels and ranks, daily streaks, 24 badges, and a *Zorvik Bootcamp Graduate* certificate. Open it from **Training Bootcamp**, pinned at the top of the workspace menu and on the welcome screen; inside it, a *Workbench | Academy* switch moves between the lessons and the labs. Its workspace is always there and resets in one click.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/academy-dark.webp">
+  <img alt="The Academy: level and XP, streak and badges, the lesson to continue, and the course map" src=".github/assets/academy-light.webp">
+</picture>
 
 ### Inspect the network
 TLS inspector (chain, expiry, protocol versions, cipher suites), DNS lookup, port check, ping, network interfaces, HTTP/3 check, and encoders for Base64, URL, hex, JWT, hashes and timestamps.
@@ -175,11 +182,12 @@ npm run package            # build installers for your system
 You need Rust (stable) and Node.js 22+; [CONTRIBUTING.md](CONTRIBUTING.md) lists the system packages for each OS.
 
 ## Documentation
+- **[Zorvik docs](https://libreguild.github.io/zorvik/docs/)**: every feature in detail, the scripting and command-line references, and the workspace file format.
 - In the app: the **Docs** section covers every feature.
 - [Architecture](docs/architecture.md): how the pieces fit together.
 - [Training Bootcamp](docs/academy.md): how the Academy works, and how to write a lesson.
 - [Testing](docs/testing.md): the test suites and how to run them.
-- [CI and releases](docs/ci-release.md): how builds and releases are made.
+- [CI and releases](docs/ci-release.md): how builds, releases and the website are made.
 
 ## Community
 - Questions and ideas: [Discussions](https://github.com/LibreGuild/zorvik/discussions)

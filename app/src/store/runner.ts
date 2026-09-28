@@ -100,7 +100,7 @@ export const settingsOf = (tabId: string, state: RunnerState = get()): RunnerSet
 
 // ---- pure helpers (exported for tests) -------------------------------------------------
 
-/** The HTTP requests under a folder ("" = the whole collection) in sidebar order; null when the folder is gone. */
+/** The requests a run sends (HTTP, GraphQL and event streams) under a folder ("" = the whole collection) in sidebar order; null when the folder is gone. */
 export function runnableRequests(tree: TreeNode[], folder: string): RequestEntry[] | null {
   let nodes = tree;
   let trail: string[] = [];
@@ -118,7 +118,7 @@ export function runnableRequests(tree: TreeNode[], folder: string): RequestEntry
     nodes = found[0].children;
     trail = [...found[1], found[0].name];
   }
-  return flattenRequests(nodes, trail).filter((r) => r.kind === "http" && !r.error);
+  return flattenRequests(nodes, trail).filter((r) => (r.kind === "http" || r.kind === "sse") && !r.error);
 }
 
 /** Requests in run order: the saved order first, then the others in sidebar order. */

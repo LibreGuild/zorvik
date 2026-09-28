@@ -1,0 +1,33 @@
+/* The docs in Zorvik's colors: warm charcoal and terracotta (dark), warm ivory (light). */
+:root {
+  --sl-font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --sl-font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --sl-color-accent-low: #3a2219;
+  --sl-color-accent: #d97757;
+  --sl-color-accent-high: #f2c2ad;
+  --sl-color-white: #faf9f5;
+  --sl-color-gray-1: #eeece4;
+  --sl-color-gray-2: #c2c0b6;
+  --sl-color-gray-3: #9c9a92;
+  --sl-color-gray-4: #5f5d57;
+  --sl-color-gray-5: #3a3936;
+  --sl-color-gray-6: #262624;
+  --sl-color-black: #1b1a19;
+}
+:root[data-theme="light"] {
+  --sl-color-accent-low: #f5ddd2;
+  --sl-color-accent: #b3532f;
+  --sl-color-accent-high: #6e2e17;
+  --sl-color-white: #141413;
+  --sl-color-gray-1: #262624;
+  --sl-color-gray-2: #3d3c38;
+  --sl-color-gray-3: #5e5d59;
+  --sl-color-gray-4: #8a877f;
+  --sl-color-gray-5: #d1cdbf;
+  --sl-color-gray-6: #efede5;
+  --sl-color-gray-7: #f5f4ed;
+  --sl-color-black: #faf9f5;
+}
+.site-title img {
+  border-radius: 7px;
+}

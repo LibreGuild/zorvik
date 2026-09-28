@@ -1,0 +1,74 @@
+name: Website
+
+# The website (docs/pages): the home page and the docs at /docs, on GitHub Pages. Rebuilt when
+# its sources change on main, after every release (ci.yml starts it) and once a day, so the
+# download count stays fresh. Pull requests only check that it builds.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/pages/**"
+      - ".github/assets/**"
+      - "app/src/assets/academy/**"
+      - "app/src/assets/docs/**"
+      - "crates/academy/course/**"
+      - ".github/workflows/pages.yml"
+  pull_request:
+    paths:
+      - "docs/pages/**"
+      - ".github/workflows/pages.yml"
+  schedule:
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Build the website
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/pages/package-lock.json
+      - name: Install
+        working-directory: docs/pages
+        run: npm ci
+      - name: Build
+        working-directory: docs/pages
+        env:
+          # Reads the latest release (version, sizes, downloads) without the anonymous rate limit.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npm run build
+      - name: Check links
+        working-directory: docs/pages
+        run: npm run check
+      - uses: actions/upload-pages-artifact@v5
+        if: github.event_name != 'pull_request'
+        with:
+          path: docs/pages/dist
+
+  deploy:
+    name: Publish the website
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

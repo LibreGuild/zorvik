@@ -1,6 +1,9 @@
 # CI and releases
 
-Everything runs in one workflow: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
+Three workflows:
+- [`ci.yml`](../.github/workflows/ci.yml): the checks on every pull request and push, and the builds of releases and nightlies.
+- [`nightly.yml`](../.github/workflows/nightly.yml): once a day, starts a nightly build when `main` changed.
+- [`pages.yml`](../.github/workflows/pages.yml): the website on GitHub Pages.
 
 ## Checks (every pull request and every push)
 | Job | What it does |
@@ -16,7 +19,9 @@ A pull request can merge only when all four pass. Pull requests from first-time 
 | Channel | Made by | Where | Version |
 |---|---|---|---|
 | **Release** | pushing a tag `vX.Y.Z` | [Releases → Latest](https://github.com/LibreGuild/zorvik/releases/latest) | `X.Y.Z` |
-| **Nightly** | every push to `main` | the `nightly` pre-release, replaced each time | the version in the code, plus "nightly N · commit" in Settings |
+| **Nightly** | once a day (03:17 UTC), when `main` has new commits since the last nightly | the `nightly` pre-release, replaced each time | the version in the code, plus "nightly N · commit" in Settings |
+
+A push to `main` only runs the checks. The nightly workflow compares `main` with the `nightly` tag and, when they differ, starts CI on `main` by hand (`workflow_dispatch`), which builds and publishes. A maintainer can do the same at any time: **Actions → CI → Run workflow** on `main`.
 
 After the checks pass, `release-draft` creates a draft release for the run and checks that the tag matches the version in `Cargo.toml`, `app/package.json` and `tauri.conf.json`. Then three jobs build in parallel with `npm run package` (the app with the `zorvik` command line inside) and upload to the draft. Finally `publish` makes the draft public: as the tagged release with notes, or as the new nightly. If any build fails, nothing is published and the previous release stays.
 
@@ -54,8 +59,16 @@ Linux packages are built on Ubuntu 22.04, the oldest supported system, so they r
 ## Signing
 The builds are not code-signed yet. Windows SmartScreen asks once (**More info → Run anyway**). On macOS the first open is blocked; allow it in System Settings → Privacy & Security → **Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/Zorvik.app`. The macOS app is ad-hoc signed so it runs on Apple silicon.
 
+## Website
+The website lives in [`docs/pages`](pages/README.md): an Astro site with the home page and the developer docs (Starlight) under `/docs`. It is published to GitHub Pages at <https://libreguild.github.io/zorvik/> by `pages.yml`:
+- on pushes to `main` that change the site, its pictures or the course;
+- after every release (the release job starts it, so the version and sizes on the page update);
+- once a day, so the download count stays fresh.
+
+Pull requests that touch the site build it without publishing. Page views are counted by GoatCounter, without cookies.
+
 ## Repository automation
-- **Dependabot** opens grouped weekly updates for Cargo, npm and GitHub Actions ([`.github/dependabot.yml`](../.github/dependabot.yml)), plus immediate security updates.
+- **Dependabot** opens grouped weekly updates for Cargo, npm (the app and the website) and GitHub Actions ([`.github/dependabot.yml`](../.github/dependabot.yml)), plus immediate security updates.
 - **CodeQL** scans the TypeScript and workflow code on every push and pull request.
 - **Secret scanning** with push protection blocks commits that contain credentials.
 - `main` is protected: changes arrive through pull requests with passing checks; no force pushes or deletion.

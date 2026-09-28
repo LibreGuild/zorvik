@@ -1,0 +1,581 @@
+---
+// The Zorvik website's home page. Static HTML and CSS; small scripts only for the operating
+// system guess, the tour tabs, the card glow and a live refresh of the version and downloads.
+import { readdirSync } from "node:fs";
+import { join, resolve } from "node:path";
+import "../styles/site.css";
+import { formatSize, latestRelease, REPO, type Os } from "../lib/releases";
+
+const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
+const docs = `${base}docs/`;
+const github = `https://github.com/${REPO}`;
+const release = await latestRelease();
+const version = release.version;
+
+// The course, counted from its files so the numbers stay true.
+// The site builds from docs/pages (its own folder); the course is in the repository.
+const courseDir = resolve(process.cwd(), "../../crates/academy/course");
+const unitDirs = readdirSync(courseDir, { withFileTypes: true }).filter((d) => d.isDirectory());
+const lessons = unitDirs.reduce((n, d) => n + readdirSync(join(courseDir, d.name)).filter((f) => f.endsWith(".md")).length, 0);
+const units = unitDirs.length;
+const badges = units + 8;
+
+// ---- the wire network in the hero ------------------------------------------------------------
+const PROTOCOLS = [
+  { label: "HTTP/3", color: "#86bd7c" },
+  { label: "GraphQL", color: "#ec7fbd" },
+  { label: "gRPC", color: "#a4aaf2" },
+  { label: "WebSocket", color: "#6fbac5" },
+  { label: "SSE", color: "#e3935f" },
+  { label: "MQTT", color: "#c79be0" },
+  { label: "TCP", color: "#8fb0e3" },
+  { label: "UDP", color: "#d6c07a" },
+  { label: "DNS", color: "#a3cf85" },
+];
+const W = 600;
+const H = 560;
+const cx = W / 2;
+const cy = H / 2;
+const wires = PROTOCOLS.map((p, i) => {
+  const a = -Math.PI / 2 + (i * 2 * Math.PI) / PROTOCOLS.length;
+  const x = cx + Math.cos(a) * 236;
+  const y = cy + Math.sin(a) * 214;
+  const sx = cx + Math.cos(a) * 64;
+  const sy = cy + Math.sin(a) * 64;
+  // A gentle curve: the control point sits beside the middle of the wire.
+  const bend = i % 2 ? 46 : -46;
+  const mx = (sx + x) / 2 - Math.sin(a) * bend;
+  const my = (sy + y) / 2 + Math.cos(a) * bend;
+  return { ...p, id: `wire-${i}`, d: `M${sx.toFixed(1)} ${sy.toFixed(1)} Q${mx.toFixed(1)} ${my.toFixed(1)} ${x.toFixed(1)} ${y.toFixed(1)}`, x, y, out: 2.4 + (i % 4) * 0.45, back: 2.9 + ((i + 2) % 4) * 0.4, delay: -(i * 0.53) };
+});
+
+const OS_NAME: Record<Os, string> = { windows: "Windows", macos: "macOS", linux: "Linux" };
+const byOs = (os: Os) => release.files.filter((f) => f.os === os);
+const released = release.date ? new Date(release.date).toLocaleDateString("en", { year: "numeric", month: "long", day: "numeric" }) : null;
+
+const TOUR = [
+  { id: "requests", label: "Requests", image: "request-dark.webp", alt: "A request, its JSON response and tests passing", caption: "Every protocol, one editor: params, auth, scripts and a response with timing, TLS and the headers that really left your machine." },
+  { id: "mocks", label: "Mock servers", image: "mock-dark.webp", alt: "A mock API with routes and its live traffic", caption: "Mock APIs from scratch, an OpenAPI spec or a response you just got. Templates, delays, faults, CORS, and live traffic." },
+  { id: "load", label: "Load tests", image: "loadtest-dark.webp", alt: "A finished load test with latency percentiles and thresholds", caption: "Virtual users or arrival rate, stages and thresholds. Honest percentiles, even when the server starts queueing." },
+  { id: "academy", label: "Academy", image: "academy-dark.webp", alt: "The Academy course map with level, streak and badges", caption: "A course inside the app: short lessons, labs in the real workbench, badges and a certificate." },
+];
+const TERMINAL = [
+  '<span class="prompt">$</span> zorvik run ./shop --env Staging --folder Checkout --junit report.xml',
+  '<span class="g">✓</span> POST    Create order  <span class="d">https://staging.shop.example/orders</span>  <span class="g">201</span> <span class="d">84 ms, 312 B</span>',
+  '    <span class="g">✓</span> status is 201',
+  '    <span class="g">✓</span> Matches the API spec (POST /orders → 201)',
+  '<span class="g">✓</span> GET     Get order  <span class="d">https://staging.shop.example/orders/ord_81</span>  <span class="g">200</span> <span class="d">12 ms, 488 B</span>',
+  '<span class="r">✗</span> POST    Cancel order  <span class="d">https://staging.shop.example/orders/ord_81/cancel</span>  <span class="r">409</span> <span class="d">15 ms, 96 B</span>',
+  '    <span class="r">✗</span> can be cancelled<span class="r"> — expected 409 to equal 200</span>',
+  ' ',
+  'Requests  <span class="g">2</span> passed, <span class="r">1</span> failed, 0 skipped (3 total)',
+  'Tests     <span class="g">3</span> passed, <span class="r">1</span> failed',
+  'Time      0.4 s',
+  '<span class="prompt">$</span> echo $?',
+  '1',
+];
+const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-legend", "mock-master", "graduate"];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Zorvik: one workbench for every wire</title>
+    <meta name="description" content="Zorvik is a free, open-source desktop app to build, test, mock and load test APIs over HTTP, GraphQL, gRPC, WebSocket, SSE, MQTT, TCP, UDP and DNS. Local first, for Windows, macOS and Linux." />
+    <meta name="theme-color" content="#161514" />
+    <link rel="icon" href={`${base}favicon.png`} />
+    <link rel="canonical" href={`https://libreguild.github.io${base}`} />
+    <meta property="og:title" content="Zorvik: one workbench for every wire" />
+    <meta property="og:description" content="Build, test, mock and load test APIs, and see what really happens on the network. Free and open source." />
+    <meta property="og:image" content={`https://libreguild.github.io${base}shots/banner.webp`} />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script is:inline data-goatcounter="https://zorvik.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="nav" id="top">
+      <div class="nav-inner">
+        <a class="brand" href={base} aria-label="Zorvik home">
+          <img src={`${base}favicon.png`} alt="" width="28" height="28" />
+          <span>Zorvik</span>
+        </a>
+        <nav aria-label="Main">
+          <a href="#features">Features</a>
+          <a href="#bootcamp">Bootcamp</a>
+          <a href="#cli">Command line</a>
+          <a href={docs}>Docs</a>
+          <a href={github} class="gh" aria-label="Zorvik on GitHub">
+            <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"></path></svg>
+          </a>
+        </nav>
+        <a class="btn btn-sm btn-primary nav-cta" href="#download">Download</a>
+      </div>
+    </header>
+
+    <main id="main">
+      <!-- Hero -->
+      <section class="hero">
+        <div class="hero-glow" aria-hidden="true"></div>
+        <div class="hero-grid" aria-hidden="true"></div>
+        <div class="wrap hero-inner">
+          <div class="hero-copy">
+            <a class="pill" href={release.notesUrl}>
+              <span class="pill-dot"></span>
+              {version ? <span>Zorvik <b data-version>{version}</b> is out · see what's new</span> : <span>Free and open source</span>}
+              <span aria-hidden="true">→</span>
+            </a>
+            <h1>One workbench<br />for <span class="grad">every wire.</span></h1>
+            <p class="lead">
+              Build, test, mock and load test APIs over HTTP, GraphQL, gRPC, WebSocket, SSE, MQTT, TCP, UDP and DNS, and see what really happens on the network.
+            </p>
+            <div class="cta-row">
+              <a class="btn btn-primary btn-lg" id="hero-download" href="#download" data-goatcounter-click="download-hero">
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 3v12m0 0-5-5m5 5 5-5M4 19h16"></path></svg>
+                <span id="hero-download-label">Download Zorvik</span>
+              </a>
+              <a class="btn btn-ghost btn-lg" href={docs}>Read the docs <span aria-hidden="true">→</span></a>
+            </div>
+            <p class="hero-meta" id="hero-meta">
+              {version && <span>Version <span data-version>{version}</span></span>}
+              <span>Windows · macOS · Linux</span>
+              <span>No account, works offline</span>
+            </p>
+          </div>
+          <div class="hero-art">
+            <svg class="wire" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Zorvik at the center of every protocol: HTTP, GraphQL, gRPC, WebSocket, SSE, MQTT, TCP, UDP and DNS">
+              <defs>
+                <radialGradient id="pkt-out"><stop offset="0" stop-color="#ffd2bd" /><stop offset=".45" stop-color="#d97757" /><stop offset="1" stop-color="#d97757" stop-opacity="0" /></radialGradient>
+                <radialGradient id="pkt-back"><stop offset="0" stop-color="#cdf3ee" /><stop offset=".45" stop-color="#4fb2ad" /><stop offset="1" stop-color="#4fb2ad" stop-opacity="0" /></radialGradient>
+                <radialGradient id="hub-fill" cx=".5" cy=".4"><stop offset="0" stop-color="#3b2a22" /><stop offset="1" stop-color="#1c1a19" /></radialGradient>
+              </defs>
+              {wires.map((w) => (
+                <g>
+                  <path id={w.id} d={w.d} class="wire-line" />
+                  <path d={w.d} class="wire-flow" style={`animation-delay:${w.delay}s`} />
+                </g>
+              ))}
+              {wires.map((w) => (
+                <g>
+                  <circle r="7" fill="url(#pkt-out)">
+                    <animateMotion dur={`${w.out}s`} begin={`${w.delay}s`} repeatCount="indefinite" keyPoints="0;1" keyTimes="0;1" calcMode="linear"><mpath href={`#${w.id}`} /></animateMotion>
+                  </circle>
+                  <circle r="6" fill="url(#pkt-back)">
+                    <animateMotion dur={`${w.back}s`} begin={`${w.delay - 1.2}s`} repeatCount="indefinite" keyPoints="1;0" keyTimes="0;1" calcMode="linear"><mpath href={`#${w.id}`} /></animateMotion>
+                  </circle>
+                </g>
+              ))}
+              <g class="hub">
+                <circle cx={cx} cy={cy} r="96" class="hub-ring hub-ring-2" />
+                <circle cx={cx} cy={cy} r="78" class="hub-ring" />
+                <circle cx={cx} cy={cy} r="60" fill="url(#hub-fill)" stroke="#d97757" stroke-opacity=".55" />
+                <image href={`${base}favicon.png`} x={cx - 34} y={cy - 34} width="68" height="68" />
+              </g>
+            </svg>
+            {/* HTML labels over the drawing: their boxes fit the text in any font. */}
+            {wires.map((w) => (
+              <span class="chip" aria-hidden="true" style={`left:${((w.x / W) * 100).toFixed(2)}%;top:${((w.y / H) * 100).toFixed(2)}%;--c:${w.color}`}>
+                <i></i>
+                {w.label}
+              </span>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <!-- Product tour -->
+      <section class="tour wrap" aria-label="A tour of the app">
+        <div class="tour-tabs" role="tablist" aria-label="Screens">
+          {TOUR.map((t, i) => (
+            <button role="tab" id={`tab-${t.id}`} aria-controls={`shot-${t.id}`} aria-selected={i === 0 ? "true" : "false"} data-tab={t.id}>{t.label}</button>
+          ))}
+        </div>
+        <div class="window">
+          <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div class="window-body">
+            {TOUR.map((t, i) => (
+              <figure id={`shot-${t.id}`} role="tabpanel" aria-labelledby={`tab-${t.id}`} class:list={["shot", { active: i === 0 }]} data-shot={t.id}>
+                <img src={`${base}shots/${t.image}`} alt={t.alt} width="1600" height="978" loading={i === 0 ? "eager" : "lazy"} decoding="async" />
+              </figure>
+            ))}
+          </div>
+        </div>
+        <p class="tour-caption" id="tour-caption" aria-live="polite">{TOUR[0].caption}</p>
+        <script type="application/json" id="tour-data" set:html={JSON.stringify(Object.fromEntries(TOUR.map((t) => [t.id, t.caption])))} />
+      </section>
+
+      <!-- Protocols -->
+      <section class="marquee" aria-label="Protocols and formats">
+        <div class="marquee-track">
+          {[0, 1].map((copy) => (
+            <ul aria-hidden={copy === 1 ? "true" : undefined}>
+              {["HTTP/1.1", "HTTP/2", "HTTP/3", "GraphQL", "gRPC", "WebSocket", "Server-Sent Events", "MQTT 3.1.1 & 5", "TCP", "UDP", "DNS over UDP, TCP, TLS, HTTPS", "OpenAPI 3", "Swagger 2", "Postman", "cURL", "OAuth 2.0", "mTLS", "JUnit"].map((p) => <li>{p}</li>)}
+            </ul>
+          ))}
+        </div>
+      </section>
+
+      <!-- Features -->
+      <section class="section wrap" id="features">
+        <div class="section-head">
+          <p class="eyebrow">Everything in one place</p>
+          <h2>One app instead of five.</h2>
+          <p class="sub">A client for every protocol, tests, mocks, load tests and network tools, working from the same files and the same engine.</p>
+        </div>
+        <div class="bento">
+          <article class="card c-wide glow">
+            <div class="card-copy">
+              <h3>Honest numbers</h3>
+              <p>Every request shows where its time went, which certificate answered, where redirects went and the headers that really left your machine.</p>
+            </div>
+            <div class="waterfall" aria-label="Timing of one request">
+              {[
+                ["DNS", 4, 0, "#8fb0e3"],
+                ["Connect", 9, 4, "#6fbac5"],
+                ["TLS", 14, 13, "#a4aaf2"],
+                ["First byte", 38, 27, "#d97757"],
+                ["Download", 12, 65, "#86bd7c"],
+              ].map(([name, width, left, color], i) => (
+                <div class="wf-row">
+                  <span class="wf-name">{name}</span>
+                  <span class="wf-track"><span class="wf-bar" style={`--w:${width}%;--l:${left}%;--c:${color};--i:${i}`}></span></span>
+                  <span class="wf-ms">{Math.round((width as number) * 1.9)} ms</span>
+                </div>
+              ))}
+            </div>
+          </article>
+
+          <article class="card glow">
+            <h3>Tests that read like English</h3>
+            <p>Postman-compatible scripts: imported collections run as they are.</p>
+            <pre class="code"><code><span class="k">pm</span>.test(<span class="s">"order is created"</span>, () =&gt; {"{"}
+  pm.response.to.have.status(<span class="n">201</span>);
+  <span class="k">const</span> order = pm.response.json();
+  pm.expect(order.id).to.be.a(<span class="s">"string"</span>);
+  pm.environment.set(<span class="s">"orderId"</span>, order.id);
+{"}"});</code></pre>
+          </article>
+
+          <article class="card glow">
+            <h3>Mock anything</h3>
+            <p>Routes with params and templates, delays, faults, CORS and forwarding.</p>
+            <ul class="routes">
+              <li><b class="m-get">GET</b> /users/:id <span>200</span></li>
+              <li><b class="m-post">POST</b> /orders <span>201</span></li>
+              <li><b class="m-del">DELETE</b> /orders/:id <span class="warn">503 · 1.5 s</span></li>
+              <li><b class="m-get">GET</b> * <span class="fwd">→ staging</span></li>
+            </ul>
+          </article>
+
+          <article class="card glow">
+            <h3>Load tests on your laptop</h3>
+            <p>Virtual users or arrival rate, thresholds like “p95 under 200 ms”.</p>
+            <svg class="chart" viewBox="0 0 300 120" aria-label="Latency percentiles over a load test">
+              <path class="grid-line" d="M0 30H300M0 60H300M0 90H300" />
+              <path class="line p95" d="M0 98 C40 96 70 92 100 86 S160 74 200 66 S260 58 300 55" />
+              <path class="line p50" d="M0 106 C50 105 90 103 130 100 S200 92 240 86 S280 80 300 78" />
+              <path class="thr" d="M0 44H300" />
+              <text x="296" y="39" text-anchor="end">p95 threshold</text>
+            </svg>
+          </article>
+
+          <article class="card c-half glow">
+            <h3>Your API work is plain files</h3>
+            <p>A workspace is a folder of readable YAML. Commit it, review it in pull requests, share it. Secret values stay on your computer.</p>
+            <pre class="code yaml"><code><span class="c"># requests/Orders/Create order.yaml</span>
+<span class="k">name</span>: Create order
+<span class="k">method</span>: POST
+<span class="k">url</span>: <span class="v">{"{{baseUrl}}"}</span>/orders
+<span class="k">auth</span>: {"{"} <span class="k">type</span>: inherit {"}"}
+<span class="diff-add">+<span class="k">headers</span>:</span>
+<span class="diff-add">+  - {"{"} <span class="k">key</span>: Idempotency-Key, <span class="k">value</span>: <span class="v">{"{{$uuid}}"}</span> {"}"}</span></code></pre>
+          </article>
+
+          <article class="card c-half glow">
+            <h3>Built for AI agents</h3>
+            <p>Claude Code, Codex, Gemini CLI, Cursor and others drive Zorvik over MCP while you watch. Risky actions wait for your OK.</p>
+            <div class="agent">
+              <div class="bubble you">Map the APIs in this repo and run them.</div>
+              <div class="tool"><span class="ok">✓</span> save_requests <em>12 requests in “Orders API”</em></div>
+              <div class="tool"><span class="ok">✓</span> run_collection <em>12 passed</em></div>
+              <div class="tool ask"><span class="q">?</span> start_load_test <em>waiting for your OK</em></div>
+            </div>
+          </article>
+
+          <article class="card c-third glow">
+            <h3>Inspect the network</h3>
+            <p>TLS inspector, DNS lookup, port check, ping, HTTP/3 check, and encoders for Base64, JWT, hashes and more.</p>
+          </article>
+          <article class="card c-third glow">
+            <h3>Contract checks</h3>
+            <p>Requests imported from an OpenAPI document are checked against it on every send. Update from a new version and keep your edits.</p>
+          </article>
+          <article class="card c-third glow">
+            <h3>Works where you work</h3>
+            <p>System or manual proxies, the OS certificate store, custom CAs and client certificates. Offline, with no account.</p>
+          </article>
+        </div>
+      </section>
+
+      <!-- Training Bootcamp -->
+      <section class="section bootcamp" id="bootcamp">
+        <div class="wrap bootcamp-inner">
+          <div class="bootcamp-copy">
+            <p class="eyebrow">New · Training Bootcamp</p>
+            <h2>Learn it inside the app.</h2>
+            <p class="sub">
+              New to APIs and networks? A course takes you from “what is a network?” to mocking and load testing. Short readings with diagrams, then a lab in the real workbench: practice servers start on your computer and the Lab Guide ticks each step off the moment you get it right.
+            </p>
+            <dl class="stats">
+              <div><dt>Units</dt><dd data-count={units}>{units}</dd></div>
+              <div><dt>Lessons</dt><dd data-count={lessons}>{lessons}</dd></div>
+              <div><dt>Badges</dt><dd data-count={badges}>{badges}</dd></div>
+            </dl>
+            <ul class="ticks">
+              <li>Hints from a nudge to the exact clicks, and “Do it for me”</li>
+              <li>XP, levels, streaks and a <em>Zorvik Bootcamp Graduate</em> certificate</li>
+              <li>Runs offline: every lab server lives on 127.0.0.1</li>
+            </ul>
+          </div>
+          <div class="bootcamp-art">
+            <div class="window small">
+              <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span></div>
+              <img src={`${base}shots/academy-dark.webp`} alt="The Academy: level and XP, streak, badges and the course map" width="1600" height="978" loading="lazy" decoding="async" />
+            </div>
+            {FEATURED_BADGES.map((b, i) => (
+              <img class={`badge b${i}`} src={`${base}art/badge-${b}.webp`} alt="" width="96" height="96" loading="lazy" decoding="async" />
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <!-- Command line -->
+      <section class="section wrap cli" id="cli">
+        <div class="section-head">
+          <p class="eyebrow">Same engine, in your pipeline</p>
+          <h2>The command line comes with the app.</h2>
+          <p class="sub">Run collections in CI with JUnit reports, gate releases on load-test thresholds, serve mocks next to your tests, and connect AI agents.</p>
+        </div>
+        <div class="cli-grid">
+          <div class="terminal" aria-label="A collection run in a terminal">
+            <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span><em>zsh</em></div>
+<pre class="term"><code set:html={TERMINAL.map((l) => `<span class="line">${l}</span>`).join("")} /></pre>
+          </div>
+          <ul class="cli-list">
+            <li><code>zorvik run</code><span>Collections and folders, data files, JUnit and JSON reports. Exit code 1 when a test fails.</span></li>
+            <li><code>zorvik load</code><span>A saved load test with its thresholds, and an HTML report for the build.</span></li>
+            <li><code>zorvik serve</code><span>Any saved mock or server, headless, with its traffic as JSON lines.</span></li>
+            <li><code>zorvik mcp</code><span>The MCP server your AI agent starts to work with Zorvik.</span></li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Principles -->
+      <section class="section wrap">
+        <div class="principles">
+          <div><h3>Local first</h3><p>No account, no cloud sync, no tracking in the app. It works offline and behind corporate proxies.</p></div>
+          <div><h3>Files, not a database</h3><p>Plain YAML in a folder you own. Git is your sync, history and review.</p></div>
+          <div><h3>Secrets stay home</h3><p>Secret values, cookies and tokens live on your computer, never in workspace files.</p></div>
+          <div><h3>Open source</h3><p>MIT or Apache-2.0, built in the open by the LibreGuild community.</p></div>
+        </div>
+      </section>
+
+      <!-- Download -->
+      <section class="section download" id="download">
+        <div class="wrap">
+          <div class="section-head">
+            <p class="eyebrow">Download</p>
+            <h2>Get Zorvik.</h2>
+            <p class="sub">
+              {version ? <>Version <b data-version>{version}</b>{released && <> · released {released}</>} · <a href={release.notesUrl}>what's new</a></> : <>The newest version from <a href={`${github}/releases/latest`}>GitHub Releases</a>.</>}
+              <br />Every download includes the app <em>and</em> the <code>zorvik</code> command line.
+            </p>
+          </div>
+          <div class="os-grid">
+            {(["windows", "macos", "linux"] as Os[]).map((os) => (
+              <article class="os-card" data-os={os}>
+                <div class="os-head">
+                  <span class="os-icon" aria-hidden="true">
+                    {os === "windows" && <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M3 4.5 10.5 3.4v8.1H3zM11.5 3.3 21 2v9.5h-9.5zM3 12.5h7.5v8.1L3 19.5zM11.5 12.5H21V22l-9.5-1.3z" /></svg>}
+                    {os === "macos" && <svg viewBox="0 0 24 24" width="22" height="22"><path fill="none" stroke="currentColor" stroke-width="1.8" d="M9 9h6v6H9zM9 9V6.5A2.5 2.5 0 1 0 6.5 9zM15 9V6.5A2.5 2.5 0 1 1 17.5 9zM9 15v2.5A2.5 2.5 0 1 1 6.5 15zM15 15v2.5a2.5 2.5 0 1 0 2.5-2.5z" /></svg>}
+                    {os === "linux" && <svg viewBox="0 0 24 24" width="22" height="22"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M3 5.5A1.5 1.5 0 0 1 4.5 4h15A1.5 1.5 0 0 1 21 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5zM7 9l3 3-3 3M12.5 15H17" /></svg>}
+                  </span>
+                  <h3>{OS_NAME[os]}</h3>
+                  <span class="yours">Your system</span>
+                </div>
+                <ul>
+                  {byOs(os).map((f) => (
+                    <li>
+                      <a class:list={["dl", { primary: f.primary }]} href={f.url} data-file={f.file} data-goatcounter-click={`download-${f.file}`} data-goatcounter-title={`Download ${f.file}`}>
+                        <span class="dl-main">
+                          <b>{f.label}</b>
+                          <small>{f.note}</small>
+                        </span>
+                        <span class="dl-size">{formatSize(f.size)}</span>
+                        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19h14"></path></svg>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </article>
+            ))}
+          </div>
+          <div class="dl-foot">
+            <p class="count" hidden={release.downloads == null} data-downloads-wrap>
+              <b data-downloads>{release.downloads?.toLocaleString("en")}</b> downloads so far
+            </p>
+            <p>
+              Builds aren't code-signed yet: on Windows choose <b>More info → Run anyway</b>; on macOS allow it in <b>System Settings → Privacy &amp; Security</b>.
+              Want the newest changes? Try the <a href={`${github}/releases/tag/nightly`}>nightly build</a>, or <a href={`${github}#build-from-source`}>build from source</a>.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Closing -->
+      <section class="closing">
+        <div class="wrap closing-inner">
+          <h2>Ready when your API is.</h2>
+          <div class="cta-row">
+            <a class="btn btn-primary btn-lg" href="#download">Download Zorvik</a>
+            <a class="btn btn-ghost btn-lg" href={docs}>Read the docs</a>
+            <a class="btn btn-ghost btn-lg" href={github}>Star on GitHub</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="wrap footer-inner">
+        <div class="brand"><img src={`${base}favicon.png`} alt="" width="22" height="22" /><span>Zorvik</span></div>
+        <nav aria-label="Footer">
+          <a href={docs}>Docs</a>
+          <a href={`${github}/releases`}>Releases</a>
+          <a href={`${github}/discussions`}>Discussions</a>
+          <a href={`${github}/issues/new/choose`}>Report an issue</a>
+          <a href={`${github}/blob/main/CONTRIBUTING.md`}>Contribute</a>
+          <a href={`${github}#license`}>License</a>
+        </nav>
+        <p class="fine">MIT or Apache-2.0 · A <a href="https://github.com/LibreGuild">LibreGuild</a> project · This site counts page views without cookies (GoatCounter).</p>
+      </div>
+    </footer>
+
+    <script is:inline define:vars={{ repo: REPO, bakedVersion: version }}>
+      // The visitor's system: the hero button and the matching download card.
+      (() => {
+        const ua = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.userAgent || "";
+        const os = /win/i.test(ua) ? "windows" : /mac|iphone|ipad/i.test(ua) ? "macos" : /linux|x11|cros/i.test(ua) && !/android/i.test(ua) ? "linux" : null;
+        if (!os) return;
+        const card = document.querySelector(`.os-card[data-os="${os}"]`);
+        if (!card) return;
+        card.classList.add("is-yours");
+        card.parentElement.prepend(card);
+        const primary = card.querySelector("a.dl.primary");
+        const button = document.getElementById("hero-download");
+        const names = { windows: "Windows", macos: "macOS", linux: "Linux" };
+        if (primary && button) {
+          button.href = primary.href;
+          button.setAttribute("data-goatcounter-click", `download-hero-${primary.dataset.file}`);
+          document.getElementById("hero-download-label").textContent = `Download for ${names[os]}`;
+          const more = document.createElement("a");
+          more.href = "#download";
+          more.textContent = "Other systems";
+          document.getElementById("hero-meta").prepend(more);
+        }
+      })();
+
+      // A release published after this page was built: show it (the links already point at it).
+      (async () => {
+        try {
+          const key = "zv-release";
+          let data = JSON.parse(sessionStorage.getItem(key) || "null");
+          if (!data || Date.now() - data.at > 10 * 60 * 1000) {
+            const res = await fetch(`https://api.github.com/repos/${repo}/releases?per_page=100`, { headers: { accept: "application/vnd.github+json" } });
+            if (!res.ok) return;
+            const list = (await res.json()).filter((r) => !r.draft && !r.prerelease && r.tag_name.startsWith("v"));
+            if (!list.length) return;
+            data = {
+              at: Date.now(),
+              version: list[0].tag_name.replace(/^v/, ""),
+              downloads: list.reduce((n, r) => n + r.assets.reduce((m, a) => m + a.download_count, 0), 0),
+            };
+            sessionStorage.setItem(key, JSON.stringify(data));
+          }
+          if (data.version !== bakedVersion) document.querySelectorAll("[data-version]").forEach((el) => (el.textContent = data.version));
+          const count = document.querySelector("[data-downloads]");
+          if (count) {
+            count.textContent = data.downloads.toLocaleString("en");
+            document.querySelector("[data-downloads-wrap]").hidden = false;
+          }
+        } catch {
+          /* offline or rate limited: the built page stays as it is */
+        }
+      })();
+
+      // Tour tabs.
+      (() => {
+        const captions = JSON.parse(document.getElementById("tour-data").textContent);
+        const tabs = [...document.querySelectorAll(".tour-tabs [role=tab]")];
+        const select = (tab) => {
+          for (const t of tabs) t.setAttribute("aria-selected", String(t === tab));
+          for (const s of document.querySelectorAll("[data-shot]")) s.classList.toggle("active", s.dataset.shot === tab.dataset.tab);
+          document.getElementById("tour-caption").textContent = captions[tab.dataset.tab];
+        };
+        tabs.forEach((tab, i) => {
+          tab.addEventListener("click", () => select(tab));
+          tab.addEventListener("keydown", (e) => {
+            const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+            if (!d) return;
+            const next = tabs[(i + d + tabs.length) % tabs.length];
+            next.focus();
+            select(next);
+          });
+        });
+      })();
+
+      // Motion: the wires pause off screen and for "reduce motion"; parts animate in when seen.
+      (() => {
+        const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+        const wire = document.querySelector("svg.wire");
+        if (wire && still) wire.pauseAnimations();
+        const io = new IntersectionObserver(
+          (entries) => {
+            for (const e of entries) {
+              if (e.target === wire) {
+                if (still) continue;
+                e.isIntersecting ? wire.unpauseAnimations() : wire.pauseAnimations();
+                continue;
+              }
+              if (!e.isIntersecting) continue;
+              e.target.classList.add("seen");
+              const n = Number(e.target.dataset.count);
+              if (n && !still) {
+                const t0 = performance.now();
+                const step = (t) => {
+                  const k = Math.min(1, (t - t0) / 900);
+                  e.target.textContent = String(Math.round(n * (1 - Math.pow(1 - k, 3))));
+                  if (k < 1) requestAnimationFrame(step);
+                };
+                requestAnimationFrame(step);
+              }
+              io.unobserve(e.target);
+            }
+          },
+          { threshold: 0.25 },
+        );
+        if (wire) io.observe(wire);
+        document.querySelectorAll(".waterfall, .chart, .term, [data-count], .reveal").forEach((el) => io.observe(el));
+        // Cards light up under the pointer.
+        document.querySelectorAll(".glow").forEach((card) =>
+          card.addEventListener("pointermove", (e) => {
+            const r = card.getBoundingClientRect();
+            card.style.setProperty("--x", `${e.clientX - r.left}px`);
+            card.style.setProperty("--y", `${e.clientY - r.top}px`);
+          }),
+        );
+      })();
+    </script>
+  </body>
+</html>

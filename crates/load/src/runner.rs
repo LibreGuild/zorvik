@@ -577,21 +577,21 @@ async fn arrivals(shared: Arc<Shared>) {
     let mut next = schedule.next();
     while let Some(at) = next {
         let due = shared.t0 + Duration::from_secs_f64(at);
-        if due > Instant::now() {
+        let ending = if due > Instant::now() {
             tokio::select! {
                 biased;
-                _ = shared.ending.cancelled() => return,
-                _ = tokio::time::sleep_until(tokio::time::Instant::from_std(due)) => {}
+                _ = shared.ending.cancelled() => true,
+                _ = tokio::time::sleep_until(tokio::time::Instant::from_std(due)) => false,
             }
         } else {
             // Behind schedule: let other tasks run between batches.
             tokio::task::yield_now().await;
-            if shared.ending.is_cancelled() {
-                return;
-            }
-        }
+            shared.ending.is_cancelled()
+        };
         // Everything due now starts now, each with its own scheduled time
-        // (latency counts from there: a late start is not hidden).
+        // (latency counts from there: a late start is not hidden). Also when the run is
+        // ending: a timer that woke late (Windows wakes in ~15 ms steps) must not drop a
+        // request that was due before the end.
         let now = Instant::now();
         while let Some(at) = next {
             let due = shared.t0 + Duration::from_secs_f64(at);
@@ -600,6 +600,9 @@ async fn arrivals(shared: Arc<Shared>) {
             }
             shared.start_one(due);
             next = schedule.next();
+        }
+        if ending {
+            return;
         }
     }
 }

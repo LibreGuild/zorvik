@@ -113,7 +113,7 @@ Precedence, highest first: CLI `--var`, `pm.variables` (this send or run), the r
 ## Networking
 - **A fresh connection per request**, so DNS, connect and TLS are always measured. Timing phases: DNS, TCP connect (with the proxy tunnel), TLS, time to first byte, download.
 - **DNS** uses the OS resolver (hosts file and VPN split DNS work); IPv6 and IPv4 race with Happy Eyeballs.
-- **TLS** trusts the OS certificate store (Windows store, macOS keychain), so corporate inspection CAs work. Extra CA, client certificates (mTLS) and "don't verify" are available per request or globally.
+- **TLS** trusts the OS certificate store (Windows store, macOS keychain), so corporate inspection CAs work. An extra CA and client certificates (mTLS) are set globally in Settings; "don't verify" is available globally or per request.
 - **Proxy**: system (environment variables, then the OS settings), none or manual, with Basic auth and a bypass list; localhost is always direct. PAC files, SOCKS and NTLM/Kerberos are not supported.
 - **Redirects** follow browser rules; `Authorization` and `Cookie` are dropped when the origin changes.
 - **Limits**: response bodies are capped (100 MB by default) and decompression is bounded; WebSocket and gRPC messages up to 64 MB; stream lines and framed socket messages up to 16 MB.
@@ -135,7 +135,7 @@ The API is a Postman-compatible subset (`crates/script/src/prelude.js`), so impo
 ## Load testing
 `crates/load` runs a plan on its own Tokio runtime so the app stays responsive.
 - **Models**: virtual users (closed: send, wait, think, repeat) or arrival rate (open: requests start on schedule however slow the server is). In the open model latency is measured from the scheduled start, so a slow server can't hide its queueing.
-- **Stages** ramp users or requests per second linearly; thresholds (`p50` … `p99.9`, `avg`, `max`, `errorRate`, `rps`) gate the run live and at the end.
+- **Stages** ramp users or requests per second linearly; thresholds (`p50` … `p99.9`, `avg`, `max`, `errorRate`, `rps`) show pass or fail live and decide the result at the end (a failing threshold does not stop the run).
 - **Client**: pooled HTTP/1.1 keep-alive and HTTP/2 multiplexing on the engine's connect path (DNS, proxy tunnel, OS-trusted TLS). Requests are resolved once; ones that use dynamic variables, data file columns or captured values are rendered per request (a render with every user variable set to a probe value tells which).
 - **Per-user data**: `dataFile` (CSV or JSON, the runner's parser and file rules): virtual user N takes row N % rows for its life; in the arrival-rate model each request takes the next row. Precedence: `--var`, captured values, the row, then the environment.
 - **Captures** (`json` path like `$.items[0].id`, `header`, or `regex` first group) save a value from a target's response for the same user's later requests; with captures each user sends the targets in their weighted order. A capture that finds nothing keeps the old value and counts as a miss. Arrival rate: every request is its own iteration, so captured values are only checked, not reused.

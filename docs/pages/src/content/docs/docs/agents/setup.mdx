@@ -1,0 +1,173 @@
+---
+title: Connect an AI agent
+description: Connect Claude Code, Codex, Gemini CLI, Cursor and other MCP clients to Zorvik with zorvik mcp, and set what they may do in Settings → AI agents.
+sidebar:
+  order: 1
+---
+
+import { Tabs, TabItem, Steps, Aside } from '@astrojs/starlight/components';
+
+Coding agents can drive Zorvik through the [Model Context Protocol](https://modelcontextprotocol.io) (MCP): map the endpoints of your code into a collection, send requests, run collections and load tests, build and start mock servers and read what they received. They use the same engine as the app, and you watch every action in the Zorvik window. Anything risky asks you first.
+
+Zorvik works with any agent that can start an MCP server over standard input and output (stdio): Claude Code, Codex, Gemini CLI, Cursor, Windsurf, Antigravity, VS Code, Zed and others.
+
+## What you need
+
+- The Zorvik app, installed (see [Install](../../getting-started/install/)).
+- The `zorvik` command line, which every install includes. The agent runs `zorvik mcp`.
+
+| System | Where `zorvik` is |
+|---|---|
+| Windows (installer) | Installed next to the app and put on your PATH. |
+| Windows (portable zip) | `zorvik.exe` in the unzipped folder. Use its full path. |
+| macOS | Inside the app: `/Applications/Zorvik.app/Contents/MacOS/zorvik`. Settings → AI agents → **Add zorvik to PATH…** links it to `/usr/local/bin/zorvik` (asks for your password). |
+| Linux (.deb, .rpm) | `/usr/bin/zorvik`, on your PATH. |
+| Linux (AppImage) | Not included. Install the .deb or .rpm to use agents. |
+
+On macOS, run Zorvik from the Applications folder, not from the disk image: from the disk image (or a quarantined copy) the app can't give a stable path to `zorvik`.
+
+## Connect
+
+<Steps>
+
+1. Open Zorvik, then **Settings** (<kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>,</kbd>) → **AI agents**. Under **Connect an agent** you find the commands below with the full path of `zorvik` on your computer, ready to copy.
+
+2. Run the command for your agent once (or add the JSON to its MCP settings):
+
+   <Tabs syncKey="agent">
+   <TabItem label="Claude Code">
+
+   ```bash
+   claude mcp add --scope user zorvik -- zorvik mcp
+   ```
+
+   `--scope user` makes Zorvik available in every project.
+
+   </TabItem>
+   <TabItem label="Codex">
+
+   ```bash
+   codex mcp add zorvik -- zorvik mcp
+   ```
+
+   </TabItem>
+   <TabItem label="Gemini CLI">
+
+   ```bash
+   gemini mcp add --scope user zorvik zorvik mcp
+   ```
+
+   </TabItem>
+   <TabItem label="Cursor, Windsurf, Antigravity…">
+
+   Add this to the agent's MCP settings file:
+
+   ```json
+   {
+     "mcpServers": {
+       "zorvik": { "command": "zorvik", "args": ["mcp"] }
+     }
+   }
+   ```
+
+   </TabItem>
+   <TabItem label="VS Code">
+
+   Put the same entry under `servers` in `.vscode/mcp.json`:
+
+   ```json title=".vscode/mcp.json"
+   {
+     "servers": {
+       "zorvik": { "command": "zorvik", "args": ["mcp"] }
+     }
+   }
+   ```
+
+   </TabItem>
+   </Tabs>
+
+   When `zorvik` is not on your PATH, replace `zorvik` with its full path (Settings → AI agents shows it). Quote a path with spaces in shell commands.
+
+3. Ask your agent for something, for example *"map the API routes in this repo to a Zorvik collection"* or *"run the Users folder in Zorvik and fix the failing tests"*.
+
+4. The first time an agent acts, Zorvik asks **Allow AI agents?** Choose **Allow AI agents** to turn on **Settings → AI agents → Allow AI agents**. If you decline, the agent is told so and is not asked again for a minute.
+
+</Steps>
+
+<Aside type="tip">
+Zorvik doesn't need to be running. Starting your agent doesn't start Zorvik either: the first tool call does. If the app is closed, `zorvik mcp` opens it and waits up to 30 seconds for it.
+</Aside>
+
+## How `zorvik mcp` works
+
+```text
+Agent ──MCP over stdio──► zorvik mcp ──127.0.0.1 + token──► Zorvik app ──► workspace, engine, UI
+```
+
+1. The agent starts `zorvik mcp` and talks JSON-RPC over its standard input and output, one message per line.
+2. `zorvik mcp` answers the handshake (`initialize`), the list of tools and the list of prompts itself, so connecting an agent costs nothing and doesn't open the app.
+3. On the first tool call it reads `agent.json` in the app's data folder (the port and a secret token the running app wrote, readable only by your user) and connects to the app on `127.0.0.1`. Both sides prove they know the token with a SHA-256 over a fresh random value; the token itself is never sent.
+4. If the app isn't running, `zorvik mcp` starts it and waits up to 30 seconds. With **Work without the app** on, it runs the tools itself instead (see [Headless mode](../permissions-and-safety/#headless-mode)).
+5. Every tool call runs in the app, through the same code as the UI, is checked against your settings and appears in the **AI agents** panel.
+
+If the app is closed while an agent works, calls in progress fail with "Zorvik closed before the call finished." and the next call reconnects (or starts the app again).
+
+| MCP detail | Value |
+|---|---|
+| Transport | stdio, newline-delimited JSON-RPC 2.0 |
+| Protocol versions | `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05` (a client asking for another gets the newest) |
+| Server name | `zorvik` (title "Zorvik") |
+| Capabilities | Tools and prompts. No resources (the resource lists are empty). |
+| Progress | Long calls (runs, load tests, waiting for your answer) send progress notifications, at most once a second. |
+| Cancellation | `notifications/cancelled` cancels a call in progress. |
+| Concurrency | Up to 8 tool calls of one agent run at once; more wait their turn. |
+| Message size | Up to 64 MB per message (an import can carry a large OpenAPI document). |
+
+When it connects, the agent is told what Zorvik is, to start with `get_workspace`, that you watch and approve risky actions in the window, not to retry a declined action another way, and to keep hosts and credentials in `{{variables}}`.
+
+### Prompts
+
+Zorvik offers two ready-made prompts. In Claude Code they are the commands `/mcp__zorvik__map_apis` and `/mcp__zorvik__test_apis`; other agents list them in their own way.
+
+| Prompt | Arguments | What it asks the agent to do |
+|---|---|---|
+| `map_apis` ("Map this code's APIs to Zorvik") | `scope` (part of the code to map), `folder` (collection folder to use) | Find the HTTP, GraphQL and gRPC endpoints in the codebase and save them as requests: `{{baseUrl}}` and a "Local" environment, variables for ids and tokens, secrets marked secret, shared auth on folders, docs pointing at the handler; import an OpenAPI or Postman file instead when there is a current one. |
+| `test_apis` ("Test APIs with Zorvik") | `folder` (default: the whole collection) | Add Postman-style tests to the requests, run them with `run_collection`, find out whether the API or the test is wrong, and report. |
+
+## Settings → AI agents
+
+| Setting | Default | What it does |
+|---|---|---|
+| **Allow AI agents** | Off | When off, the first thing an agent does asks you to turn it on. |
+| **Edits by agents** | Allow | Creating and changing requests, folders, environments, load tests, servers and files. *Ask me* asks before each change, with **Allow for this session**. Deleting always asks. |
+| **Requests sent by agents** | Ask for outside hosts | Requests, collection runs, schema downloads and imports from a URL. *Ask for outside hosts* asks about hosts outside this computer and private networks; *Ask every time* asks about every host; *Allow* never asks. Load tests and servers always ask. |
+| **Follow agents** | On | Open what an agent works on: its requests and their responses, runs, load tests and servers. |
+| **Work without the app** | Off | When Zorvik is closed, agents use it in the background instead of opening it. Nothing can be approved then, so actions that would ask are refused. |
+| **Command-line tool** | | Where `zorvik` is, whether it is on your PATH, and on macOS **Add zorvik to PATH…**. |
+| **Connect an agent** | | The setup commands above, with this computer's path to `zorvik`. |
+
+Details and exact rules: [Permissions and safety](../permissions-and-safety/). All settings: [Settings reference](../../reference/settings/#ai-agents).
+
+## See what agents do
+
+- **Title bar**: while an agent is connected, a pill shows its name ("● Claude Code", or "2 agents"). Click it to open the AI agents panel; its square button disconnects the agent (or every agent). The **AI agents** icon in the left rail also shows a green dot.
+- **AI agents panel** (left rail): the connected agents, each with **Disconnect**, and the activity log: every tool call with what it was about (for example `Send request: GET {{baseUrl}}/users`), its status (Running, Done, Failed or Not allowed), the outcome in a few words and how long it took. Click an entry to open what it worked on. The panel keeps the last 200 calls.
+- **Follow agents**: with it on, the app opens the requests, responses, runner tabs, load tests and servers an agent works on. If you were typing a moment ago, new tabs open behind the one you are in.
+- **Questions**: when an action needs your approval, a dialog shows exactly what (see [The approval dialog](../permissions-and-safety/#the-approval-dialog)).
+
+Agents appear under the name they give when they connect, for example "Claude Code", "Codex", "Gemini CLI" or "Cursor". An agent can't call itself "Zorvik": that name shows as "An AI agent".
+
+## Disconnect an agent
+
+**Disconnect** in the AI agents panel ends that agent's session. Calls in progress are cancelled and questions waiting for your answer close. The agent is told "The user disconnected this agent in Zorvik." and every later call is refused until the agent restarts its MCP server (in most agents, restart the agent or reconnect the server). Approvals given for the session ("Allow for this session") end with it.
+
+## Several agents
+
+Each connection is its own session with its own approvals. Several agents can be connected at once; each one asks one question at a time, and questions from different agents queue in the approval dialog ("2 more waiting").
+
+## Next
+
+- [Tools](../tools/): every tool and its inputs.
+- [Permissions and safety](../permissions-and-safety/): what is allowed, what asks, host approvals, redaction and headless mode.
+- [`zorvik mcp`](../../cli/mcp/): the command itself.
+- [Troubleshooting](../../help/troubleshooting/#ai-agents): when an agent can't connect.

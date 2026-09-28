@@ -1,0 +1,32 @@
+name: Nightly
+
+# Once a day: when `main` has new commits since the last nightly, start CI on `main` by hand,
+# which runs the checks and then builds and replaces the "nightly" pre-release (see ci.yml).
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  nightly:
+    name: Build a nightly if main changed
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Compare main with the last nightly
+        run: |
+          set -euo pipefail
+          main=$(gh api "repos/$GH_REPO/commits/main" --jq .sha)
+          nightly=$(gh api "repos/$GH_REPO/git/ref/tags/nightly" --jq .object.sha 2>/dev/null || echo none)
+          if [ "$main" = "$nightly" ]; then
+            echo "The nightly already has main (${main::7}): nothing to build."
+            exit 0
+          fi
+          echo "main is at ${main::7}, the nightly at ${nightly::7}: building a new nightly."
+          gh workflow run ci.yml --ref main
