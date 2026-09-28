@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-29
+
 ### Added
 - **Automatic updates** from GitHub Releases. Zorvik checks a little after it starts and every six hours, downloads a new version in the background, and installs it when you quit, or when you choose **Restart now** (it first tells you what a restart would stop). Settings → Updates: automatic, notify only, or off; stable or nightly channel. The check only reads this project's release list on GitHub and sends nothing about you. The Windows installer, the macOS app and the AppImage update themselves; the portable zip, `.deb` and `.rpm` tell you when a new version is out. If an update can't install itself, Zorvik links to its release page instead of showing an error.
 - **More auth types**, each with its own form and imported from Postman: OAuth 1.0 (HMAC-SHA1/256/512, RSA-SHA1/256/512, PLAINTEXT), JWT that Zorvik signs from your claims (HS, RS, PS and ES algorithms), AWS Signature v4 (headers or a presigned URL), Hawk, Akamai EdgeGrid and Atlassian ASAP, all signed fresh for every send; Digest (MD5 and SHA-256, qop auth and auth-int) and NTLMv2, which answer the server's challenge; and the OAuth 2.0 implicit grant. Load tests sign every request separately.
@@ -101,6 +103,7 @@ The first public release.
 - In-app docs, light and dark themes, zoom and font settings.
 - Installers for Windows, macOS (universal) and Linux (deb, rpm, AppImage).
 
-[Unreleased]: https://github.com/LibreGuild/zorvik/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/LibreGuild/zorvik/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/LibreGuild/zorvik/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/LibreGuild/zorvik/compare/v0.1.0...v0.1.2
 [0.1.0]: https://github.com/LibreGuild/zorvik/releases/tag/v0.1.0

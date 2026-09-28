@@ -67,7 +67,7 @@ Expand-Archive zorvik.zip -DestinationPath "$env:LOCALAPPDATA\zorvik"
 & "$env:LOCALAPPDATA\zorvik\zorvik.exe" --version
 ```
 
-To pin a version instead, use `releases/download/v0.1.2/…`. The standalone command line doesn't update itself.
+To pin a version instead, use `releases/download/v0.2.0/…`. The standalone command line doesn't update itself.
 
 ### Windows
 
