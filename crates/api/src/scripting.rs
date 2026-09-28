@@ -9,13 +9,15 @@
 //! current values in the app data dir (`vars.local`), never in workspace files.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
-use zorvik_engine::{Client, CookieJar, HttpRequest, HttpResponse};
+use zorvik_engine::{Client, CookieInfo, CookieJar, Header, HttpRequest, HttpResponse, RequestOptions};
 use zorvik_script::{
-    ConsoleEntry, ConsoleLevel, Event, Info, Limits, NextRequest, Scope, ScriptHeader, ScriptInput, ScriptRequest,
-    ScriptResponse, TestResult, VariableChange, Variables,
+    ConsoleEntry, ConsoleLevel, Event, Host, HostRequest, HostResponse, Info, Limits, NextRequest, Scope, ScriptCookie,
+    ScriptHeader, ScriptInput, ScriptRequest, ScriptResponse, TestResult, VariableChange, Variables,
 };
 use zorvik_workspace::Workspace;
 use zorvik_workspace::formats::{BodyType, FolderMeta, KeyValue, Request, Scripts, Variable, WorkspaceMeta};
@@ -42,6 +44,10 @@ pub struct ScriptReport {
     pub console: Vec<ConsoleEntry>,
     /// Scripts that stopped with an error (a pre-request one also stops the send).
     pub errors: Vec<ScriptFailure>,
+    /// What `pm.visualizer.set` rendered (HTML), shown in the response's Visualize tab.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub visualization: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -142,10 +148,11 @@ pub struct SendContext<'a> {
     pub ws: &'a Workspace,
     /// Workspace meta with secret values revealed (auth and headers are inherited from it).
     pub meta: &'a WorkspaceMeta,
-    pub client: &'a Client,
+    /// Shared with scripts (`pm.sendRequest`), which run on another thread.
+    pub client: &'a Arc<Client>,
     pub settings: &'a Settings,
     pub tokens: &'a TokenCache,
-    pub jar: Option<&'a CookieJar>,
+    pub jar: Option<&'a Arc<CookieJar>>,
     /// Hosts requests may go to (AI agents); `None` = any.
     pub guard: Option<zorvik_engine::HostGuard>,
     /// Imported requests' responses are checked against their OpenAPI document (when kept).
@@ -207,15 +214,24 @@ pub(crate) async fn send_scripted_with(
     };
     let mut report: Option<ScriptReport> = None;
     let mut next_request = None;
+    // The URL with its variables filled in: its site is the one scripts' cookies belong to.
+    let url = vars.var_context().render(request.url.trim(), &mut std::collections::BTreeSet::new());
+    let host = match script_host(cx, &url) {
+        Ok(host) => host,
+        Err(e) => return ScriptedSend { report, result: Err(e), next_request },
+    };
 
     let pre = chain(cx.meta, &folders, &request, |s| &s.pre_request);
     if !pre.is_empty() {
         let before = request_snapshot(&request);
-        let input = script_input(Event::PreRequest, &info, vars, before.clone(), None);
-        let outcome = match run_chain(Event::PreRequest, pre, input, vars.environment.is_some(), limits).await {
-            Ok(outcome) => outcome,
-            Err(e) => return ScriptedSend { report, result: Err(e), next_request },
-        };
+        let mut input = script_input(Event::PreRequest, &info, vars, before.clone(), None);
+        input.cookies = jar_cookies(cx.jar, &url);
+        let chain_host = host.clone();
+        let outcome =
+            match run_chain(Event::PreRequest, pre, input, vars.environment.is_some(), limits, chain_host).await {
+                Ok(outcome) => outcome,
+                Err(e) => return ScriptedSend { report, result: Err(e), next_request },
+            };
         vars.values = outcome.values;
         vars.changes.extend(outcome.changes);
         apply_request(&mut request, &before, outcome.request);
@@ -224,6 +240,10 @@ pub(crate) async fn send_scripted_with(
         report = Some(outcome.report);
         if let Some(message) = failure {
             return ScriptedSend { report, result: Err(ApiError::new("script", message)), next_request };
+        }
+        if outcome.skip {
+            let message = "Skipped by a pre-request script (pm.execution.skipRequest)";
+            return ScriptedSend { report, result: Err(ApiError::new(SKIPPED, message)), next_request };
         }
     }
 
@@ -241,13 +261,16 @@ pub(crate) async fn send_scripted_with(
                 .map(|e| zorvik_script::ScriptEvent { event: e.event.clone(), data: e.data.clone(), id: e.id.clone() })
                 .collect()
         });
-        let input = script_input(Event::PostResponse, &info, vars, sent_snapshot(&resolved.request), Some(res));
+        res.cookies = response.meta.cookies.iter().map(script_cookie).collect();
+        let mut input = script_input(Event::PostResponse, &info, vars, sent_snapshot(&resolved.request), Some(res));
+        input.cookies = jar_cookies(cx.jar, &resolved.request.url);
         let merged = report.get_or_insert_with(Default::default);
-        match run_chain(Event::PostResponse, post, input, vars.environment.is_some(), limits).await {
+        match run_chain(Event::PostResponse, post, input, vars.environment.is_some(), limits, host).await {
             Ok(outcome) => {
                 vars.values = outcome.values;
                 vars.changes.extend(outcome.changes);
                 next_request = outcome.next_request.or(next_request);
+                merged.visualization = outcome.report.visualization.clone().or(merged.visualization.take());
                 merge(merged, outcome.report);
             }
             Err(e) => merged.errors.push(ScriptFailure {
@@ -289,6 +312,7 @@ async fn send(
     check_url_variables(&resolved)?;
     let mut opts = cx.settings.request_options(&request.settings)?;
     opts.host_guard = cx.guard.clone();
+    opts.challenge_auth = resolved.challenge.as_ref().map(|c| c.engine_auth());
     if let Some(config) = resolved.oauth2.clone() {
         let token = oauth2::ensure_token(cx.client, &opts, &config, cx.tokens, &cx.ws.local_key()).await?;
         apply_token(&mut resolved, &token.access_token);
@@ -307,7 +331,7 @@ async fn send(
         let deadline = tokio::time::Instant::now()
             + std::time::Duration::from_millis(until.timeout_ms.max(1)).min(crate::sse_read::MAX_WAIT);
         let stream = tokio::select! {
-            r = cx.client.open_stream(outgoing, &opts, cx.jar) => r?,
+            r = cx.client.open_stream(outgoing, &opts, cx.jar.map(|j| j.as_ref())) => r?,
             _ = tokio::time::sleep_until(deadline) => {
                 return Err(ApiError::new("timeout", format!("No answer within {} ms", until.timeout_ms)));
             }
@@ -330,8 +354,142 @@ async fn send(
         };
         return Ok((resolved, response, Some((read.events, read.end))));
     }
-    let response = cx.client.send(resolved.request.clone(), &opts, cx.jar).await?;
+    let response = cx.client.send(resolved.request.clone(), &opts, cx.jar.map(|j| j.as_ref())).await?;
     Ok((resolved, response, None))
+}
+
+/// Error code of a send a pre-request script skipped (a run reports the request as skipped).
+pub const SKIPPED: &str = "skipped";
+
+/// What scripts reach through `pm.sendRequest`, `pm.cookies.jar()` and dynamic variables.
+struct AppHost {
+    client: Arc<Client>,
+    jar: Option<Arc<CookieJar>>,
+    /// The app's request settings (proxy, TLS, the AI agent's host guard).
+    options: RequestOptions,
+    runtime: tokio::runtime::Handle,
+    /// The request's host: scripts only touch this site's cookies.
+    site: String,
+}
+
+fn host_of(url: &str) -> Option<String> {
+    url::Url::parse(url.trim()).ok().and_then(|u| u.host_str().map(|h| h.trim_end_matches('.').to_ascii_lowercase()))
+}
+
+/// The same site: the same host, or one a subdomain of the other.
+fn same_site(a: &str, b: &str) -> bool {
+    a == b || a.ends_with(&format!(".{b}")) || b.ends_with(&format!(".{a}"))
+}
+
+impl AppHost {
+    fn jar_for(&self, url: &str) -> Result<(&CookieJar, url::Url), String> {
+        let jar = self.jar.as_deref().ok_or("The cookie jar is off (Settings → Requests)")?;
+        let parsed = url::Url::parse(url.trim()).map_err(|e| format!("'{url}' isn't a URL: {e}"))?;
+        let host = parsed.host_str().unwrap_or_default().trim_end_matches('.').to_ascii_lowercase();
+        if self.site.is_empty() || !same_site(&host, &self.site) {
+            return Err(format!("Scripts can only use the cookies of the request's own site ({})", self.site));
+        }
+        Ok((jar, parsed))
+    }
+}
+
+fn script_cookie(c: &CookieInfo) -> ScriptCookie {
+    ScriptCookie {
+        name: c.name.clone(),
+        value: c.value.clone(),
+        domain: c.domain.clone(),
+        path: c.path.clone(),
+        expires: c.expires.clone(),
+        secure: c.secure,
+        http_only: c.http_only,
+    }
+}
+
+/// The jar's cookies that a request to `url` would send.
+fn cookies_for(jar: &CookieJar, url: &url::Url) -> Vec<ScriptCookie> {
+    let host = url.host_str().unwrap_or_default().trim_end_matches('.').to_ascii_lowercase();
+    let path = url.path();
+    jar.list()
+        .iter()
+        .filter(|c| {
+            let domain = c.domain.trim_start_matches('.').to_ascii_lowercase();
+            let cookie_path = if c.path.is_empty() { "/" } else { c.path.as_str() };
+            (host == domain || host.ends_with(&format!(".{domain}"))) && path.starts_with(cookie_path)
+        })
+        .map(script_cookie)
+        .collect()
+}
+
+/// `pm.cookies`: the cookies a request to `url` sends (none without a jar or a valid URL).
+fn jar_cookies(jar: Option<&Arc<CookieJar>>, url: &str) -> Vec<ScriptCookie> {
+    match (jar, url::Url::parse(url.trim())) {
+        (Some(jar), Ok(url)) => cookies_for(jar, &url),
+        _ => Vec::new(),
+    }
+}
+
+impl Host for AppHost {
+    fn send(&self, request: HostRequest, timeout: Duration) -> Result<HostResponse, String> {
+        let mut options = self.options.clone();
+        options.timeout = Some(options.timeout.map_or(timeout, |t| t.min(timeout)));
+        let outgoing = HttpRequest {
+            method: if request.method.trim().is_empty() { "GET".into() } else { request.method.trim().to_uppercase() },
+            url: request.url.trim().to_string(),
+            headers: request.headers.iter().map(|h| Header::new(&h.key, &h.value)).collect(),
+            body: request.body.into_bytes().into(),
+        };
+        let response =
+            self.runtime.block_on(self.client.send(outgoing, &options, self.jar.as_deref())).map_err(|e| e.message)?;
+        Ok(HostResponse {
+            code: response.meta.status,
+            status: response.meta.status_text.clone(),
+            headers: response.meta.headers.iter().map(|h| ScriptHeader::new(&h.name, &h.value)).collect(),
+            body: String::from_utf8_lossy(&response.body).into_owned(),
+            response_time: response.timing.total_ms,
+            response_size: response.body.len() as u64,
+            cookies: response.meta.cookies.iter().map(script_cookie).collect(),
+        })
+    }
+
+    fn cookies(&self, url: &str) -> Result<Vec<ScriptCookie>, String> {
+        let (jar, url) = self.jar_for(url)?;
+        Ok(cookies_for(jar, &url))
+    }
+
+    fn set_cookie(&self, url: &str, name: &str, value: &str) -> Result<(), String> {
+        let (jar, url) = self.jar_for(url)?;
+        if name.trim().is_empty() || name.contains(['=', ';']) {
+            return Err(format!("'{name}' isn't a cookie name"));
+        }
+        jar.store(&url, &[format!("{}={}; Path=/", name.trim(), value.replace(';', "%3B"))]);
+        Ok(())
+    }
+
+    fn remove_cookies(&self, url: &str, name: Option<&str>) -> Result<(), String> {
+        let (jar, url) = self.jar_for(url)?;
+        for c in cookies_for(jar, &url).iter().filter(|c| name.is_none_or(|n| n == c.name)) {
+            jar.remove(&c.domain, &c.path, &c.name);
+        }
+        Ok(())
+    }
+
+    fn dynamic(&self, expression: &str) -> Option<String> {
+        zorvik_workspace::dynamic::generate(expression)
+    }
+}
+
+/// The app's side of the scripts of one send.
+fn script_host(cx: &SendContext<'_>, url: &str) -> ApiResult<Option<Arc<dyn Host>>> {
+    let mut options = cx.settings.request_options(&Default::default())?;
+    options.host_guard = cx.guard.clone();
+    let host = AppHost {
+        client: cx.client.clone(),
+        jar: cx.jar.cloned(),
+        options,
+        runtime: tokio::runtime::Handle::current(),
+        site: host_of(url).unwrap_or_default(),
+    };
+    Ok(Some(Arc::new(host)))
 }
 
 /// The non-empty scripts for `request`, outermost first, with names for messages.
@@ -365,6 +523,7 @@ fn script_input(
         request,
         response,
         variables: vars.values.clone(),
+        cookies: Vec::new(),
     }
 }
 
@@ -376,6 +535,8 @@ struct ChainOutcome {
     report: ScriptReport,
     /// The last `setNextRequest` of the chain.
     next_request: Option<NextRequest>,
+    /// A pre-request script called `pm.execution.skipRequest()`.
+    skip: bool,
 }
 
 /// Run scripts one after the other on a blocking thread; each sees what the
@@ -386,6 +547,7 @@ async fn run_chain(
     input: ScriptInput,
     has_environment: bool,
     limits: Limits,
+    host: Option<Arc<dyn Host>>,
 ) -> ApiResult<ChainOutcome> {
     tokio::task::spawn_blocking(move || {
         let mut input = input;
@@ -393,9 +555,14 @@ async fn run_chain(
         let mut changes = Vec::new();
         let mut warned = false;
         let mut next_request = None;
+        let mut skip = false;
         let kind = if event == Event::PreRequest { "Pre-request" } else { "Post-response" };
         for (label, code) in scripts {
-            let out = zorvik_script::run(&code, &input, &limits);
+            let out = zorvik_script::run_with(&code, &input, &limits, host.clone());
+            skip |= out.skip_request;
+            if out.visualization.is_some() {
+                report.visualization = out.visualization;
+            }
             if let Some(request) = out.request {
                 input.request = request;
             }
@@ -428,7 +595,7 @@ async fn run_chain(
                 }
             }
         }
-        ChainOutcome { request: input.request, values: input.variables, changes, report, next_request }
+        ChainOutcome { request: input.request, values: input.variables, changes, report, next_request, skip }
     })
     .await
     .map_err(join_err)
@@ -496,6 +663,7 @@ fn response_snapshot(res: &HttpResponse, max_body: usize) -> ScriptResponse {
         response_time: res.timing.total_ms,
         response_size: res.body.len() as u64,
         events: None,
+        cookies: Vec::new(),
     }
 }
 

@@ -367,6 +367,17 @@ impl Api {
             let inherit = Inheritance { workspace: &meta, folders: &folders, base_dir: ws.root(), outside_files };
             let mut resolved = resolve(&request, &inherit, &user_context(&UserVars::probe(&names), &base))?;
             check_url_variables(&resolved)?;
+            if resolved.challenge.is_some() {
+                return Err(ApiError::invalid(format!(
+                    "{}: {}",
+                    request.name,
+                    zorvik_workspace::signing::LOAD_TEST_CHALLENGE
+                )));
+            }
+            let signed = zorvik_workspace::signing::signs_each_send(zorvik_workspace::resolve::effective_auth(
+                &request.auth,
+                &inherit,
+            ));
             let token = match resolved.oauth2.clone() {
                 Some(config) => {
                     let token = zorvik_workspace::oauth2::ensure_token(
@@ -383,7 +394,7 @@ impl Api {
                 }
                 None => None,
             };
-            let dynamic = serde_json::to_string(&request).is_ok_and(|json| json.contains("{{$"));
+            let dynamic = signed || serde_json::to_string(&request).is_ok_and(|json| json.contains("{{$"));
             let name = request.name.clone();
             let (meta, base, base_dir) = (meta.clone(), base.clone(), ws.root().to_path_buf());
             // Without user variables (no data file, nothing captured) the context is built once.

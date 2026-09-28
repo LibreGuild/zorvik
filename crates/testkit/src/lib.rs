@@ -1,14 +1,15 @@
 //! Local servers for automated tests and manual QA.
 //!
 //! * [`TestServer`]: HTTP/1.1 + HTTP/2 (h2c or TLS+ALPN) with echo, redirect,
-//!   compression, cookies, auth, SSE, WebSocket, OAuth2 and GraphQL (`graphql.rs`) endpoints.
+//!   compression, cookies, auth (Digest and NTLM in `auth.rs`), SSE, WebSocket, OAuth2 and
+//!   GraphQL (`graphql.rs`) endpoints.
 //! * [`TestProxy`]: minimal forward proxy (CONNECT + absolute-form) with optional Basic auth.
 //! * [`H3TestServer`]: HTTP/3 over QUIC (see `h3.rs`).
 //! * [`GrpcTestServer`]: gRPC echo service with server reflection (see `grpc.rs`).
 //!
 //! Endpoints are listed in `docs/testing.md`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::io::Write as _;
 use std::net::SocketAddr;
@@ -26,6 +27,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use base64::Engine as _;
 use futures_util::StreamExt;
+use hyper::service::Service as _;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto;
 use hyper_util::service::TowerToHyperService;
@@ -33,9 +35,11 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+mod auth;
 pub mod graphql;
 pub mod grpc;
 pub mod h3;
+pub use auth::ConnectionId;
 pub use grpc::GrpcTestServer;
 pub use h3::H3TestServer;
 
@@ -107,6 +111,10 @@ struct AppState {
     codes: Mutex<HashMap<String, (Option<String>, String)>>,
     tokens: Mutex<Vec<String>>,
     counter: AtomicU64,
+    /// Digest nonces this server issued.
+    digest_nonces: Mutex<HashSet<String>>,
+    /// NTLM server challenge per connection ([`ConnectionId`]).
+    ntlm_challenges: Mutex<HashMap<u64, [u8; 8]>>,
 }
 
 impl AppState {
@@ -149,12 +157,20 @@ impl TestServer {
         let acceptor = certs.map(|c| tokio_rustls::TlsAcceptor::from(Arc::new(c.server_config())));
         let tls = acceptor.is_some();
         let task = tokio::spawn(async move {
+            let mut connections = 0u64;
             loop {
                 let Ok((tcp, _)) = listener.accept().await else { continue };
                 let app = app.clone();
                 let acceptor = acceptor.clone();
+                connections += 1;
+                let connection = ConnectionId(connections);
                 tokio::spawn(async move {
-                    let service = TowerToHyperService::new(app);
+                    // Every request carries its connection's id (NTLM authenticates connections).
+                    let tower = TowerToHyperService::new(app);
+                    let service = hyper::service::service_fn(move |mut req: http::Request<hyper::body::Incoming>| {
+                        req.extensions_mut().insert(connection);
+                        tower.call(req)
+                    });
                     let builder = auto::Builder::new(TokioExecutor::new());
                     match acceptor {
                         Some(acceptor) => {
@@ -202,6 +218,9 @@ pub fn router() -> Router {
         .route("/cookies/set", get(cookies_set))
         .route("/basic-auth/{user}/{pass}", get(basic_auth))
         .route("/bearer", get(bearer))
+        .route("/digest-auth/{qop}/{user}/{passwd}", any(auth::digest))
+        .route("/digest-auth/{qop}/{user}/{passwd}/{algorithm}", any(auth::digest))
+        .route("/ntlm/{domain}/{user}/{passwd}", any(auth::ntlm))
         .route("/json", get(|| async { axum::Json(sample_json()) }))
         .route("/big-json", get(big_json))
         .route("/html", get(|| async { ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], SAMPLE_HTML) }))
@@ -222,7 +241,9 @@ async fn index() -> impl IntoResponse {
         "name": "Zorvik test server",
         "endpoints": ["/echo", "/anything/*", "/status/{code}", "/redirect/{n}", "/redirect-to?url=&status=",
             "/gzip", "/deflate", "/brotli", "/delay/{ms}", "/bytes/{n}", "/stream-bytes/{n}", "/cookies",
-            "/cookies/set?k=v", "/basic-auth/{user}/{pass}", "/bearer", "/json", "/big-json?n=", "/html", "/xml",
+            "/cookies/set?k=v", "/basic-auth/{user}/{pass}", "/bearer",
+            "/digest-auth/{qop}/{user}/{passwd}[/{algorithm}]", "/ntlm/{domain}/{user}/{passwd}",
+            "/json", "/big-json?n=", "/html", "/xml",
             "/image.png", "/sse?count=&interval=", "/ws", "/oauth/authorize", "/oauth/token", "/oauth/protected",
             "/graphql?legacy=", "/graphql-auth"]
     }))

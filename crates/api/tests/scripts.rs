@@ -218,10 +218,10 @@ async fn pre_request_errors_stop_the_send() {
     assert_eq!(h.ok("history.list", json!({})).await, json!([]));
 
     // Unsupported APIs fail clearly; tool (standalone) sends run no scripts.
-    h.workspace_scripts("pm.sendRequest('https://example.com', () => {});", "").await;
+    h.workspace_scripts("pm.vault.get('token');", "").await;
     let err =
         h.err("http.send", json!({ "requestId": "s5", "request": request("r", &server.url("/echo"), "", "") })).await;
-    assert!(err.message.ends_with("Error: pm.sendRequest is not supported in Zorvik"), "{}", err.message);
+    assert!(err.message.ends_with("Error: pm.vault is not supported in Zorvik"), "{}", err.message);
     let result = h
         .ok(
             "http.send",
@@ -278,4 +278,43 @@ async fn secrets_changed_by_scripts_stay_out_of_history() {
     let history = h.ok("history.list", json!({})).await;
     let url = history[0]["url"].as_str().unwrap();
     assert!(url.ends_with("/echo?k={{key}}&t={{token}}"), "{url}");
+}
+
+#[tokio::test]
+async fn scripts_send_requests_use_cookies_skip_and_visualize() {
+    let server = TestServer::start().await;
+    let h = Harness::new().await;
+    // The request's URL uses a variable: its site (for the cookie jar) is the resolved one.
+    h.env(json!([{ "key": "base", "value": server.url("") }])).await;
+    // A pre-request script gets a token with pm.sendRequest, then the request uses it.
+    let login = server.url("/anything/login");
+    let pre = format!(
+        "const res = await pm.sendRequest({{ url: '{login}', method: 'POST', body: {{ mode: 'raw', raw: JSON.stringify({{ user: 'ada' }}) }} }});\n\
+         pm.request.headers.add({{ key: 'X-Token', value: 'from-' + res.json().method }});\n\
+         pm.cookies.jar().set('{}', 'theme', 'dark', () => {{}});",
+        server.url("/")
+    );
+    let post = "pm.test('cookie sent', () => pm.expect(pm.cookies.get('theme')).to.eql('dark'));\n\
+                pm.visualizer.set('<h1>{{method}}</h1>', pm.response.json());";
+    let result =
+        h.ok("http.send", json!({ "requestId": "v1", "request": request("r", "{{base}}/echo", &pre, post) })).await;
+    let body: Value = serde_json::from_str(result["body"]["text"].as_str().unwrap()).unwrap();
+    let sent: Vec<(String, String)> = serde_json::from_value(body["headers"].clone()).unwrap();
+    assert!(sent.contains(&("x-token".into(), "from-POST".into())), "{sent:?}");
+    assert!(sent.iter().any(|(k, v)| k == "cookie" && v.contains("theme=dark")), "{sent:?}");
+    assert_eq!(result["scripts"]["tests"][0]["passed"], true, "{}", result["scripts"]);
+    assert_eq!(result["scripts"]["visualization"], "<h1>GET</h1>");
+    assert!(result["scripts"]["console"][0]["message"].as_str().unwrap().starts_with("pm.sendRequest POST "));
+
+    // Another site's cookies are off limits.
+    let pre = "pm.cookies.jar().set('https://elsewhere.test', 'x', '1', (err) => { if (err) throw err; });";
+    let err =
+        h.err("http.send", json!({ "requestId": "v2", "request": request("r", &server.url("/echo"), pre, "") })).await;
+    assert!(err.message.contains("own site"), "{}", err.message);
+
+    // skipRequest: not sent.
+    let err = h
+        .err("http.send", json!({ "requestId": "v3", "request": request("r", &server.url("/echo"), "pm.execution.skipRequest();", "") }))
+        .await;
+    assert_eq!(err.code, "skipped");
 }

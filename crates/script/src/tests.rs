@@ -18,6 +18,7 @@ fn pre() -> ScriptInput {
         },
         response: None,
         variables: Variables::default(),
+        cookies: Vec::new(),
     }
 }
 
@@ -35,6 +36,7 @@ fn post(code: u16, status: &str, body: &str) -> ScriptInput {
             response_time: 12.5,
             response_size: body.len() as u64,
             events: None,
+            cookies: Vec::new(),
         }),
         ..pre()
     }
@@ -448,18 +450,197 @@ fn errors_have_lines() {
 
 #[test]
 fn unsupported_apis_throw_clearly() {
-    for (source, message) in [
-        ("pm.sendRequest('https://x.test', () => {})", "Error: pm.sendRequest is not supported in Zorvik"),
-        ("require('lodash')", "Error: require is not supported in Zorvik"),
-        ("setTimeout(() => {}, 10)", "Error: setTimeout is not supported in Zorvik"),
-        ("pm.cookies.get('a')", "Error: pm.cookies is not supported in Zorvik"),
-        ("pm.visualizer.set('<b></b>')", "Error: pm.visualizer is not supported in Zorvik"),
-        ("pm.execution.skipRequest()", "Error: pm.execution.skipRequest is not supported in Zorvik"),
-        ("CryptoJS.MD5('x')", "Error: CryptoJS is not supported in Zorvik"),
-    ] {
-        let out = run(source, &pre(), &Limits::default());
-        assert_eq!(out.error.map(|e| (e.message, e.line)), Some((message.to_string(), Some(1))), "{source}");
+    let out = run("pm.vault.get('a')", &pre(), &Limits::default());
+    assert_eq!(
+        out.error.map(|e| (e.message, e.line)),
+        Some(("Error: pm.vault is not supported in Zorvik".to_string(), Some(1)))
+    );
+}
+
+/// The app's side for tests: answers sends with an echo of the request, keeps cookies in memory.
+#[derive(Default)]
+struct FakeHost {
+    sent: std::sync::Mutex<Vec<HostRequest>>,
+    jar: std::sync::Mutex<Vec<ScriptCookie>>,
+}
+
+impl Host for FakeHost {
+    fn send(&self, request: HostRequest, timeout: Duration) -> Result<HostResponse, String> {
+        assert!(timeout > Duration::ZERO);
+        if request.url.contains("down") {
+            return Err("Could not connect to down.test".into());
+        }
+        self.sent.lock().unwrap().push(request.clone());
+        let body = serde_json::json!({ "echo": request.method, "url": request.url, "body": request.body }).to_string();
+        Ok(HostResponse {
+            code: 201,
+            status: "Created".into(),
+            headers: vec![ScriptHeader::new("Content-Type", "application/json")],
+            response_size: body.len() as u64,
+            body,
+            response_time: 3.0,
+            cookies: vec![ScriptCookie { name: "sid".into(), value: "s1".into(), ..Default::default() }],
+        })
     }
+    fn cookies(&self, _url: &str) -> Result<Vec<ScriptCookie>, String> {
+        Ok(self.jar.lock().unwrap().clone())
+    }
+    fn set_cookie(&self, url: &str, name: &str, value: &str) -> Result<(), String> {
+        if url.contains("other.test") {
+            return Err("Scripts can only change cookies of the request's own site".into());
+        }
+        self.jar.lock().unwrap().push(ScriptCookie { name: name.into(), value: value.into(), ..Default::default() });
+        Ok(())
+    }
+    fn remove_cookies(&self, _url: &str, name: Option<&str>) -> Result<(), String> {
+        self.jar.lock().unwrap().retain(|c| name.is_some_and(|n| n != c.name));
+        Ok(())
+    }
+    fn dynamic(&self, expression: &str) -> Option<String> {
+        (expression == "$randomInt(5, 5)").then(|| "5".into())
+    }
+}
+
+fn run_host(source: &str, input: &ScriptInput, host: &Arc<FakeHost>) -> ScriptOutput {
+    let out = run_with(source, input, &Limits::default(), Some(host.clone() as Arc<dyn Host>));
+    assert!(out.error.is_none(), "unexpected error: {:?}\nconsole: {:?}", out.error, out.console);
+    out
+}
+
+fn env(out: &ScriptOutput, key: &str) -> Option<String> {
+    out.variables.iter().find(|c| c.key == key).and_then(|c| c.value.clone())
+}
+
+#[test]
+fn send_request_with_a_callback_or_await() {
+    let host = Arc::new(FakeHost::default());
+    let out = run_host(
+        r#"pm.sendRequest({
+            url: 'https://api.test/login', method: 'post', header: { 'X-Trace': '1' },
+            body: { mode: 'raw', raw: JSON.stringify({ user: 'ada' }), options: { raw: { language: 'json' } } },
+        }, (err, res) => {
+            pm.environment.set('code', String(res.code));
+            pm.environment.set('cookie', res.cookies.get('sid'));
+            pm.test('echoed', () => pm.expect(res.json().echo).to.eql('POST'));
+        });"#,
+        &pre(),
+        &host,
+    );
+    assert_eq!(env(&out, "code").as_deref(), Some("201"));
+    assert_eq!(env(&out, "cookie").as_deref(), Some("s1"));
+    assert!(out.tests[0].passed, "{:?}", out.tests);
+    let sent = host.sent.lock().unwrap().clone();
+    assert_eq!((sent[0].method.as_str(), sent[0].body.as_str()), ("POST", r#"{"user":"ada"}"#));
+    assert!(sent[0].headers.iter().any(|h| h.key == "Content-Type" && h.value == "application/json"));
+    assert!(out.console.iter().any(|c| c.message == "pm.sendRequest POST https://api.test/login → 201 Created"));
+
+    let out = run_host(
+        "const res = await pm.sendRequest('https://api.test/a');\npm.environment.set('url', res.json().url);",
+        &pre(),
+        &host,
+    );
+    assert_eq!(env(&out, "url").as_deref(), Some("https://api.test/a"));
+
+    let out = run_host(
+        "pm.sendRequest({ url: 'https://api.test/f', method: 'POST', body: { mode: 'urlencoded', urlencoded: [{ key: 'a b', value: 'c&d' }, { key: 'x', value: '1', disabled: true }] } }, () => {});",
+        &pre(),
+        &host,
+    );
+    assert!(out.error.is_none());
+    assert_eq!(host.sent.lock().unwrap().last().unwrap().body, "a+b=c%26d");
+}
+
+#[test]
+fn send_request_failures_reach_the_script() {
+    let host = Arc::new(FakeHost::default());
+    let out = run_host(
+        "pm.sendRequest('https://down.test', (err, res) => { pm.environment.set('err', err.message); pm.environment.set('res', String(res)); });",
+        &pre(),
+        &host,
+    );
+    assert_eq!(env(&out, "err").as_deref(), Some("Could not connect to down.test"));
+    assert_eq!(env(&out, "res").as_deref(), Some("undefined"));
+    let out = run_with("await pm.sendRequest('https://down.test');", &pre(), &Limits::default(), Some(host.clone()));
+    assert_eq!(out.error.unwrap().message, "Error: Could not connect to down.test");
+    let out = run(
+        "pm.sendRequest('https://x.test', (err) => pm.environment.set('e', err.message));",
+        &pre(),
+        &Limits::default(),
+    );
+    assert_eq!(env(&out, "e").as_deref(), Some("pm.sendRequest isn't available here"));
+}
+
+#[test]
+fn timers_run_after_the_script() {
+    let started = Instant::now();
+    let out = run_ok(
+        "let n = 0;\nsetTimeout(() => pm.environment.set('late', 'yes'), 40);\nconst id = setInterval(() => { n++; if (n === 3) { clearInterval(id); pm.environment.set('ticks', String(n)); } }, 5);\nconst never = setTimeout(() => pm.environment.set('never', '1'), 10);\nclearTimeout(never);",
+        &pre(),
+    );
+    assert!(started.elapsed() >= Duration::from_millis(40));
+    assert_eq!(env(&out, "late").as_deref(), Some("yes"));
+    assert_eq!(env(&out, "ticks").as_deref(), Some("3"));
+    assert_eq!(env(&out, "never"), None);
+    let out = run("setTimeout(() => { throw new Error('in a timer'); }, 1);", &pre(), &Limits::default());
+    assert_eq!(out.error.unwrap().message, "Error: in a timer");
+    let limits = Limits { timeout: Duration::from_millis(200), ..Default::default() };
+    let out = run("setInterval(() => {}, 10);", &pre(), &limits);
+    assert!(out.error.unwrap().message.contains("took longer"));
+}
+
+#[test]
+fn errors_in_promise_callbacks_are_reported() {
+    let out = run("Promise.resolve().then(() => { throw new Error('late'); });", &pre(), &Limits::default());
+    assert_eq!(out.error.map(|e| e.message), Some("Error: late".into()));
+}
+
+#[test]
+fn cookies_and_the_jar() {
+    let host = Arc::new(FakeHost::default());
+    let mut input = pre();
+    input.cookies =
+        vec![ScriptCookie { name: "sid".into(), value: "abc".into(), domain: "api.test".into(), ..Default::default() }];
+    let out = run_host(
+        r#"pm.environment.set('sid', pm.cookies.get('sid'));
+        pm.environment.set('has', String(pm.cookies.has('sid', 'abc')));
+        const jar = pm.cookies.jar();
+        jar.set('https://api.test', 'theme', 'dark', (err) => {
+            jar.get('https://api.test', 'theme', (e, value) => pm.environment.set('theme', value));
+        });
+        jar.set('https://other.test', 'x', '1', (err) => pm.environment.set('refused', err.message));"#,
+        &input,
+        &host,
+    );
+    assert_eq!(env(&out, "sid").as_deref(), Some("abc"));
+    assert_eq!(env(&out, "has").as_deref(), Some("true"));
+    assert_eq!(env(&out, "theme").as_deref(), Some("dark"));
+    assert!(env(&out, "refused").unwrap().contains("own site"));
+}
+
+#[test]
+fn visualizer_renders_handlebars() {
+    let out = run_ok(
+        "pm.visualizer.set('<b>{{name}}</b><ul>{{#each items}}<li>{{this}}</li>{{/each}}</ul>', { name: '<x>', items: [1, 2] });",
+        &post(200, "OK", "{}"),
+    );
+    assert_eq!(out.visualization.as_deref(), Some("<b>&lt;x&gt;</b><ul><li>1</li><li>2</li></ul>"));
+    let out = run_ok("pm.visualizer.set('<i></i>'); pm.visualizer.clear();", &post(200, "OK", "{}"));
+    assert_eq!(out.visualization, None);
+}
+
+#[test]
+fn skip_request_only_before_sending() {
+    assert!(run_ok("pm.execution.skipRequest();", &pre()).skip_request);
+    assert!(!run_ok("pm.execution.skipRequest();", &post(200, "OK", "")).skip_request);
+}
+
+#[test]
+fn dynamic_variables_come_from_the_app() {
+    let host = Arc::new(FakeHost::default());
+    let out =
+        run_host("pm.environment.set('n', pm.variables.replaceIn('{{$randomInt(5, 5)}}-{{$guid}}'));", &pre(), &host);
+    let n = env(&out, "n").unwrap();
+    assert!(n.starts_with("5-") && n.len() == 38, "{n}");
 }
 
 #[test]
@@ -534,8 +715,9 @@ fn time_limit_stops_endless_loops() {
     assert_eq!(logs(&out), ["start"]);
     assert_eq!(out.tests.len(), 1);
 
-    // An endless chain of promise callbacks is stopped too.
-    let out = run("function spin() { return Promise.resolve().then(spin); } spin();", &pre(), &limits);
+    // An endless chain of promise callbacks is stopped too. (Not one that returns
+    // each promise: that one grows until it runs out of memory, maybe before the time limit.)
+    let out = run("function spin() { Promise.resolve().then(spin); } spin();", &pre(), &limits);
     assert!(out.error.unwrap().message.contains("took longer"));
 }
 
@@ -638,4 +820,24 @@ fn event_streams_expose_their_events() {
     let out =
         run_ok("pm.test('none', () => pm.expect(pm.response.events).to.equal(undefined));", &post(200, "OK", "{}"));
     assert!(out.tests.iter().all(|t| t.passed), "{:?}", out.tests);
+}
+
+#[test]
+fn json_schema_assertion() {
+    let schema = r#"{ type: 'object', required: ['id', 'name'], properties: { id: { type: 'integer' }, name: { type: 'string' } } }"#;
+    let out = run_ok(
+        &format!("pm.test('valid', () => pm.response.to.have.jsonSchema({schema}));"),
+        &post(200, "OK", r#"{"id": 7, "name": "Rex"}"#),
+    );
+    assert!(out.tests[0].passed, "{:?}", out.tests);
+    let out = run_ok(
+        &format!("pm.test('invalid', () => pm.response.to.have.jsonSchema({schema}));"),
+        &post(200, "OK", r#"{"id": "7"}"#),
+    );
+    let error = out.tests[0].error.clone().unwrap();
+    assert!(!out.tests[0].passed);
+    assert!(
+        error.contains("body/id must be integer") && error.contains("must have required property 'name'"),
+        "{error}"
+    );
 }

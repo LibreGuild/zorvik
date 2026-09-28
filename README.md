@@ -78,21 +78,22 @@ Then ask things like *"map the API routes in this repo to a Zorvik collection"* 
 - **GraphQL:** schema from introspection, autocomplete, a schema explorer and variables.
 - **gRPC:** server reflection or `.proto` files; unary, server, client and bidirectional streaming; metadata; TLS.
 - **Realtime and sockets:** WebSocket, Server-Sent Events, TCP, UDP, MQTT 3.1.1 and 5, and DNS queries over UDP, TCP, TLS or HTTPS.
-- **Environments and variables:** Local, Staging, Production; secret values that never enter the workspace files; dynamic values like `{{$uuid}}`; auth and headers inherited from folders.
-- **Auth:** Basic, Bearer, API keys and OAuth 2.0 (client credentials, password, authorization code with PKCE, refresh).
+- **Responses you can dig into:** filter with JSONPath, jq or XPath, and save responses as examples that document the request and feed your mocks.
+- **Environments and variables:** Local, Staging, Production; secret values that never enter the workspace files; 170 dynamic values (every one of Postman's and more: `{{$randomFullName}}`, `{{$randomInt(1, 100)}}`, `{{$isoDate(+3d)}}`, valid test card numbers and IBANs); auth and headers inherited from folders.
+- **Auth:** Basic, Bearer, API keys, OAuth 2.0 (client credentials, password, authorization code with PKCE, implicit, refresh) and OAuth 1.0; JWT, AWS Signature v4, Hawk, Akamai EdgeGrid and Atlassian ASAP signed fresh for every send; Digest and NTLM.
 - **Corporate networks:** system or manual proxy, the OS certificate store, custom CAs and client certificates (mTLS).
 - **History** of everything you sent, searchable, with secrets hidden.
 
 ### Test and automate
-- **Scripts:** pre-request and post-response JavaScript with a Postman-compatible `pm` API, so imported collections run as they are.
-- **Tests:** `pm.test` and `pm.expect`, with results next to the response.
+- **Scripts:** pre-request and post-response JavaScript with a Postman-compatible `pm` API, so imported collections run as they are: `pm.sendRequest`, cookies, timers, the visualizer, and Postman's libraries built in (lodash, crypto-js, moment, ajv, chai and more), all offline.
+- **Tests:** `pm.test`, `pm.expect` and JSON Schema checks, with results next to the response.
 - **Collection runner:** run a folder in order, repeat it, drive it with CSV or JSON data, stop on the first failure, export JSON or JUnit reports.
 - **Polling and streams in runs:** send a request again until a condition holds (wait for a job to finish), and test Server-Sent Events streams (`pm.response.events`).
 - **Contract checks:** requests imported from an OpenAPI document are checked against it on every send and run: an undocumented status or a field of the wrong type fails a test.
 - **CI:** `zorvik run` runs the same collections in any pipeline.
 
 ### Mock and serve
-- **Mock APIs** from scratch, from a folder of requests, from an OpenAPI spec, or from a response you just received. Routes with `:params`, templated bodies, delays, fault injection, CORS, and forwarding to a real backend.
+- **Mock APIs** from scratch, from a folder of requests (answering with their saved examples), from an OpenAPI spec, or from a response you just received. Routes with `:params`, templated bodies, delays, fault injection, CORS, and forwarding to a real backend.
 - **Servers:** WebSocket, SSE, TCP, UDP and DNS servers, plus a TCP relay that shows both directions. Every server logs its traffic live.
 - **Headless:** `zorvik serve` runs any of them in CI next to your tests.
 - **Busy port?** The error names the program holding it.

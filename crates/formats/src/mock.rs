@@ -2,13 +2,16 @@
 //! folder or the whole collection) or an OpenAPI/Swagger document.
 
 use crate::import::ImportError;
-use crate::model::{KeyValue, Request, RequestKind};
+use crate::model::{Example, KeyValue, Request, RequestKind};
 use crate::openapi::mock_responses;
 use crate::server::MockRoute;
 
-/// One route per HTTP request (in the given order), answering 200 with an
-/// empty JSON object. Requests of other kinds and repeated method + path pairs
-/// are left out. `requests` are `(workspace path, request)` pairs.
+/// One route per HTTP request (in the given order). A request with saved examples
+/// answers with them: an example saved with query parameters only matches requests
+/// that carry them, and the first example without any is the fallback. A request
+/// without examples answers 200 with an empty JSON object. Requests of other kinds
+/// and repeated method + path pairs are left out. `requests` are `(workspace path,
+/// request)` pairs.
 pub fn routes_from_requests(requests: &[(String, Request)]) -> Vec<MockRoute> {
     let mut routes: Vec<MockRoute> = Vec::new();
     for (file, request) in requests {
@@ -27,6 +30,10 @@ pub fn routes_from_requests(requests: &[(String, Request)]) -> Vec<MockRoute> {
             "" => file.rsplit('/').next().unwrap_or(file).trim_end_matches(".yaml").to_string(),
             name => name.to_string(),
         };
+        if !request.examples.is_empty() {
+            routes.extend(example_routes(&name, &method, &path, &request.examples));
+            continue;
+        }
         let bodyless = matches!(method.as_str(), "HEAD" | "OPTIONS");
         routes.push(MockRoute {
             name,
@@ -38,6 +45,60 @@ pub fn routes_from_requests(requests: &[(String, Request)]) -> Vec<MockRoute> {
         });
     }
     routes
+}
+
+/// Routes answering with `examples`: the ones saved with query parameters first (they
+/// only match requests carrying those), then one fallback (the first example without
+/// a query, else the first example).
+fn example_routes(name: &str, method: &str, path: &str, examples: &[Example]) -> Vec<MockRoute> {
+    let route = |e: &Example, match_query: Vec<KeyValue>| MockRoute {
+        name: match e.name.trim() {
+            "" => name.to_string(),
+            n => format!("{name} · {n}"),
+        },
+        method: method.to_string(),
+        path: path.to_string(),
+        status: e.status,
+        headers: e.headers.iter().filter(|h| h.enabled && !skip_header(&h.key)).cloned().collect(),
+        body: e.body.clone(),
+        match_query,
+        ..MockRoute::default()
+    };
+    let mut routes: Vec<MockRoute> = Vec::new();
+    let mut fallback = None;
+    for e in examples {
+        let query = query_pairs(&e.url);
+        if query.is_empty() {
+            fallback.get_or_insert(e);
+        } else if !routes.iter().any(|r| r.match_query == query) {
+            routes.push(route(e, query));
+        }
+    }
+    routes.push(route(fallback.unwrap_or(&examples[0]), Vec::new()));
+    routes
+}
+
+/// Headers a mock sets itself (or that would be wrong for its body).
+fn skip_header(name: &str) -> bool {
+    ["content-length", "transfer-encoding", "content-encoding", "connection", "date", "keep-alive"]
+        .iter()
+        .any(|h| name.eq_ignore_ascii_case(h))
+}
+
+/// `?a=1&b=` → `[a=1, b=]` (outside `{{…}}`; a `{{var}}` value matches any value).
+fn query_pairs(url: &str) -> Vec<KeyValue> {
+    let url = url.split('#').next().unwrap_or_default();
+    let base = cut_query(url);
+    let Some(query) = url.get(base.len() + 1..) else { return Vec::new() };
+    query
+        .split('&')
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            let (k, v) = p.split_once('=').unwrap_or((p, ""));
+            let v = if v.contains("{{") { "" } else { v };
+            KeyValue::new(k, v)
+        })
+        .collect()
 }
 
 /// One route per operation of an OpenAPI 3.x / Swagger 2.0 document (JSON or
@@ -152,6 +213,34 @@ mod tests {
         r.method = method.into();
         r.url = url.into();
         (format!("Folder/{name}.yaml"), r)
+    }
+
+    #[test]
+    fn examples_become_routes() {
+        let (file, mut r) = request("User", "GET", "{{baseUrl}}/users/{{id}}");
+        let example = |name: &str, status: u16, url: &str, body: &str| Example {
+            name: name.into(),
+            status,
+            headers: vec![KeyValue::new("Content-Type", "application/json"), KeyValue::new("Content-Length", "9")],
+            body: body.into(),
+            url: url.into(),
+        };
+        r.examples = vec![
+            example("Found", 200, "", r#"{"id":1}"#),
+            example("Missing", 404, "{{baseUrl}}/users/9?include=all", r#"{"error":"no"}"#),
+            example("Other", 200, "", "{}"),
+        ];
+        let routes = routes_from_requests(&[(file, r)]);
+        assert_eq!(routes.len(), 2, "{routes:?}");
+        assert_eq!((routes[0].name.as_str(), routes[0].status), ("User · Missing", 404));
+        assert_eq!(routes[0].match_query, vec![KeyValue::new("include", "all")]);
+        assert_eq!(
+            (routes[1].name.as_str(), routes[1].status, routes[1].body.as_str()),
+            ("User · Found", 200, r#"{"id":1}"#)
+        );
+        assert!(routes[1].match_query.is_empty());
+        assert_eq!(routes[1].headers, vec![KeyValue::new("Content-Type", "application/json")], "no Content-Length");
+        assert_eq!(routes[1].path, "/users/:id");
     }
 
     #[test]

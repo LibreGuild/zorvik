@@ -46,7 +46,8 @@ export function KeyValueEditor({
   if (bulk) return <BulkEditor rows={rows} onChange={onChange} />;
 
   return (
-    <div className="mx-3 overflow-hidden rounded-lg border border-line text-[12.5px]" role="table">
+    // Not overflow-hidden: the variable suggestions under a cell must show past the table's edge.
+    <div className="mx-3 rounded-lg border border-line text-[12.5px] [&>*:first-child]:rounded-t-lg [&>*:last-child]:rounded-b-lg" role="table">
       {display.map((row, i) => {
         const isNew = !fixedKeys && i === rows.length;
         const enabled = row.enabled !== false;

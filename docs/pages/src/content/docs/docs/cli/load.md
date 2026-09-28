@@ -112,7 +112,7 @@ An `error:` line in the summary means the run couldn't continue.
 | Option | File |
 |---|---|
 | `--json <FILE>` | The summary as JSON: `startedAt`, `durationMs`, `totals` (requests, errors, `errorRate`, `rps`, latency percentiles, timing, status codes, bytes, connections, `captureMisses`), `targets` (the same per request), `points` (one per second), `thresholds` (`label`, `metric`, `op`, `value`, `target`, `actual`, `passed`), `passed`, `stoppedEarly`, `error`, `peakCpuPercent` |
-| `--html <FILE>` | A single self-contained HTML page (no scripts, no external files) with the verdict, key numbers, thresholds, charts over time and per-request tables, to open in a browser or keep as a CI artifact |
+| `--html <FILE>` | A single self-contained HTML page (no external files) with the verdict, key numbers, thresholds, charts over time and per-request tables, to open in a browser or keep as a CI artifact |
 
 If a file can't be written, the command prints `error: could not save …` and exits with code 2. The summary is still printed.
 

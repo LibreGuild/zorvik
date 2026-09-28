@@ -702,6 +702,59 @@ impl Api {
                 ok(())
             }
 
+            "response.text" => {
+                // The whole body of a response sent from the app, as text (for "Save as example").
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct P {
+                    response_id: String,
+                }
+                let P { response_id } = params(p)?;
+                let body = lock(&self.inner.responses).get(&response_id).ok_or_else(|| {
+                    ApiError::new("notFound", "That response is no longer available; send the request again")
+                })?;
+                if body.len() > zorvik_workspace::formats::MAX_EXAMPLE_BODY {
+                    return Err(ApiError::new(
+                        "tooLarge",
+                        "The body is larger than 1 MB: examples keep smaller responses (use Save to file)",
+                    ));
+                }
+                let text = std::str::from_utf8(&body).map_err(|_| {
+                    ApiError::new("binary", "Binary responses can't be kept as examples (use Save to file)")
+                })?;
+                ok(serde_json::json!({ "text": text }))
+            }
+
+            "response.filter" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct P {
+                    /// A response sent from the app (its full body is used).
+                    #[serde(default)]
+                    response_id: Option<String>,
+                    /// Or the text itself.
+                    #[serde(default)]
+                    text: Option<String>,
+                    language: zorvik_workspace::formats::filter::FilterLanguage,
+                    expression: String,
+                }
+                let P { response_id, text, language, expression } = params(p)?;
+                let body = match (response_id, text) {
+                    (Some(id), _) => lock(&self.inner.responses).get(&id).ok_or_else(|| {
+                        ApiError::new("notFound", "That response is no longer available; send the request again")
+                    })?,
+                    (None, Some(text)) => Arc::new(text.into_bytes()),
+                    (None, None) => return Err(ApiError::new("invalid", "Give responseId or text")),
+                };
+                let result = tokio::task::spawn_blocking(move || {
+                    zorvik_workspace::formats::filter::filter(&body, language, &expression)
+                })
+                .await
+                .map_err(join_err)?
+                .map_err(|message| ApiError::new("filter", message))?;
+                ok(result)
+            }
+
             "ws.connect" => ok(self.ws_connect(params(p)?).await?),
             "ws.send" => {
                 #[derive(Deserialize)]
@@ -891,6 +944,7 @@ impl Api {
             data_dir: self.inner.data_dir.to_string_lossy().into_owned(),
             platform: std::env::consts::OS.into(),
             dynamic_variables: DYNAMIC_VARIABLES.iter().map(|s| s.to_string()).collect(),
+            dynamic_catalog: zorvik_workspace::dynamic::catalog_info(),
             cli_path: cli_path().map(|p| p.to_string_lossy().into_owned()),
             cli_on_path: cli_path().is_some_and(|p| cli_on_path(&p)),
         }
@@ -1120,7 +1174,7 @@ impl Api {
                 client: &self.inner.client,
                 settings: &settings,
                 tokens: &self.inner.tokens,
-                jar: jar.as_deref(),
+                jar: jar.as_ref(),
                 guard: agents::scope_guard(),
                 specs: Some(&self.inner.specs),
             };

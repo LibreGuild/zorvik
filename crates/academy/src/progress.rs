@@ -72,6 +72,9 @@ pub struct Progress {
     /// The lesson opened last ("Continue").
     pub last_lesson: Option<String>,
     pub graduated_at: Option<i64>,
+    /// Lessons the learner has seen in the course: lessons an update adds show as new until
+    /// opened. Empty in progress saved before 0.2 (see [`Progress::know_lessons`]).
+    pub known_lessons: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -148,6 +151,23 @@ fn days_between(a: &str, b: &str) -> Option<i64> {
 }
 
 impl Progress {
+    /// Fills `known_lessons` the first time: a new learner knows every lesson (none is new);
+    /// one who started before lessons carried `added` knows the ones without it. Returns
+    /// whether anything changed.
+    pub fn know_lessons(&mut self, course: &Course) -> bool {
+        if !self.known_lessons.is_empty() {
+            return false;
+        }
+        let started = self.xp > 0 || !self.lessons.is_empty() || self.last_lesson.is_some();
+        self.known_lessons = course.lessons().filter(|l| !started || l.added.is_none()).map(|l| l.id.clone()).collect();
+        true
+    }
+
+    /// Added by an update and not opened (or finished) yet.
+    pub fn is_new(&self, lesson: &str) -> bool {
+        !self.known_lessons.is_empty() && !self.known_lessons.contains(lesson) && !self.is_complete(lesson)
+    }
+
     pub fn level(&self) -> u32 {
         level_for(self.xp)
     }
@@ -353,6 +373,34 @@ mod tests {
         p.earn(10, "x", &clock("2026-03-03", 9), &mut r);
         assert_eq!((p.streak.days, p.streak.best), (1, 3));
         assert_eq!(days_between("2024-12-31", "2025-01-01"), Some(1));
+    }
+
+    #[test]
+    fn lessons_added_by_an_update_are_new_for_earlier_learners() {
+        let mut course = crate::course().unwrap().clone();
+        let unit = &mut course.units[1];
+        let mut added = unit.lessons[0].clone();
+        added.id = "added-later".into();
+        added.added = Some("0.2.0".into());
+        unit.lessons.push(added);
+
+        // Someone who learned before the update keeps everything, and sees only the new lesson as new.
+        let old_id = course.units[0].lessons[0].id.clone();
+        let mut p = Progress { xp: 120, last_lesson: Some(old_id.clone()), ..Default::default() };
+        p.units.insert(course.units[1].id.clone(), 7);
+        p.graduated_at = Some(9);
+        assert!(p.know_lessons(&course));
+        assert!(p.is_new("added-later"));
+        assert!(!p.is_new(&old_id));
+        assert!(!p.know_lessons(&course), "only once");
+        assert_eq!((p.units.len(), p.graduated_at, p.xp), (1, Some(9), 120), "progress kept");
+        p.known_lessons.insert("added-later".into());
+        assert!(!p.is_new("added-later"), "opened");
+
+        // A new learner has nothing new: every lesson is new to them anyway.
+        let mut fresh = Progress::default();
+        fresh.know_lessons(&course);
+        assert!(!fresh.is_new("added-later"));
     }
 
     #[test]

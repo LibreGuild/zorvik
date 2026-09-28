@@ -47,6 +47,15 @@ const propertyList = (readOnly = false): Record<string, Member> => ({
       }),
 });
 
+const cookieList: Record<string, Member> = {
+  get: fn("(name)", "A cookie's value"),
+  has: fn("(name, value?)"),
+  one: fn("(name)", "{ name, value, domain, path, expires, secure, httpOnly }"),
+  all: fn("()"),
+  toObject: fn("()"),
+  count: fn("()"),
+};
+
 const responseHave = prop(undefined, {
   status: fn("(code | reason)", "pm.response.to.have.status(200)"),
   header: fn("(name, value?)"),
@@ -112,9 +121,33 @@ export const SCRIPT_GLOBALS: Record<string, Member> = {
       json: fn("()", "Body parsed as JSON"),
       responseTime: prop("Milliseconds"),
       responseSize: prop("Body size in bytes"),
+      cookies: prop("Cookies the response set", cookieList),
       to: prop("Response assertions", responseTo),
     }),
+    sendRequest: fn(
+      "(request, callback?)",
+      "Send another request: a URL or { url, method, header, body }. Call back with (err, res), or await it.",
+      'sendRequest("", (err, res) => {\n  \n})'
+    ),
+    cookies: prop("Cookies the cookie jar sends to this request's URL", {
+      ...cookieList,
+      jar: fn("()", "The cookie jar: get, getAll, set, unset, clear (this request's site only)"),
+    }),
+    visualizer: prop("A view of the response in the Visualize tab", {
+      set: fn("(template, data)", "Render a Handlebars template with data: pm.visualizer.set('<b>{{name}}</b>', json)"),
+      clear: fn("()"),
+    }),
+    execution: prop("Control the run", {
+      setNextRequest: fn("(name | null)", "In a collection run, go on with this request (null ends the iteration)"),
+      skipRequest: fn("()", "Pre-request scripts: don't send this request"),
+    }),
+    require: fn("(\"npm:name@version\")", "A built-in library, e.g. pm.require('npm:lodash@4')"),
   }),
+  require: fn("(name)", "A built-in library: lodash, crypto-js, moment, ajv, uuid, tv4, chai, csv-parse, xml2js, cheerio, handlebars…"),
+  setTimeout: fn("(fn, ms)", "Run fn later; the script waits for it"),
+  setInterval: fn("(fn, ms)"),
+  clearTimeout: fn("(id)"),
+  clearInterval: fn("(id)"),
   console: prop("Output shown in the response's Console tab", {
     log: fn("(...values)"),
     info: fn("(...values)"),
@@ -213,6 +246,14 @@ export const SNIPPETS: Record<ScriptEvent, { label: string; code: string }[]> = 
     { label: "Set an environment variable", code: 'pm.environment.set("name", "value");' },
     { label: "Add a header", code: 'pm.request.headers.upsert({ key: "X-Request-Id", value: pm.variables.replaceIn("{{$guid}}") });' },
     { label: "Log the request", code: "console.log(pm.request.method, pm.request.url.toString());" },
+    {
+      label: "Get a token first",
+      code: 'const res = await pm.sendRequest({\n  url: pm.variables.replaceIn("{{baseUrl}}/login"),\n  method: "POST",\n  header: { "Content-Type": "application/json" },\n  body: { mode: "raw", raw: JSON.stringify({ user: pm.environment.get("user") }) },\n});\npm.request.headers.upsert({ key: "Authorization", value: "Bearer " + res.json().token });',
+    },
+    {
+      label: "Sign the body (HMAC)",
+      code: 'const signature = CryptoJS.HmacSHA256(pm.request.body.raw, pm.environment.get("secret")).toString();\npm.request.headers.upsert({ key: "X-Signature", value: signature });',
+    },
   ],
   postResponse: [
     { label: "Status code is 200", code: 'pm.test("Status code is 200", () => {\n  pm.response.to.have.status(200);\n});' },
@@ -226,5 +267,13 @@ export const SNIPPETS: Record<ScriptEvent, { label: string; code: string }[]> = 
     },
     { label: "Save a value from the body", code: 'const json = pm.response.json();\npm.environment.set("token", json.token);' },
     { label: "Header is present", code: 'pm.test("Content-Type is set", () => {\n  pm.response.to.have.header("Content-Type");\n});' },
+    {
+      label: "Matches a JSON Schema",
+      code: 'const schema = { type: "object", required: ["id"], properties: { id: { type: "integer" } } };\npm.test("Body matches the schema", () => {\n  pm.response.to.have.jsonSchema(schema);\n});',
+    },
+    {
+      label: "Show a table (Visualize)",
+      code: 'const template = `<table>{{#each items}}<tr><td>{{id}}</td><td>{{name}}</td></tr>{{/each}}</table>`;\npm.visualizer.set(template, { items: pm.response.json() });',
+    },
   ],
 };

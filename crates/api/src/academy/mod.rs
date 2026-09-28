@@ -268,6 +268,8 @@ pub struct ProgressView {
     pub graduated_at: Option<f64>,
     pub completed_lessons: u32,
     pub total_lessons: u32,
+    /// Lessons an update added that the learner hasn't opened.
+    pub new_lessons: u32,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -285,6 +287,8 @@ pub struct EarnedBadge {
 pub struct LessonState {
     pub id: String,
     pub completed: bool,
+    /// Added by an update and not opened yet.
+    pub new: bool,
     pub steps_done: u32,
     pub lab_done: bool,
     pub quiz_best: Option<u32>,
@@ -464,17 +468,22 @@ fn progress_view(course: &Course, p: &Progress, clock: &Clock) -> ProgressView {
         best_streak: p.streak.best,
         active_today: p.streak.last_day.as_deref() == Some(clock.day.as_str()),
         badges: p.badges.iter().map(|(id, at)| EarnedBadge { id: id.clone(), at: ms(*at) }).collect(),
-        lessons: p
-            .lessons
-            .iter()
-            .map(|(id, l)| LessonState {
-                id: id.clone(),
-                completed: l.completed_at.is_some(),
-                steps_done: l.steps.len() as u32,
-                lab_done: l.lab_done,
-                quiz_best: l.quiz_best,
+        lessons: course
+            .lessons()
+            .filter_map(|lesson| {
+                let l = p.lessons.get(&lesson.id);
+                let new = p.is_new(&lesson.id);
+                (l.is_some() || new).then(|| LessonState {
+                    id: lesson.id.clone(),
+                    completed: l.is_some_and(|l| l.completed_at.is_some()),
+                    new,
+                    steps_done: l.map_or(0, |l| l.steps.len() as u32),
+                    lab_done: l.is_some_and(|l| l.lab_done),
+                    quiz_best: l.and_then(|l| l.quiz_best),
+                })
             })
             .collect(),
+        new_lessons: course.lessons().filter(|l| p.is_new(&l.id)).count() as u32,
         units: p.units.keys().cloned().collect(),
         last_lesson: p.last_lesson.clone(),
         graduated_at: p.graduated_at.map(ms),
@@ -573,7 +582,10 @@ impl Api {
             "academy.lesson" => {
                 let Id { id } = params(p)?;
                 let lesson = lesson(&id)?;
-                self.with_progress(|p| p.last_lesson = Some(id.clone()));
+                self.with_progress(|p| {
+                    p.last_lesson = Some(id.clone());
+                    p.known_lessons.insert(id.clone());
+                });
                 ok(lesson_view(course()?, lesson))
             }
             "academy.workspace" => {
@@ -788,6 +800,9 @@ impl Api {
             Err(_) => Progress::default(),
         });
         let before = progress.clone();
+        if let Ok(course) = course() {
+            progress.know_lessons(course);
+        }
         let out = f(progress);
         if *progress != before
             && let Err(e) = zorvik_workspace::store::save_json(&path, progress)

@@ -1,11 +1,14 @@
 // Checks the built site (dist/): every link and image inside the site points at a file that
-// exists, and every #anchor at an id on that page. Run after `npm run build`.
+// exists, and every #anchor at an id on that page. Run after `npm run build`, with the same
+// SITE_BASE. Links outside the base aren't checked. Another folder can be given as an argument:
+// the Pages workflow checks the published layout (the main site, with the preview in next/).
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { BASE as SITE_BASE } from "../src/lib/site.mjs";
 
-const dist = join(dirname(fileURLToPath(import.meta.url)), "..", "dist");
-const BASE = "/zorvik/";
+const dist = process.argv[2] ? resolve(process.argv[2]) : join(dirname(fileURLToPath(import.meta.url)), "..", "dist");
+const BASE = `${SITE_BASE}/`;
 const pages = [];
 const walk = (dir) => {
   for (const name of readdirSync(dir)) {

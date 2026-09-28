@@ -36,8 +36,8 @@ Every tool is annotated for the client: `readOnlyHint` (reads only), `destructiv
 | Tool | What it does | Main inputs | Asks |
 |---|---|---|---|
 | `list_requests` | Folders and requests of the collection or one folder, with method and URL. | `folder` | no |
-| `read_request` | Everything saved in one or more requests: URL, query and path parameters, headers, body, auth, scripts, settings, docs. | `path`, or `paths` (up to 50) | no |
-| `save_requests` | Create or update up to 200 requests. Each goes into `folder` (created when missing) under its `name`; a request with that name there is updated. Only the fields given change, unless `replace: true`. Give `path` to update that exact request. | `requests[]`: `name`, `folder` or `path`, `kind`, `method`, `url`, `query`, `pathParams`, `headers`, `body`, `auth`, `scripts`, `settings`, `grpc`, `docs`; `replace` | edit |
+| `read_request` | Everything saved in one or more requests: URL, query and path parameters, headers, body, auth, scripts, settings, docs, examples. | `path`, or `paths` (up to 50) | no |
+| `save_requests` | Create or update up to 200 requests. Each goes into `folder` (created when missing) under its `name`; a request with that name there is updated. Only the fields given change, unless `replace: true`. Give `path` to update that exact request. | `requests[]`: `name`, `folder` or `path`, `kind`, `method`, `url`, `query`, `pathParams`, `headers`, `body`, `auth`, `scripts`, `settings`, `grpc`, `docs`, `examples`; `replace` | edit |
 | `save_folder_settings` | Auth, headers, scripts and docs that requests in a folder inherit, merged into what is there. `folder: ""` is the collection, which also has variables (merged by key). | `folder`, `auth`, `headers`, `scripts`, `docs`, `variables` | edit |
 | `move_item` | Move a request or folder to another folder and/or rename it. Load tests that send it follow. | `path`, `toFolder`, `newName` | edit |
 | `delete_items` | Move requests, folders, environments, load tests or servers to the trash. Deleting a load test also deletes its run history. | `paths`, `environments`, `loadTests`, `servers` | always |
@@ -54,11 +54,12 @@ Request fields for `save_requests` and `send_request`:
 | `pathParams` | `[{key, value, description}]` for `:name` segments. |
 | `headers` | `[{key, value, enabled}]` (an object of name → value works too). |
 | `body` | `type` (`none`, `json`, `text`, `xml`, `formUrlencoded`, `multipart`, `binary`, `graphql`) and `text`, `contentType`, `form`, `multipart`, `file` or `graphql {query, variables, operationName}`. |
-| `auth` | `type` (`inherit`, `none`, `basic`, `bearer`, `apiKey`, `oauth2`) and its fields. |
+| `auth` | `type` (`inherit`, `none`, `basic`, `bearer`, `apiKey`, `oauth2`, `oauth1`, `jwt`, `digest`, `ntlm`, `awsSigV4`, `hawk`, `akamaiEdgeGrid`, `asap`) and its fields, as in the [workspace files](../../requests/auth/). Secrets belong in secret variables (`{{awsSecretKey}}`). |
 | `scripts` | `preRequest`, `postResponse` (Postman `pm` API). |
 | `settings` | `timeoutMs`, `followRedirects`, `verifyTls`. |
 | `grpc` | `protoFiles` (inside the workspace; empty: server reflection). |
 | `docs` | Markdown notes. |
+| `examples` | `[{name, status, headers, body}]`: saved responses (bodies up to 1 MB). Mocks built from the request answer with them. Replaces the request's examples. |
 
 ## Environments and variables
 
@@ -80,11 +81,13 @@ Request fields for `save_requests` and `send_request`:
 
 | Tool | What it does | Main inputs | Asks |
 |---|---|---|---|
-| `send_request` | Send a saved request (`path`), a saved one with changes (`path` + `request`, nothing is saved), or an unsaved one (`request`, optionally inheriting a `folder`'s auth and headers), with its scripts and tests. Returns status, time, URL, HTTP version, headers, body (up to `maxBodyChars`), redirects, the request as sent, unresolved variables, test results, console and script errors. The response also shows in Zorvik. | `path`, `request`, `folder`, `maxBodyChars` (default 20,000, at most 80,000), `stream` | traffic |
+| `send_request` | Send a saved request (`path`), a saved one with changes (`path` + `request`, nothing is saved), or an unsaved one (`request`, optionally inheriting a `folder`'s auth and headers), with its scripts and tests. Returns status, time, URL, HTTP version, headers, body (up to `maxBodyChars`), redirects, the request as sent, unresolved variables, test results, console and script errors. The response also shows in Zorvik. | `path`, `request`, `folder`, `maxBodyChars` (default 20,000, at most 80,000), `stream`, `filter` | traffic |
 | `graphql_schema` | The schema of a GraphQL endpoint by introspection, as SDL. | `path` or `request`, `maxChars` (default and at most 60,000) | traffic |
 | `grpc_describe` | Services and methods of a gRPC server, from the request's `.proto` files or server reflection. | `path` or `request` | traffic |
 
 `send_request` supports HTTP, GraphQL, gRPC (unary calls), DNS and Server-Sent Events. An SSE request is read until the first event named `stream.untilEvent` (`message` for unnamed events), `stream.maxEvents` events (default 100; 0 for only the time limit), or `stream.timeoutMs` (default 10,000, at most 120,000), and returns the events. WebSocket, TCP, UDP and MQTT are live sessions that agents can't use yet: the tool says so.
+
+To keep a large JSON response short, give `send_request` a `filter`: `{language: "jsonPath", expression: "$.items[*].id"}` or `{language: "jq", expression: ".items | map(.id)"}`. It runs on the whole body; the matches replace `body`, with `filtered: {matches, truncated}`, or `filterError` when the expression is wrong.
 
 ## Collection runs
 

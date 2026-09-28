@@ -18,4 +18,8 @@ units: Array<string>, lastLesson: string | null,
 /**
  * Unix epoch milliseconds.
  */
-graduatedAt: number | null, completedLessons: number, totalLessons: number, };
+graduatedAt: number | null, completedLessons: number, totalLessons: number, 
+/**
+ * Lessons an update added that the learner hasn't opened.
+ */
+newLessons: number, };

@@ -21,6 +21,12 @@ time.workspace = true
 rand.workspace = true
 base64.workspace = true
 sha2.workspace = true
+md-5.workspace = true
+md4.workspace = true
+hmac.workspace = true
+ring.workspace = true
+pem.workspace = true
+num-bigint.workspace = true
 url.workspace = true
 rusqlite.workspace = true
 ts-rs.workspace = true
@@ -32,3 +38,4 @@ trash.workspace = true
 [dev-dependencies]
 zorvik-testkit.workspace = true
 tempfile.workspace = true
+regex.workspace = true

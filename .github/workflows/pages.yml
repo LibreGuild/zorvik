@@ -1,8 +1,14 @@
 name: Website
 
-# The website (docs/pages): the home page and the docs at /docs, on GitHub Pages. Rebuilt when
-# its sources change on main, after every release (ci.yml starts it) and once a day, so the
-# release details stay fresh. Pull requests only check that it builds.
+# The website (docs/pages) on GitHub Pages: the home page and the docs at /docs.
+# - The main site (/zorvik/) is the latest release's: ci.yml builds it from the release's code
+#   when the release is made and attaches it as zorvik-website.tar.gz. This workflow only
+#   downloads that file, so it never runs a release's code (docs/ci-release.md, "Website").
+# - A preview of the next version (/zorvik/next/) is built here from main: a banner on every page
+#   links back to the main site, and search engines are asked not to list it.
+# Every run publishes both as one Pages artifact. It runs when the site's sources change on main
+# (the preview changes), after every release (ci.yml starts it) and by hand. Pull requests build
+# their own site both ways and check the links, without publishing.
 on:
   push:
     branches: [main]
@@ -17,8 +23,6 @@ on:
     paths:
       - "docs/pages/**"
       - ".github/workflows/pages.yml"
-  schedule:
-    - cron: "41 4 * * *"
   workflow_dispatch:
 
 permissions:
@@ -44,19 +48,67 @@ jobs:
       - name: Install
         working-directory: docs/pages
         run: npm ci
-      - name: Build
+      - name: The main site
+        id: main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          MAIN_SITE: ${{ runner.temp }}/main-site
+        run: |
+          set -euo pipefail
+          mkdir -p "$MAIN_SITE"
+          echo "dir=$MAIN_SITE" >> "$GITHUB_OUTPUT"
+          # The latest release: the newest published one that isn't a pre-release, the one the
+          # download buttons (releases/latest/download/...) and the app's update check serve.
+          tag=""
+          if [ "$EVENT" != pull_request ]; then
+            tag=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name 2>/dev/null || true)
+          fi
+          if [[ $tag =~ ^v[0-9A-Za-z.+-]+$ ]] \
+            && gh release download "$tag" --pattern zorvik-website.tar.gz --dir "$RUNNER_TEMP" 2>/dev/null; then
+            tar -xzf "$RUNNER_TEMP/zorvik-website.tar.gz" -C "$MAIN_SITE" --no-same-owner
+            if [ ! -f "$MAIN_SITE/index.html" ] || [ ! -d "$MAIN_SITE/docs" ] || [ -e "$MAIN_SITE/next" ]; then
+              echo "::error::$tag's zorvik-website.tar.gz isn't a built website."
+              exit 1
+            fi
+            echo "The main site is $tag's."
+          else
+            # A pull request, no release yet, or a release made before releases carried their
+            # website: the main site is built from this branch instead.
+            if [ "$EVENT" != pull_request ]; then
+              echo "::warning::No website attached to the latest release (${tag:-none}): the main site is built from $GITHUB_REF_NAME."
+            fi
+            cd docs/pages
+            GITHUB_TOKEN="$GH_TOKEN" SITE_BASE=/zorvik npm run build
+            SITE_BASE=/zorvik npm run check
+            cp -R dist/. "$MAIN_SITE"
+            rm -rf dist
+          fi
+      - name: The preview of the next version
         working-directory: docs/pages
         env:
-          # Reads the latest release (version, sizes, downloads) without the anonymous rate limit.
           GITHUB_TOKEN: ${{ github.token }}
-        run: npm run build
-      - name: Check links
-        working-directory: docs/pages
-        run: npm run check
+          SITE_BASE: /zorvik/next
+          SITE_CHANNEL: next
+          # The banner links to the same page on the main site when the main site has it.
+          SITE_RELEASE_DIST: ${{ steps.main.outputs.dir }}
+        run: |
+          npm run build
+          npm run check
+      - name: Put both together
+        env:
+          MAIN_SITE: ${{ steps.main.outputs.dir }}
+        run: |
+          set -euo pipefail
+          cp -R "$MAIN_SITE" site
+          cp -R docs/pages/dist site/next
+          # Every link as published, including the preview's links into the main site.
+          SITE_BASE=/zorvik node docs/pages/scripts/check-links.mjs site
       - uses: actions/upload-pages-artifact@v5
         if: github.event_name != 'pull_request'
         with:
-          path: docs/pages/dist
+          path: site
 
   deploy:
     name: Publish the website

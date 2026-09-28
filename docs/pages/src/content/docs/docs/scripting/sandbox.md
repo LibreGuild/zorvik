@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-Scripts run in a sandbox that can only compute: it has no access to files, the network, other programs or the clock beyond reading the time. The request, the response and the variables go in as data, and the script's results (tests, console output, variable changes, request changes) come out as data. This makes scripts from shared or imported collections safe to run.
+Scripts run in a sandbox: no files, no other programs, no way to change the app. The request, the response and the variables go in as data, and the script's results (tests, console output, variable changes, request changes, a visualization) come out as data. The only ways out are the ones Postman has too: [`pm.sendRequest`](../pm-reference/#pmsendrequest), which uses the app's proxy and certificate settings (and, for an AI agent's run, only the hosts the user approved), and [`pm.cookies.jar()`](../pm-reference/#pmcookies), for the request's own site only.
 
 ## Runtime
 
@@ -25,7 +25,7 @@ if (pm.response.code === 204) return;
 
 ### Promises and async code
 
-Promises work. After the script's own code finishes, Zorvik runs the pending promise callbacks until there are none left or the time limit is reached. That's what makes `async` test functions work:
+Promises work. After the script's own code finishes, Zorvik runs the pending promise callbacks, then the [timers](../pm-reference/#timers) in time order (waiting for them), until there is nothing left or the time limit is reached. That's what makes `async` test functions, `pm.sendRequest` callbacks and `setTimeout` work:
 
 ```js
 pm.test("async works", async () => {
@@ -34,15 +34,17 @@ pm.test("async works", async () => {
 });
 ```
 
-There are no timers, so nothing can wait for time to pass. `await` at the top level of a script is a syntax error (the script is not an async function); use `await` inside an `async` function or an async `pm.test`.
+`await` works at the top level of a script: a script that uses `await` runs as an async function (`const res = await pm.sendRequest(url)`). An error thrown in a promise callback or a timer, or a promise rejected with nobody handling it, fails the script like any other error.
 
 ## Limits
 
 | Limit | Value | What happens when it's reached |
 |---|---|---|
-| Time per script | 5 s by default; Settings → Requests → **Script time limit**, 100 ms to 60 s. `zorvik run` always uses 5 s. | The script stops: `The script took longer than 5 s and was stopped`. Promise callbacks count toward the same limit. |
+| Time per script | 5 s by default; Settings → Requests → **Script time limit**, 100 ms to 60 s. `zorvik run` always uses 5 s. | The script stops: `The script took longer than 5 s and was stopped`. Promise callbacks, timers and `pm.sendRequest` calls count toward the same limit. |
+| `pm.sendRequest` per script | 100 requests | Further calls fail with `pm.sendRequest: at most 100 requests per script` |
+| `pm.visualizer` result | 5 MB | `pm.visualizer: the result is larger than 5 MB` |
 | Memory per script | 64 MB of JavaScript heap | The script stops: `The script ran out of memory (limit 64 MB)` |
-| Call stack | 768 KB | Deep recursion throws a `RangeError` (a normal error the script can catch) |
+| Call stack | 4 MB (each script runs on its own thread) | Deep recursion throws a `RangeError` (a normal error the script can catch) |
 | Collecting the results after the script | 1 s | `Collecting the script's results took too long (did it replace built-in functions?)`, for scripts that break built-ins the report needs |
 | Response body seen by scripts | First 16 MB | `pm.response.text()` and `json()` see the start, and the console warns `The response body is larger than 16 MB; scripts see only its start.` |
 | Sent body in `pm.request.body` (post-response) | First 1 MB | Cut |
@@ -63,28 +65,50 @@ The sandbox has no way to reach outside itself.
 
 | Missing | Examples | What you get |
 |---|---|---|
-| Network | `pm.sendRequest`, `fetch`, `XMLHttpRequest` | `pm.sendRequest` throws `pm.sendRequest is not supported in Zorvik`; the others are `undefined` |
-| Modules | `require`, `pm.require`, `import()` | `require` and `pm.require` throw `… is not supported in Zorvik`; `import()` rejects |
-| Timers | `setTimeout`, `setInterval`, `setImmediate` and their `clear…` functions | Throw `setTimeout is not supported in Zorvik` (and so on) |
+| Direct network access | `fetch`, `XMLHttpRequest`, sockets | `undefined`: use [`pm.sendRequest`](../pm-reference/#pmsendrequest) |
+| Modules | npm packages and files other than the [built-in libraries](#libraries), `import()` | `require('x')` throws `Cannot find module 'x'. Scripts can require only these built-in libraries: …`; `import()` rejects |
 | Files and processes | `process`, `std`, `os` | `undefined` |
-| Node.js and web APIs | `Buffer`, `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, `structuredClone`, `crypto`, `Intl` | `undefined` |
-| Postman libraries | `CryptoJS`, `xml2Json` | Throw `… is not supported in Zorvik` |
-| Other Postman libraries | `lodash` / `_`, `moment`, `cheerio`, `tv4`, `ajv`, `uuid`, `chai` | Not defined (`ReferenceError`) |
+| Node.js and web APIs | `Buffer`, `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, `structuredClone`, `crypto.subtle`, `Intl` | `undefined` (`Buffer` is in `require('buffer')`) |
 
-What is available beyond the language: the `pm` API, `console`, `atob` and `btoa` (Base64 for Latin-1 text), and `queueMicrotask`.
+What is available beyond the language: the `pm` API, `console`, `atob` and `btoa` (Base64 for Latin-1 text), `queueMicrotask`, `crypto.getRandomValues` and `crypto.randomUUID`, and the [libraries](#libraries).
 
 Some consequences:
 
-- **No hashing or signing.** Without `CryptoJS` or `crypto.subtle`, scripts can't compute HMAC signatures, SHA hashes or JWT signatures.
-- **No locale formatting.** Without `Intl`, `toLocaleString` uses a fixed format and `localeCompare` compares plain character codes.
-- **No URL parsing class.** Use [`pm.request.url`](../pm-reference/#pmrequesturl) for the request's URL, or a regular expression for other URLs.
-- **Build query strings by hand** with `encodeURIComponent`.
+- **No locale formatting.** Without `Intl`, `toLocaleString` uses a fixed format and `localeCompare` compares plain character codes. moment formats in English only.
+- **No URL class.** Use [`pm.request.url`](../pm-reference/#pmrequesturl) for the request's URL, and `require('url').parse(text, true)` for others.
+
+## Libraries
+
+Scripts can `require` the libraries Postman's sandbox has, and a few of Node's modules. They are part of Zorvik, so nothing is downloaded, and they work offline. A library loads the first time a script requires it (a few milliseconds) and counts toward the script's time and memory limits.
+
+| `require(…)` | Library | Notes |
+|---|---|---|
+| `"lodash"` | lodash 4.18 | Also the global `_` |
+| `"crypto-js"` | crypto-js 4.2 | Also the global `CryptoJS` |
+| `"moment"` | moment 2.31 | English only |
+| `"ajv"` | Ajv 8 (JSON Schema draft-07) | `"ajv/dist/2019"` and `"ajv/dist/2020"` for the newer drafts, `"ajv-formats"`. As in Postman, unknown keywords are ignored and the standard formats (`date-time`, `email`, `uri`, …) are checked; `new Ajv({ strict: true })` is Ajv 8's strict mode |
+| `"tv4"` | tv4 1.3 (JSON Schema draft-04) | Also the global `tv4` |
+| `"chai"` | chai 4.5 | The full library: `expect`, `assert`, plugins with `chai.use` |
+| `"uuid"` | uuid 14 | `uuid.v4()`, `uuid.v7()`, …; `uuid()` is a v4 UUID, as in Postman |
+| `"csv-parse/lib/sync"` | csv-parse 7 | `parse(text, options)`, Postman's form; `"csv-parse/sync"` gives `{ parse }` |
+| `"xml2js"` | xml2js 0.6 | `xml2Json(text)` is Postman's shortcut (synchronous) |
+| `"cheerio"` | cheerio 1.2 | jQuery-style HTML queries; also the global `cheerio` |
+| `"handlebars"` | Handlebars 4.7 | Templates with `Handlebars.compile` |
+| `"buffer"`, `"events"`, `"path"`, `"querystring"`, `"url"`, `"util"` | Browser versions of Node's modules | `"node:path"` and the like work too |
 
 ```js
-const query = Object.entries({ q: "café & co", page: 2 })
-  .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-  .join("&");
+const _ = require("lodash");
+const moment = require("moment");
+
+pm.test("Newest order is from today", () => {
+  const newest = _.maxBy(pm.response.json().orders, "createdAt");
+  pm.expect(moment.utc(newest.createdAt).isSame(moment.utc(), "day")).to.be.true;
+});
 ```
+
+`pm.require("npm:lodash@4.17.21")`, Postman's form, gives the same built-in library: the version is ignored. Other npm packages, files and Postman's team package library aren't available.
+
+Within a run, each library is loaded once: two `require("lodash")` calls return the same object. The next script gets fresh copies.
 
 ### What scripts can read
 
@@ -92,7 +116,7 @@ Scripts can read every variable of the active environment, the workspace and glo
 
 ## Postman compatibility
 
-Zorvik implements the parts of Postman's sandbox that collections use most, so an imported collection usually runs unchanged. When you import a Postman collection, Zorvik lists the scripts that use APIs it doesn't support (`pm.sendRequest`, `require`, timers, `pm.cookies`, `pm.visualizer`, `CryptoJS`); they're imported anyway and fail with a clear error when they run. Collection-level scripts are put on the folder the import creates. See [Import and export](../../requests/import-export/).
+Zorvik implements the parts of Postman's sandbox that collections use most, so an imported collection usually runs unchanged. When you import a Postman collection, Zorvik lists the scripts that use APIs it doesn't support (`pm.vault`, `pm.execution.runRequest`); they're imported anyway and fail with a clear error when they run. Collection-level scripts are put on the folder the import creates. See [Import and export](../../requests/import-export/).
 
 ### Supported
 
@@ -100,19 +124,25 @@ Zorvik implements the parts of Postman's sandbox that collections use most, so a
 |---|---|
 | `pm.test`, `pm.test.skip` | Yes, including async tests and the `done` callback |
 | `pm.expect` | A subset of chai; see [Assertions](../assertions/#differences-from-chai) |
-| `pm.response.to.have.*` / `to.be.*` | Yes, except `jsonSchema` |
+| `pm.response.to.have.*` / `to.be.*` | Yes, `jsonSchema` too (with the bundled Ajv) |
 | `pm.variables`, `pm.environment`, `pm.collectionVariables`, `pm.globals`, `pm.iterationData` | Yes (`pm.collectionVariables` are workspace variables) |
 | `pm.request` (URL, method, headers, body, query) | Yes |
 | `pm.response` (`code`, `status`, `headers`, `text()`, `json()`, `responseTime`, `responseSize`) | Yes |
 | `pm.info` | Yes |
 | `pm.execution.setNextRequest`, `postman.setNextRequest` | Yes, in collection runs |
+| `pm.execution.skipRequest` | Yes |
+| `pm.sendRequest` (callback or `await`) | Yes |
+| `pm.cookies`, `pm.cookies.jar()`, `pm.response.cookies` | Yes (the jar for the request's own site) |
+| `pm.visualizer` | Yes, as HTML and CSS: template scripts don't run |
+| `setTimeout`, `setInterval`, `setImmediate` | Yes |
 | Legacy `tests[…]`, `postman.*`, `responseBody`, `responseCode`, … | Yes |
 | `console` | Yes |
 | `atob`, `btoa` | Yes |
+| `require`, `pm.require`, `CryptoJS`, `_`, `tv4`, `cheerio`, `xml2Json` | Yes, the [built-in libraries](#libraries) |
 
 ### Not supported
 
-`pm.sendRequest`, `pm.require`, `require`, `pm.cookies`, `pm.response.cookies`, `pm.visualizer`, `pm.vault`, `pm.execution.skipRequest`, `pm.response.to.have.jsonSchema`, timers, and the libraries in the table above. See the [list with error messages](../pm-reference/#not-supported).
+`pm.vault` (use secret variables), `pm.execution.runRequest` (use `pm.sendRequest`), scripts inside visualizer templates, and npm packages other than the built-in libraries. See the [list with error messages](../pm-reference/#not-supported).
 
 ### Differences
 

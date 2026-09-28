@@ -126,15 +126,7 @@ fn request_schema() -> Value {
                 "file": string("Binary body: a file inside the workspace folder."),
                 "graphql": obj(json!({ "query": { "type": "string" }, "variables": string("Variables as JSON text."), "operationName": { "type": "string" } }), &[]),
             }), &["type"]),
-            "auth": obj(json!({
-                "type": { "type": "string", "enum": ["inherit", "none", "basic", "bearer", "apiKey", "oauth2"], "description": "Default inherit: from the folders, then the collection." },
-                "username": { "type": "string" }, "password": { "type": "string" },
-                "token": string("bearer: the token, e.g. {{accessToken}}."),
-                "key": string("apiKey: header or query parameter name."), "value": { "type": "string" },
-                "location": { "type": "string", "enum": ["header", "query"] },
-                "tokenUrl": string("oauth2"), "clientId": { "type": "string" }, "clientSecret": { "type": "string" }, "scope": { "type": "string" },
-                "grantType": { "type": "string", "enum": ["clientCredentials", "password", "authorizationCode"] },
-            }), &["type"]),
+            "auth": auth_schema(),
             "scripts": obj(json!({
                 "preRequest": string("JavaScript run before sending (Postman pm API)."),
                 "postResponse": string("JavaScript run after the response; tests: pm.test('ok', () => pm.response.to.have.status(200))."),
@@ -142,9 +134,50 @@ fn request_schema() -> Value {
             "settings": obj(json!({ "timeoutMs": { "type": "integer" }, "followRedirects": { "type": "boolean" }, "verifyTls": { "type": "boolean" } }), &[]),
             "grpc": obj(json!({ "protoFiles": { "type": "array", "items": { "type": "string" }, "description": ".proto files (relative to the workspace folder). Empty: server reflection." } }), &[]),
             "docs": string("Markdown notes: what it does, where the handler is in the code."),
+            "examples": {
+                "type": "array",
+                "description": "Saved example responses (documentation; mocks built from the request answer with them). Replaces the request's examples when given.",
+                "items": obj(json!({
+                    "name": { "type": "string" },
+                    "status": { "type": "integer" },
+                    "headers": kv,
+                    "body": string("Response body as text (at most 1 MB)."),
+                }), &["name"]),
+            },
         }),
         &[],
     )
+}
+
+/// The `auth` field of a request (one object for every auth type; `type` picks it).
+fn auth_schema() -> Value {
+    let mut props = json!({
+        "type": { "type": "string", "enum": ["inherit", "none", "basic", "bearer", "apiKey", "oauth2", "oauth1", "jwt", "digest", "ntlm", "awsSigV4", "hawk", "akamaiEdgeGrid", "asap"], "description": "Default inherit: from the folders, then the collection. Put secrets in secret variables ({{awsSecretKey}}), never literal values." },
+        "username": string("basic, digest, ntlm"), "password": string("basic, digest, ntlm"),
+        "domain": string("ntlm (optional; DOMAIN\\user in username works too)"), "workstation": string("ntlm (optional)"),
+        "token": string("bearer: the token, e.g. {{accessToken}}. oauth1: the access token."),
+        "key": string("apiKey: header or query parameter name. hawk: the Hawk key."), "value": { "type": "string" },
+        "location": { "type": "string", "enum": ["header", "query"], "description": "apiKey, jwt, oauth1, awsSigV4 (query = presigned URL): where the credentials go." },
+        "tokenUrl": string("oauth2"), "authUrl": string("oauth2 authorizationCode and implicit"), "clientId": { "type": "string" }, "clientSecret": { "type": "string" }, "scope": { "type": "string" },
+        "grantType": { "type": "string", "enum": ["clientCredentials", "password", "authorizationCode", "implicit"] },
+        "accessKey": string("awsSigV4"), "secretKey": string("awsSigV4"), "sessionToken": string("awsSigV4 (temporary credentials)"),
+    });
+    let more = json!({
+        "region": string("awsSigV4, e.g. us-east-1"), "service": string("awsSigV4, e.g. execute-api, s3"),
+        "consumerKey": string("oauth1"), "consumerSecret": string("oauth1"), "tokenSecret": string("oauth1"),
+        "signatureMethod": { "type": "string", "enum": ["HMAC-SHA1", "HMAC-SHA256", "HMAC-SHA512", "RSA-SHA1", "RSA-SHA256", "RSA-SHA512", "PLAINTEXT"], "description": "oauth1" },
+        "privateKey": string("oauth1 RSA methods, asap: PEM private key (use a secret variable)."),
+        "algorithm": string("jwt and asap: HS256/384/512, RS256/384/512, PS256/384/512, ES256/384. hawk: sha256 or sha1."),
+        "secret": string("jwt: the HS* secret, or a PEM private key for the other algorithms."),
+        "payload": string("jwt: claims as JSON text; variables work, e.g. {\"sub\": \"{{userId}}\", \"exp\": {{$timestamp(+1h)}}}."),
+        "id": string("hawk"), "ext": string("hawk"),
+        "clientToken": string("akamaiEdgeGrid"), "accessToken": string("akamaiEdgeGrid"),
+        "issuer": string("asap"), "audience": string("asap (comma-separated), oauth2"), "keyId": string("asap: kid"),
+    });
+    if let (Some(props), Value::Object(more)) = (props.as_object_mut(), more) {
+        props.extend(more);
+    }
+    obj(props, &["type"])
 }
 
 /// A request to save: the request's fields plus where it goes.
@@ -392,13 +425,17 @@ fn defs() -> Vec<Def> {
         Def {
             name: "send_request",
             title: "Send a request",
-            description: "Send a saved request (`path`), a saved one with changes (`path` + `request`: only the fields given change, nothing is saved), or an unsaved one (`request`), with its scripts and tests, and return the response. HTTP, GraphQL, gRPC (unary), DNS, and Server-Sent Events: an SSE request is read until the event named in stream.untilEvent, stream.maxEvents events, or stream.timeoutMs, and returns the events. The user sees it in Zorvik.",
+            description: "Send a saved request (`path`), a saved one with changes (`path` + `request`: only the fields given change, nothing is saved), or an unsaved one (`request`), with its scripts and tests, and return the response. HTTP, GraphQL, gRPC (unary), DNS, and Server-Sent Events: an SSE request is read until the event named in stream.untilEvent, stream.maxEvents events, or stream.timeoutMs, and returns the events. For a large JSON response, pass `filter` (JSONPath or jq) to get only the part you need: it runs on the whole body. The user sees it in Zorvik.",
             schema: obj(
                 json!({
                     "path": path("Saved request"),
                     "request": request_schema(),
                     "folder": string("Unsaved request: the folder whose auth and headers it inherits."),
                     "maxBodyChars": { "type": "integer", "description": "Response body characters to return (default 20000, at most 80000)." },
+                    "filter": obj(json!({
+                        "language": { "type": "string", "enum": ["jsonPath", "jq"] },
+                        "expression": string("JSONPath ($.items[?@.price > 10].name) or jq (.items[] | select(.price > 10) | .name)."),
+                    }), &["language", "expression"]),
                     "stream": obj(json!({
                         "untilEvent": string("SSE: stop after the first event with this name (\"message\" for events without a name)."),
                         "maxEvents": { "type": "integer", "description": "SSE: stop after this many events (default 100; 0 = only the time limit)." },
@@ -1661,6 +1698,38 @@ impl Api {
         super::with_guard(guard, self.send_now(c, &ws, request, path, saved_path, max_chars)).await
     }
 
+    /// `filter` (JSONPath or jq) over the whole body: the matches replace the body.
+    async fn filter_for_agent(
+        &self,
+        value: &mut Value,
+        response_id: &str,
+        filter: &Value,
+        r: &Redactor,
+        max_chars: usize,
+    ) {
+        let language =
+            serde_json::from_value::<zorvik_workspace::formats::filter::FilterLanguage>(filter["language"].clone());
+        let expression = filter["expression"].as_str().unwrap_or_default().to_string();
+        let Ok(language) = language else {
+            value["filterError"] = json!("filter.language must be jsonPath or jq");
+            return;
+        };
+        let Some(body) = lock(&self.inner.responses).get(response_id) else { return };
+        let run = tokio::task::spawn_blocking(move || {
+            zorvik_workspace::formats::filter::filter(&body, language, &expression)
+        });
+        match run.await {
+            Ok(Ok(found)) => {
+                let text = r.text(&found.text);
+                let cut = found.cut || text.chars().count() > max_chars;
+                value["body"] = json!(text.chars().take(max_chars).collect::<String>());
+                value["filtered"] = json!({ "matches": found.count, "truncated": cut });
+            }
+            Ok(Err(message)) => value["filterError"] = json!(message),
+            Err(_) => value["filterError"] = json!("The filter stopped unexpectedly"),
+        }
+    }
+
     /// Send what `send_request` approved (in the call's scope, limited to the approved hosts).
     async fn send_now(
         &self,
@@ -1692,7 +1761,10 @@ impl Api {
                 let redactor = self.redactor(ws).with_headers(&result.meta.request.headers);
                 let detail =
                     format!("{} {} · {:.0} ms", result.meta.status, result.meta.status_text, result.timing.total_ms);
-                let value = response_for_agent(&result, &redactor, max_chars);
+                let mut value = response_for_agent(&result, &redactor, max_chars);
+                if let Some(filter) = c.args.get("filter").filter(|f| f.is_object()) {
+                    self.filter_for_agent(&mut value, &result.response_id, filter, &redactor, max_chars).await;
+                }
                 Ok(Done { value, detail, target })
             }
             RequestKind::Grpc => {
@@ -2438,7 +2510,15 @@ fn parse_request(value: Value) -> Result<Request, String> {
     if let Some(rows) = query {
         apply_query(&mut request, rows);
     }
+    check_examples(&request)?;
     Ok(request)
+}
+
+fn check_examples(request: &Request) -> Result<(), String> {
+    match request.examples.iter().find(|e| e.body.len() > zorvik_workspace::formats::MAX_EXAMPLE_BODY) {
+        Some(e) => Err(format!("example \"{}\": the body is larger than 1 MB", e.name)),
+        None => Ok(()),
+    }
 }
 
 /// `patch` (the fields an agent gave) laid over a saved request: what it left out stays.
@@ -2457,6 +2537,7 @@ fn merge_request(saved: &Request, patch: Value) -> Result<Request, String> {
     if let Some(rows) = query {
         apply_query(&mut request, rows);
     }
+    check_examples(&request)?;
     Ok(request)
 }
 

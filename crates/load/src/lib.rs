@@ -216,7 +216,8 @@ pub fn start(plan: Plan, on_event: EventFn) -> Result<LoadRun, String> {
     Ok(LoadRun { stop })
 }
 
-/// A self-contained HTML report (inline styles and SVG charts, no scripts).
+/// A self-contained HTML report (inline styles, SVG charts and a small script
+/// for their tooltips; no external resources).
 pub fn html_report(title: &str, summary: &Summary) -> String {
     html::report(title, summary)
 }

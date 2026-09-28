@@ -476,6 +476,11 @@ pub async fn run(
                     result.unresolved = sent.unresolved;
                     result.script_errors = described;
                 }
+                // `pm.execution.skipRequest()`: not sent, and not a failure.
+                Err(e) if e.code == crate::scripting::SKIPPED => {
+                    result.skipped = true;
+                    result.skip_reason = Some(e.message);
+                }
                 Err(e) => {
                     result.duration_ms = Some(t0.elapsed().as_secs_f64() * 1000.0);
                     result.script_errors = described.into_iter().filter(|d| *d != e.message).collect();
@@ -919,7 +924,7 @@ impl Api {
             client: &self.inner.client,
             settings: &settings,
             tokens: &self.inner.tokens,
-            jar: jar.as_deref(),
+            jar: jar.as_ref(),
             guard: agent.and_then(|a| a.guard),
             specs: Some(&self.inner.specs),
         };

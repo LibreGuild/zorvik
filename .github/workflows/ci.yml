@@ -38,11 +38,12 @@ jobs:
         env:
           ZORVIK_TEST_TRASH: ""
         run: cargo test --no-fail-fast
-      - name: TypeScript bindings are up to date
+      - name: Generated files are up to date
+        # The TypeScript bindings and the dynamic variables reference are written by the tests.
         # `add -N` makes newly generated (untracked) binding files show up in the diff too.
         run: |
           git add -N app/src/bindings
-          git diff --exit-code -- app/src/bindings
+          git diff --exit-code -- app/src/bindings docs/pages/src/content/docs/docs/variables/dynamic-variables.md
 
   rust-windows:
     name: Rust (Windows) — tests
@@ -419,6 +420,8 @@ jobs:
 
           **Only the command line** (for CI machines and servers): `zorvik-cli-windows-x64.zip`, `zorvik-cli-macos-universal.tar.gz`, `zorvik-cli-linux-x86_64.tar.gz`. Unpack and put `zorvik` on your PATH.
 
+          `zorvik-website.tar.gz` is this version's website, which the project publishes; you don't need it.
+
           The installed app updates itself from here (Settings → Updates): it only reads this project's release list on GitHub and sends nothing about you. The portable zip, .deb and .rpm tell you when a new version is out.
 
           The builds are not code-signed yet. **Windows:** if SmartScreen appears, choose **More info → Run anyway**. **macOS:** the first open is blocked; open System Settings → Privacy & Security → **Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/Zorvik.app`.
@@ -453,10 +456,62 @@ jobs:
             sleep $((attempt * 5))
           done
           exit 1
+
+  # The main website shows the latest release's docs. It is built here, from this release's
+  # own code, and attached to the release as zorvik-website.tar.gz; pages.yml only downloads
+  # and publishes it, so the website workflow never runs a release's code (docs/ci-release.md).
+  release-website:
+    name: Build this release's website
+    needs: [release-draft, publish]
+    if: needs.release-draft.outputs.channel == 'stable'
+    runs-on: ubuntu-latest
+    # Read-only: the site's build runs npm packages.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/pages/package-lock.json
+      - name: Build
+        working-directory: docs/pages
+        env:
+          # The site reads this release's version and sizes from GitHub (it is published now).
+          GITHUB_TOKEN: ${{ github.token }}
+          SITE_BASE: /zorvik
+        run: |
+          npm ci
+          npm run build
+          npm run check
+          tar -czf "$RUNNER_TEMP/zorvik-website.tar.gz" -C dist .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: website
+          path: ${{ runner.temp }}/zorvik-website.tar.gz
+          retention-days: 1
+
+  release-website-publish:
+    name: Publish this release's website
+    needs: release-website
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: website
+      - name: Attach it to the release
+        run: gh release upload "$GITHUB_REF_NAME" zorvik-website.tar.gz --clobber
       - name: Refresh the website
-        # The website shows the latest version: rebuild it. (A release published with this
-        # workflow's token triggers no other workflow by itself.)
-        if: env.CHANNEL == 'stable'
+        # (A release published with this workflow's token triggers no other workflow by itself.)
         run: gh workflow run pages.yml --ref main || echo "::warning::Could not start the website build"
 
   discard-draft:

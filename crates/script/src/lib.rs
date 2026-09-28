@@ -1,21 +1,33 @@
 //! Sandboxed JavaScript for pre-request and post-response scripts.
 //!
-//! Every run gets a fresh QuickJS runtime and context: no file, network, process,
-//! timer or module access, a memory limit and a time limit. The Postman-compatible
-//! `pm` API, the chai-style `pm.expect` and `console` are a JS prelude
-//! (`prelude.js`); the input goes in and the results come out as JSON, so a
-//! script can do nothing but compute. Design: docs/architecture.md ("Scripts").
+//! Every run gets a fresh QuickJS runtime and context: no file, network, process
+//! or timer access (`require` gives only the built-in libraries, `libs.rs`), a
+//! memory limit and a time limit. The Postman-compatible `pm` API, the
+//! chai-style `pm.expect` and `console` are a JS prelude (`prelude.js`); the
+//! input goes in and the results come out as JSON, so a script can do nothing
+//! but compute. Design: docs/architecture.md ("Scripts").
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use std::sync::Arc;
+
 use rquickjs::context::EvalOptions;
-use rquickjs::{CatchResultExt, CaughtError, Context, Ctx, Function, Module, Runtime, Type, Value, WriteOptions};
+use rquickjs::promise::PromiseState;
+use rquickjs::{
+    CatchResultExt, CaughtError, Context, Ctx, Function, Module, Object, Promise, Runtime, Type, Value, WriteOptions,
+    qjs,
+};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
+
+pub mod host;
+mod libs;
+
+pub use host::{Host, HostRequest, HostResponse, ScriptCookie};
 
 const PRELUDE: &str = include_str!("prelude.js");
 /// Module name of the prelude (in stack traces).
@@ -25,8 +37,16 @@ const SCRIPT_FILE: &str = "script";
 /// Postman runs scripts inside a function (top-level `return` works). The
 /// wrapper stays on line 1 so line numbers match the editor.
 const WRAP_START: &str = "(function () {";
-/// QuickJS stack limit; well below the 2 MB of the threads scripts run on.
-const MAX_STACK: usize = 768 * 1024;
+/// Hidden property marking a rejected promise nobody handled yet.
+const UNHANDLED_TAG: &str = "__zvUnhandled";
+/// For scripts that `await` (`await pm.sendRequest(…)`): an async function.
+const WRAP_ASYNC: &str = "(async function () {";
+/// QuickJS stack limit. Libraries such as ajv recurse deeply, and QuickJS frames are
+/// larger in some builds (MSVC on Windows), so scripts get room to spare.
+const MAX_STACK: usize = 4 * 1024 * 1024;
+/// Every script runs on its own thread with this stack: the same headroom on every
+/// system and from every caller, whatever the stack of the calling thread.
+const THREAD_STACK: usize = 8 * 1024 * 1024;
 /// Response bodies longer than this reach scripts cut (the rest of the memory is for the script).
 const MAX_BODY_DIVISOR: usize = 4;
 /// Time limit for collecting a script's results after it ran.
@@ -95,6 +115,8 @@ pub struct ScriptResponse {
     /// Server-Sent Events read from the response (`pm.response.events`), for event streams.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub events: Option<Vec<ScriptEvent>>,
+    /// Cookies the response set (`pm.response.cookies`).
+    pub cookies: Vec<ScriptCookie>,
 }
 
 /// One Server-Sent Event as scripts see it.
@@ -181,6 +203,8 @@ pub struct ScriptInput {
     pub request: ScriptRequest,
     pub response: Option<ScriptResponse>,
     pub variables: Variables,
+    /// The cookie jar's cookies for the request's URL (`pm.cookies`).
+    pub cookies: Vec<ScriptCookie>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -262,6 +286,10 @@ pub struct ScriptOutput {
     pub console: Vec<ConsoleEntry>,
     /// The last `setNextRequest` call, if any.
     pub next_request: Option<NextRequest>,
+    /// `pm.execution.skipRequest()` in a pre-request script: don't send.
+    pub skip_request: bool,
+    /// What `pm.visualizer.set` rendered (HTML).
+    pub visualization: Option<String>,
     pub error: Option<ScriptError>,
 }
 
@@ -275,11 +303,21 @@ struct Report {
     console: Vec<ConsoleEntry>,
     #[serde(default)]
     next_request: Option<NextRequest>,
+    #[serde(default)]
+    skip_request: bool,
+    #[serde(default)]
+    visualization: Option<String>,
 }
 
 /// Run one script. Blocking and CPU-bound (up to `limits.timeout`): call it
 /// from a blocking thread.
 pub fn run(source: &str, input: &ScriptInput, limits: &Limits) -> ScriptOutput {
+    run_with(source, input, limits, None)
+}
+
+/// [`run`], with the app's side (`pm.sendRequest`, the cookie jar, dynamic variables).
+/// `host` calls block this thread.
+pub fn run_with(source: &str, input: &ScriptInput, limits: &Limits, host: Option<Arc<dyn Host>>) -> ScriptOutput {
     let failed =
         |message: String| ScriptOutput { error: Some(ScriptError { message, line: None }), ..Default::default() };
     let input_json = match serde_json::to_string(input) {
@@ -287,7 +325,16 @@ pub fn run(source: &str, input: &ScriptInput, limits: &Limits) -> ScriptOutput {
         Err(e) => return failed(format!("Could not prepare the script: {e}")),
     };
     let body = input.response.as_ref().map(|r| cut(&r.body, limits.memory / MAX_BODY_DIVISOR)).unwrap_or("");
-    let mut out = match execute(source, &input_json, body, limits) {
+    let executed = std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("zorvik-script".into())
+            .stack_size(THREAD_STACK)
+            .spawn_scoped(scope, || execute(source, &input_json, body, limits, host))
+            .map_err(|e| format!("Could not start the script: {e}"))?
+            .join()
+            .map_err(|_| "The script engine stopped unexpectedly".to_string())?
+    });
+    let mut out = match executed {
         Ok(out) => out,
         Err(message) => return failed(message),
     };
@@ -303,7 +350,37 @@ pub fn run(source: &str, input: &ScriptInput, limits: &Limits) -> ScriptOutput {
     out
 }
 
-fn execute(source: &str, input_json: &str, body: &str, limits: &Limits) -> Result<ScriptOutput, String> {
+/// Runs the next pending promise job. An exception in it (a rejected callback) comes back
+/// as the error: `Ctx::execute_pending_job` would drop it.
+fn run_job<'js>(ctx: &Ctx<'js>) -> Result<bool, CaughtError<'js>> {
+    let mut job_ctx = std::ptr::null_mut();
+    // SAFETY: the runtime pointer comes from this live context; QuickJS runs one job and
+    // reports the context it ran in (ours: a script has one), leaving any exception there.
+    let status = unsafe { qjs::JS_ExecutePendingJob(qjs::JS_GetRuntime(ctx.as_raw().as_ptr()), &mut job_ctx) };
+    if status < 0 {
+        return Err::<bool, _>(rquickjs::Error::Exception).catch(ctx);
+    }
+    Ok(status > 0)
+}
+
+/// `await` as a word outside comments and strings is enough of a hint: such scripts get an
+/// async wrapper (a stray `await` in a string only makes the script async, which is harmless).
+fn uses_await(source: &str) -> bool {
+    source.match_indices("await").any(|(i, _)| {
+        let before = source[..i].chars().next_back();
+        let after = source[i + 5..].chars().next();
+        let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '$');
+        !word(before) && !word(after)
+    })
+}
+
+fn execute(
+    source: &str,
+    input_json: &str,
+    body: &str,
+    limits: &Limits,
+    app: Option<Arc<dyn Host>>,
+) -> Result<ScriptOutput, String> {
     let internal = |e: rquickjs::Error| format!("Could not start the script engine: {e}");
     let runtime = Runtime::new().map_err(internal)?;
     runtime.set_memory_limit(limits.memory);
@@ -312,6 +389,27 @@ fn execute(source: &str, input_json: &str, body: &str, limits: &Limits) -> Resul
     let deadline: Rc<Cell<Option<Instant>>> = Rc::new(Cell::new(None));
     let check = deadline.clone();
     runtime.set_interrupt_handler(Some(Box::new(move || check.get().is_some_and(|d| Instant::now() >= d))));
+    // Promises rejected with nobody handling them (a `.then` callback that threw, a failed
+    // `pm.sendRequest` nobody awaited): the first one still unhandled at the end fails the script.
+    let unhandled: Rc<RefCell<Vec<(u32, ScriptError)>>> = Rc::default();
+    let seen = unhandled.clone();
+    let next_id = Cell::new(0u32);
+    runtime.set_host_promise_rejection_tracker(Some(Box::new(move |ctx, promise, reason, handled| {
+        let Some(promise) = promise.as_object() else { return };
+        if handled {
+            if let Ok(id) = promise.get::<_, u32>(UNHANDLED_TAG) {
+                seen.borrow_mut().retain(|(i, _)| *i != id);
+            }
+            return;
+        }
+        next_id.set(next_id.get() + 1);
+        let _ = promise.set(UNHANDLED_TAG, next_id.get());
+        let caught = match reason.clone().into_exception() {
+            Some(exception) => CaughtError::Exception(exception),
+            None => CaughtError::Value(reason),
+        };
+        seen.borrow_mut().push((next_id.get(), script_error(&ctx, caught)));
+    })));
     let context = Context::full(&runtime).map_err(internal)?;
 
     let bytecode = prelude_bytecode()?;
@@ -323,21 +421,52 @@ fn execute(source: &str, input_json: &str, body: &str, limits: &Limits) -> Resul
         let (prelude, done) = prelude.eval().catch(&ctx).map_err(failed)?;
         done.finish::<()>().catch(&ctx).map_err(failed)?;
         let setup: Function = prelude.get("default").catch(&ctx).map_err(failed)?;
-        let finish: Function = setup.call((input_json, body)).catch(&ctx).map_err(failed)?;
+        let host: Object = libs::host(&ctx).catch(&ctx).map_err(failed)?;
+        host::install(&ctx, &host, app, deadline.clone()).catch(&ctx).map_err(failed)?;
+        let finish: Function = setup.call((input_json, body, host)).catch(&ctx).map_err(failed)?;
+        let tick: Function = finish.get("tick").catch(&ctx).map_err(failed)?;
 
         let started = Instant::now();
         deadline.set(Some(started + limits.timeout));
+        let out_of_time = || deadline.get().is_some_and(|d| Instant::now() >= d);
         let mut opts = EvalOptions::default();
         opts.strict = false;
         opts.filename = Some(SCRIPT_FILE.into());
-        let wrapped = format!("{WRAP_START}{source}\n}}).call(undefined);");
+        let start = if uses_await(source) { WRAP_ASYNC } else { WRAP_START };
+        let wrapped = format!("{start}{source}\n}}).call(undefined);");
         let result = ctx.eval_with_options::<Value, _>(wrapped, opts).catch(&ctx);
-        let mut error = result.err().map(|e| script_error(&ctx, e));
-        // Promise callbacks (async `pm.test` functions).
-        while error.is_none() && ctx.execute_pending_job() {
-            if deadline.get().is_some_and(|d| Instant::now() >= d) {
-                break;
+        let (mut error, completion) = match result {
+            Ok(value) => (None, value.into_promise()),
+            Err(e) => (Some(script_error(&ctx, e)), None),
+        };
+        // Promise callbacks (async `pm.test` functions, `pm.sendRequest` callbacks), then
+        // the timers (`setTimeout`), each followed by the callbacks it queued.
+        'events: while error.is_none() && !out_of_time() {
+            loop {
+                match run_job(&ctx) {
+                    Ok(true) if !out_of_time() => {}
+                    Ok(_) => break,
+                    Err(e) => {
+                        error = Some(script_error(&ctx, e));
+                        break 'events;
+                    }
+                }
             }
+            match tick.call::<_, bool>(()).catch(&ctx) {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(e) => error = Some(script_error(&ctx, e)),
+            }
+        }
+        // An async script that threw, else a rejection nobody handled.
+        if error.is_none()
+            && let Some(promise) = completion.filter(|p: &Promise| p.state() == PromiseState::Rejected)
+        {
+            let reason = promise.result::<Value>().and_then(|r| r.err());
+            error = reason.map(|e| script_error(&ctx, CaughtError::from_error(&ctx, e)));
+        }
+        if error.is_none() {
+            error = unhandled.borrow_mut().drain(..).next().map(|(_, e)| e);
         }
         if started.elapsed() >= limits.timeout {
             error = Some(ScriptError {
@@ -345,7 +474,8 @@ fn execute(source: &str, input_json: &str, body: &str, limits: &Limits) -> Resul
                 line: error.and_then(|e| e.line),
             });
         } else if let Some(e) = &mut error
-            && e.message.contains("out of memory")
+            // A bare InternalError: out of memory before even its message was allocated.
+            && (e.message.contains("out of memory") || e.message == "InternalError")
         {
             let limit = mb(limits.memory);
             e.message = if e.message.starts_with("Uncaught null") {
@@ -379,6 +509,8 @@ fn execute(source: &str, input_json: &str, body: &str, limits: &Limits) -> Resul
                 tests: r.tests,
                 console: r.console,
                 next_request: r.next_request,
+                skip_request: r.skip_request,
+                visualization: r.visualization,
                 error,
             },
             // Out of memory, or the script broke the globals the report needs.

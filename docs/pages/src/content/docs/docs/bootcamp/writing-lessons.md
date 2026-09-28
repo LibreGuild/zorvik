@@ -66,6 +66,7 @@ id: status-codes              # unique across the course
 title: Status codes
 summary: One sentence, the idea of the lesson.
 minutes: 5                    # reading time
+added: 0.2.0                  # only for a lesson added to a released course: the release that adds it
 lab: { … }                    # optional, see below
 quiz:                         # usually 3 questions
   - question: What does 404 mean?
@@ -85,6 +86,8 @@ The reading…
 | `quiz` | no | Questions with `question`, `options` (two or more), `answer` (a valid index) and `explain`. |
 
 A lesson without a lab and without a quiz gets a **Mark as done** button. A lesson completes when its lab is done and its quiz is passed (60 %, rounded up).
+
+When you add a lesson to a course people already use, set `added` to the release that ships it: learners who started before see it marked **New** until they open it, and everything they finished stays finished. Keep lesson ids stable, because progress is kept by id.
 
 ## Style
 
@@ -177,7 +180,7 @@ A step passes when its check matches something that happened since the lab start
 |---|---|---|
 | `request: {server, …}` | An HTTP request a lab server received | `method`, `path`, `query` (object), `headers` (lower-case names), `body`, `json` (parsed body), `status` (the mock's answer), `route`, `httpVersion`; `count: 2` = at least two |
 | `message: {server, …}` | A message, connection or DNS query a lab server saw | `kind` (`data`, `open`, `close`, `dns`, `info`, `error`), `direction` (`in`, `out`), `text`, `summary`, `size` |
-| `send: {…}` | An HTTP request sent from Zorvik and its answer | `kind`, `method`, `url` (as sent), `finalUrl`, `status`, `httpVersion`, `headers` (sent), `responseHeaders`, `body`, `json`, `tests` (`[{name, passed}]`), `testsPassed`, `testsFailed`, `redirects`, `tls`, `auth` (type), `request` (as written, variables unresolved), `error`, `errorKind` |
+| `send: {…}` | An HTTP request sent from Zorvik and its answer | `kind`, `method`, `url` (as sent), `finalUrl`, `status`, `httpVersion`, `headers` (sent), `responseHeaders`, `body`, `json`, `tests` (`[{name, passed}]`), `testsPassed`, `testsFailed`, `visualized` (a script called `pm.visualizer.set`), `redirects`, `tls`, `auth` (type), `request` (as written, variables unresolved), `error`, `errorCode` (e.g. `skipped`), `errorKind` |
 | `call: {method, params, ok, result, error}` | Any app action (methods and parameters in `app/src/lib/rpc.ts`) | e.g. `{method: dns.query, params: {request: {url: "shop.lab.test"}}, ok: true}` |
 | `saved: {request \| folder \| environment \| server \| loadTest \| workspace: …}` | Something saved in the workspace (the file's fields, plus `path`, `id`, `running` for servers) | e.g. `{request: {name: Login, auth: {type: bearer}}}` |
 | `run: {…}` | A collection run that finished during the lab | `passed`, `requests`, `failed`, `testsPassed`, `testsFailed`, `iterations`, `name` |

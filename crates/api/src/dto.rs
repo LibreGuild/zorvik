@@ -27,6 +27,8 @@ pub struct AppInfo {
     pub data_dir: String,
     pub platform: String,
     pub dynamic_variables: Vec<String>,
+    /// Every dynamic variable with its description and an example (autocomplete, hints).
+    pub dynamic_catalog: Vec<zorvik_workspace::dynamic::DynamicVarInfo>,
     /// The `zorvik` command-line tool installed with the app (AI agents run `zorvik mcp`).
     pub cli_path: Option<String>,
     /// Typing `zorvik` in a terminal runs it.

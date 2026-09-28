@@ -1,0 +1,9 @@
+---
+// Starlight's banner with the preview banner above it. Used only in the preview of the next
+// version (see `components` in astro.config.mjs); a page's own `banner` still shows below.
+import Default from "@astrojs/starlight/components/Banner.astro";
+import NextBanner from "./NextBanner.astro";
+---
+
+<NextBanner />
+<Default />

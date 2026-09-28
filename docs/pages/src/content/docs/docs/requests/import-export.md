@@ -47,9 +47,9 @@ What you get:
 | Pre-request script | Pre-request script |
 | Tests script | Post-response script |
 | Other script events | Skipped, with a note |
-| Auth: basic, bearer, API key, OAuth 2.0, no auth, inherit | The same auth type |
-| Other auth types (Digest, AWS, NTLM, …) | **No auth**, with a note |
-| OAuth 2.0 implicit grant | Authorization code with PKCE, with a note |
+| Auth: basic, bearer, API key, OAuth 1.0, OAuth 2.0 (every grant, implicit too), JWT Bearer, Digest, NTLM, AWS Signature, Hawk, Akamai EdgeGrid, ASAP, no auth, inherit | The same [auth type](../auth/), with its settings |
+| Other auth types | **No auth**, with a note |
+| Saved responses | [Examples](../responses/#examples) of the request (bodies up to 1 MB) |
 | OAuth 2.0 redirect URL on `oauth.pstmn.io` (or none) | `http://127.0.0.1:53682/callback`, with a note to register it |
 | Body: raw (JSON, XML, HTML, JavaScript, text), URL-encoded, form-data, file, GraphQL | The matching [body type](../bodies/) |
 | Path variables (`:id`) with values | [Path variables](../http/#path-variables) |
@@ -58,7 +58,7 @@ What you get:
 | Folder variables | Skipped, with a note |
 | Collection v1 files | Refused; export as v2.1 again |
 
-Scripts are imported as they are. Scripts that use APIs Zorvik doesn't have (`pm.sendRequest`, `require`, `setTimeout`, `setInterval`, `pm.cookies`, `pm.visualizer`, `CryptoJS`) are listed in a note; they fail when run. See [pm API reference](../../scripting/pm-reference/).
+Scripts are imported as they are. Scripts that use APIs Zorvik doesn't have (`pm.sendRequest`, `setTimeout`, `setInterval`, `pm.cookies`, `pm.visualizer`) are listed in a note; they fail when run. See [pm API reference](../../scripting/pm-reference/).
 
 Files for form-data and binary bodies aren't part of a Postman export: choose them again after importing (a note says which).
 
@@ -92,10 +92,11 @@ Import OpenAPI 3.0 and 3.1, and Swagger 2.0, as JSON or YAML, from a file or fro
 | Security scheme | Auth | Environment placeholders |
 |---|---|---|
 | HTTP Basic | Basic auth | `username`, `password` (secret) |
+| HTTP Digest | Digest auth | `username`, `password` (secret) |
 | HTTP Bearer | Bearer token | `bearerToken` (secret) |
 | API key in a header or query | API key | `apiKey` (secret) |
-| OAuth 2.0 client credentials, authorization code or password flow | OAuth 2.0 with the token and authorization URLs and all scopes | `clientId`, `clientSecret` (secret), and for the password flow `username`, `password` |
-| Implicit OAuth flow, API key in a cookie, other HTTP schemes, OpenID Connect | Not imported, with a note | |
+| OAuth 2.0 client credentials, authorization code, password or implicit flow | OAuth 2.0 with the token and authorization URLs and all scopes | `clientId`, `clientSecret` (secret), and for the password flow `username`, `password` |
+| API key in a cookie, other HTTP schemes, OpenID Connect | Not imported, with a note | |
 
 The document-wide `security` becomes the imported folder's auth; operations with different security get their own. When a requirement combines several schemes, only one is imported (with a note). Fill in the placeholders in the new environment. The ones that hold secrets (`password`, `bearerToken`, `apiKey`, `clientSecret`) are already marked secret, so their values stay on your computer.
 

@@ -73,6 +73,12 @@ export function Bar({ value, color = "var(--accent)", className }: { value: numb
 }
 
 export const isComplete = (p: ProgressView | null, lesson: string) => !!p?.lessons.find((l) => l.id === lesson)?.completed;
+/** Added by an update and not opened yet. */
+export const isNew = (p: ProgressView | null, lesson: string) => !!p?.lessons.find((l) => l.id === lesson)?.new;
+
+export function NewChip() {
+  return <span className="inline-flex shrink-0 items-center rounded-full bg-accent/15 px-1.5 py-px text-[10.5px] font-semibold text-accent">New</span>;
+}
 export const lessonState = (p: ProgressView | null, lesson: string) => p?.lessons.find((l) => l.id === lesson) ?? null;
 export const hasBadge = (p: ProgressView | null, id: string) => !!p?.badges.some((b) => b.id === id);
 

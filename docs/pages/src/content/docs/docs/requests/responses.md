@@ -1,6 +1,6 @@
 ---
 title: Responses
-description: Everything the response pane shows, including body views, headers, cookies, the timing waterfall and connection info, plus saving bodies, errors and request history.
+description: Everything the response pane shows, including body views, filters (JSONPath, jq, XPath), headers, cookies, the timing waterfall and connection info, plus saved examples, saving bodies, errors and request history.
 sidebar:
   order: 8
 ---
@@ -19,6 +19,7 @@ At the top of the response:
 | Protocol | `HTTP/1.1`, `HTTP/2` or `HTTP/3` |
 | Lock | The response came over TLS |
 | *N redirects* | How many redirects were followed |
+| **Save as example** | Keeps this response in the request. See [Examples](#examples). |
 | **Mock** | Adds a route that answers like this response to a mock API. See [Mock servers](../../servers/mock-api/). |
 
 Below it, warnings may appear:
@@ -42,7 +43,7 @@ The tab you pick stays selected for that request tab.
 
 ## Body
 
-The body toolbar has the view buttons, the content type, and three icons: **Wrap lines** (on by default), **Copy body** and **Save to file…**.
+The body toolbar has the view buttons, the content type, and four icons: **Filter**, **Wrap lines** (on by default), **Copy body** and **Save to file…**.
 
 | View | For | Shows |
 |---|---|---|
@@ -57,11 +58,56 @@ The body toolbar has the view buttons, the content type, and three icons: **Wrap
 - An empty body shows **Empty body**.
 - A body cut at the size limit shows *The response was larger than the size limit and was cut. Raise the limit in Settings.* See [Response size limit](../http-versions-timeouts-redirects/#response-size-limit).
 
+### Filter the body
+
+**Filter** (the funnel icon) opens a row above the body. Pick a language, type an expression, and the body shows only what matches, with the number of matches. Close it (or press <kbd>Esc</kbd> in the field) to see the whole body again. The expression stays when you send again, so you can watch the same part of the response.
+
+| Language | For | Example |
+|---|---|---|
+| **JSONPath** ([RFC 9535](https://www.rfc-editor.org/rfc/rfc9535)) | JSON | `$.items[?@.price > 10].name` |
+| **jq** | JSON | `.items[] | select(.price > 10) | .name` |
+| **XPath** 1.0 | XML and HTML | `//item[price > 10]/name`, `count(//li)`, `//a/@href` |
+
+- JSON bodies offer **JSONPath** and **jq**; XML and HTML bodies offer **XPath**; other text offers all three.
+- JSONPath and jq run on the **whole** body, even when only the first 10 MB are shown. XPath runs on what is shown.
+- JSONPath shows its matches as a JSON array. jq shows each result on its own, like the `jq` command (`[.items[].price] | add` gives one number).
+- At most 10,000 results are shown. A mistake in the expression shows what is wrong in red, for example *Not a valid jq expression: expected a closing bracket*.
+- **Copy body** copies what the filter shows.
+
+AI agents can use the same filters: `send_request` takes a `filter` ([AI agents tools](../../agents/tools/)).
+
 ### Save to file
 
 **Save to file…** (the download icon) writes the **whole** body to a file you choose, not just what is shown: all bytes of a large or binary response, after decompression.
 
 Zorvik keeps the bodies of the last 30 responses (up to 512 MB together) for saving. For an older response it says *That response is no longer available; send the request again*.
+
+## Examples
+
+**Save as example** (above the response) keeps the response in the request, as documentation of what it answers and for mocks:
+
+- The example gets the status as its name (`200 OK`, `200 OK (2)`…), the status code, the response headers and the body. Framing headers, `Date` and `Set-Cookie` are left out: cookies can hold a session, and examples are saved in the workspace (and Git).
+- Bodies up to 1 MB of text are kept. Binary and larger responses can't be examples; use **Save to file**.
+- A saved request with no other unsaved changes is saved at once. Otherwise the example waits with your other changes until you save.
+
+The request's **Examples** tab lists them: pick one to see its headers and body, rename it, change its status or body, or delete it.
+
+[Mock APIs built from a folder](../../servers/from-openapi-and-folders/#from-a-folder-of-requests) answer with the examples: an example saved while the URL had query parameters answers only requests with those parameters, and the first one without answers the rest.
+
+Examples are imported from Postman collections (a request's saved responses) and are written to the request's file:
+
+```yaml
+examples:
+  - name: 200 OK
+    status: 200
+    headers:
+      - { key: Content-Type, value: application/json }
+    body: '{"id": 7, "name": "Rex"}'
+  - name: Not found
+    status: 404
+    url: "{{baseUrl}}/pets/999?include=owner"
+    body: '{"error": "not found"}'
+```
 
 ## Headers and Cookies
 

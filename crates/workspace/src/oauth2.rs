@@ -1,5 +1,5 @@
-//! OAuth 2.0 token acquisition: client credentials, password, and
-//! authorization code (+PKCE) via a loopback redirect.
+//! OAuth 2.0 token acquisition: client credentials, password, and authorization
+//! code (+PKCE) and implicit via a loopback redirect.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -134,7 +134,7 @@ pub async fn ensure_token(
     }
     let token = match config.grant_type {
         GrantType::ClientCredentials | GrantType::Password => request_token(client, opts, config, &[]).await?,
-        GrantType::AuthorizationCode => {
+        GrantType::AuthorizationCode | GrantType::Implicit => {
             return Err(auth_err("No valid OAuth 2.0 token. Open the Auth tab and click \"Get token\" to sign in."));
         }
     };
@@ -171,6 +171,8 @@ async fn request_token(
             form.push(("password", &config.password));
         }
         GrantType::AuthorizationCode => form.push(("grant_type", "authorization_code")),
+        // The implicit grant gets its token from the redirect, never from the token URL.
+        GrantType::Implicit => return Err(auth_err("The implicit grant gets its token by signing in")),
     }
     form.extend_from_slice(extra);
     post_token(client, opts, config, &form).await
@@ -284,7 +286,7 @@ pub fn authorization_url(config: &OAuth2Config, state: &str, challenge: Option<&
         .map_err(|e| auth_err(format!("Invalid authorization URL '{}': {e}", config.auth_url)))?;
     {
         let mut q = url.query_pairs_mut();
-        q.append_pair("response_type", "code");
+        q.append_pair("response_type", if config.grant_type == GrantType::Implicit { "token" } else { "code" });
         q.append_pair("client_id", &config.client_id);
         q.append_pair("redirect_uri", &config.redirect_uri);
         q.append_pair("state", state);
@@ -313,7 +315,8 @@ pub async fn authorization_code_flow(
     open_browser: impl FnOnce(&str) -> std::result::Result<(), String>,
     timeout: Duration,
 ) -> Result<TokenSet> {
-    if config.grant_type != GrantType::AuthorizationCode {
+    let implicit = config.grant_type == GrantType::Implicit;
+    if !implicit && config.grant_type != GrantType::AuthorizationCode {
         let token = request_token(client, opts, config, &[]).await?;
         cache.put(&cache_key(workspace, config), token.clone());
         return Ok(token);
@@ -332,13 +335,20 @@ pub async fn authorization_code_flow(
 
     let state = uuid::Uuid::new_v4().simple().to_string();
     let (verifier, challenge) = pkce_pair();
-    let url = authorization_url(config, &state, config.pkce.then_some(challenge.as_str()))?;
+    let url = authorization_url(config, &state, (config.pkce && !implicit).then_some(challenge.as_str()))?;
     open_browser(&url).map_err(|e| auth_err(format!("Could not open the browser: {e}")))?;
 
     let expected_path = redirect.path().to_string();
-    let code = tokio::time::timeout(timeout, wait_for_code(&listener, &expected_path, &state))
+    let want = if implicit { "access_token" } else { "code" };
+    let params = tokio::time::timeout(timeout, wait_for_redirect(&listener, &expected_path, &state, want))
         .await
         .map_err(|_| auth_err("Timed out waiting for the sign-in to finish in the browser"))??;
+    if implicit {
+        let token = implicit_token(&params)?;
+        cache.put(&cache_key(workspace, config), token.clone());
+        return Ok(token);
+    }
+    let code = params.get("code").cloned().unwrap_or_default();
 
     let mut extra = vec![("code", code.as_str()), ("redirect_uri", config.redirect_uri.as_str())];
     if config.pkce {
@@ -352,7 +362,35 @@ pub async fn authorization_code_flow(
 /// How long one connection to the redirect listener may take to send its request.
 const REDIRECT_READ_TIMEOUT: Duration = Duration::from_secs(3);
 
-async fn wait_for_code(listener: &tokio::net::TcpListener, path: &str, state: &str) -> Result<String> {
+/// The token the implicit grant's redirect carried (in its `#fragment`).
+fn implicit_token(params: &HashMap<String, String>) -> Result<TokenSet> {
+    let access_token = params
+        .get("access_token")
+        .filter(|t| !t.is_empty())
+        .cloned()
+        .ok_or_else(|| auth_err("The redirect did not include an access token"))?;
+    let now = now_ms();
+    let expires_in = params.get("expires_in").and_then(|v| v.parse::<i64>().ok());
+    Ok(TokenSet {
+        access_token,
+        token_type: params.get("token_type").cloned().unwrap_or_else(|| "Bearer".into()),
+        expires_at: expires_in.map(|s| now.saturating_add(s.saturating_mul(1000))),
+        refresh_token: None,
+        scope: params.get("scope").cloned(),
+        obtained_at: now,
+    })
+}
+
+/// Waits for the provider's redirect and returns its parameters once it belongs to this
+/// sign-in and carries `want` (`code`, or `access_token` for the implicit grant). The
+/// implicit grant puts them in the `#fragment`, which browsers never send: a redirect
+/// without parameters gets a page that sends the fragment back as a query.
+async fn wait_for_redirect(
+    listener: &tokio::net::TcpListener,
+    path: &str,
+    state: &str,
+    want: &str,
+) -> Result<HashMap<String, String>> {
     loop {
         let (mut sock, _) = listener.accept().await.map_err(|e| auth_err(format!("Redirect listener failed: {e}")))?;
         let mut buf = vec![0u8; 8192];
@@ -368,6 +406,10 @@ async fn wait_for_code(listener: &tokio::net::TcpListener, path: &str, state: &s
             continue;
         };
         let params: HashMap<String, String> = url.query_pairs().into_owned().collect();
+        if want == "access_token" && params.is_empty() {
+            let _ = sock.write_all(&fragment_page()).await;
+            continue;
+        }
         // Not from this sign-in (any web page can make the browser call this port): answer
         // it, but keep waiting, so it can neither complete nor cancel the sign-in.
         if params.get("state").map(String::as_str) != Some(state) {
@@ -381,19 +423,35 @@ async fn wait_for_code(listener: &tokio::net::TcpListener, path: &str, state: &s
                 format!("Sign-in failed: {error} {desc}"),
                 Err(auth_err(format!("Authorization failed: {error} {desc}"))),
             )
-        } else if let Some(code) = params.get("code") {
-            (true, "Signed in. You can close this tab and return to Zorvik.".to_string(), Ok(code.clone()))
-        } else {
+        } else if params.get(want).is_some_and(|v| !v.is_empty()) {
+            (true, "Signed in. You can close this tab and return to Zorvik.".to_string(), Ok(params))
+        } else if want == "code" {
             (
                 false,
                 "Sign-in failed: no code".to_string(),
                 Err(auth_err("Redirect did not include an authorization code")),
+            )
+        } else {
+            (
+                false,
+                "Sign-in failed: no token".to_string(),
+                Err(auth_err("The redirect did not include an access token")),
             )
         };
         let _ = sock.write_all(&redirect_page(ok, &message)).await;
         let _ = sock.shutdown().await;
         return result;
     }
+}
+
+/// Sends the implicit grant's `#fragment` back to the listener as a query string.
+fn fragment_page() -> Vec<u8> {
+    let html = "<!doctype html><meta charset=utf-8><title>Zorvik</title><body style=\"font-family:system-ui;padding:3em;text-align:center\"><p>Finishing sign-in…</p><script>var h=location.hash.slice(1);if(h){location.replace(location.pathname+'?'+h)}else{document.body.textContent='Sign-in failed: the redirect has no token.'}</script></body>";
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{html}",
+        html.len()
+    )
+    .into_bytes()
 }
 
 /// The page the browser shows after the redirect.

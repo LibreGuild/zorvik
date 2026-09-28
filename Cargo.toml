@@ -91,6 +91,14 @@ time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
 rand = "0.10"
 base64 = "0.23"
 sha2 = "0.11"
+# HTTP auth schemes: Digest (MD5), NTLM (MD4, HMAC-MD5); signatures and keys on ring.
+md-5 = "0.11"
+md4 = "0.11"
+hmac = "0.13"
+ring = "0.17"
+pem = "4"
+# RSA-SHA1 (OAuth 1.0a), which ring only verifies.
+num-bigint = "0.4"
 rusqlite = { version = "0.40", features = ["bundled"] }
 ts-rs = { version = "12", features = ["serde-json-impl"] }
 trash = "5"
@@ -104,6 +112,11 @@ indexmap = { version = "2", features = ["serde"] }
 dirs = "7"
 tempfile = "3"
 regex = "1"
+# Response filters: JSONPath (RFC 9535) and jq.
+serde_json_path = "0.7"
+jaq-core = "3.1"
+jaq-std = "3.0"
+jaq-json = "2.0"
 # Servers and low-level clients. Crates add the features they need; the TLS
 # stack must stay on `ring` (no aws-lc-rs: it needs CMake/NASM on Windows).
 hickory-proto = { version = "0.26", default-features = false }
@@ -119,6 +132,12 @@ windows-sys = "0.61"
 hdrhistogram = { version = "7.5", default-features = false }
 sysinfo = { version = "0.39", default-features = false }
 rlimit = "0.11"
+
+# QuickJS (C) optimized in debug builds too: unoptimized, its frames are so
+# large that scripts and libraries like ajv hit the script stack limit (about 80
+# nested calls instead of about 700).
+[profile.dev.package.rquickjs-sys]
+opt-level = 3
 
 [profile.release]
 codegen-units = 1

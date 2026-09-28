@@ -182,3 +182,59 @@ async fn a_forged_redirect_cannot_cancel_the_sign_in() {
     .unwrap();
     assert!(token.access_token.starts_with("access-"));
 }
+
+#[tokio::test]
+async fn implicit_grant_reads_the_token_from_the_fragment() {
+    let server = TestServer::start().await;
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let cfg = OAuth2Config {
+        redirect_uri: format!("http://127.0.0.1:{port}/callback"),
+        ..config(&server, GrantType::Implicit)
+    };
+    // A stand-in for the browser: the provider redirects to `callback#access_token=…`; the
+    // browser loads `callback` (no fragment on the wire), and the page sends the fragment back.
+    let browser = move |url: &str| {
+        let authorize = url::Url::parse(url).unwrap();
+        let params: std::collections::HashMap<String, String> = authorize.query_pairs().into_owned().collect();
+        assert_eq!(params["response_type"], "token");
+        assert!(!params.contains_key("code_challenge"), "no PKCE for the implicit grant");
+        let state = params["state"].clone();
+        tokio::spawn(async move {
+            let get = |url: String| zorvik_engine::HttpRequest {
+                method: "GET".into(),
+                url,
+                headers: vec![],
+                body: Default::default(),
+            };
+            let page = Client::new()
+                .send(get(format!("http://127.0.0.1:{port}/callback")), &RequestOptions::default(), None)
+                .await
+                .unwrap();
+            assert!(String::from_utf8_lossy(&page.body).contains("location.hash"));
+            let back = format!(
+                "http://127.0.0.1:{port}/callback?access_token=implicit-1&token_type=Bearer&expires_in=3600&state={state}"
+            );
+            let resp = Client::new().send(get(back), &RequestOptions::default(), None).await.unwrap();
+            assert!(String::from_utf8_lossy(&resp.body).contains("Done"));
+        });
+        Ok(())
+    };
+    let cache = TokenCache::in_memory();
+    let token = authorization_code_flow(
+        &Client::new(),
+        &RequestOptions::default(),
+        &cfg,
+        &cache,
+        "w",
+        browser,
+        Duration::from_secs(20),
+    )
+    .await
+    .unwrap();
+    assert_eq!((token.access_token.as_str(), token.refresh_token.as_deref()), ("implicit-1", None));
+    assert!(token.is_fresh());
+    assert_eq!(cache.get(&cache_key("w", &cfg)).unwrap().access_token, "implicit-1");
+    // Later sends use the cached token without signing in again.
+    let again = ensure_token(&Client::new(), &RequestOptions::default(), &cfg, &cache, "w").await.unwrap();
+    assert_eq!(again.access_token, "implicit-1");
+}

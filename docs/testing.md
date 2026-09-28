@@ -15,10 +15,13 @@ E2E needs the CLI built once, because the AI agent tests start the real `zorvik 
 | Area | Tests |
 |---|---|
 | Networking | `crates/engine/tests/`: HTTP/1.1, HTTP/2, TLS, proxies, redirects and decoding (`http_client.rs`), WebSocket and SSE (`streaming.rs`), TCP (`socket.rs`), UDP, DNS, MQTT, HTTP/3, gRPC, the load-test connection pool (`pool.rs`), network tools |
-| Workspace and auth | `crates/workspace/tests/`: files on disk (`store.rs`), OAuth 2.0 flows (`oauth.rs`) |
+| Workspace and auth | `crates/workspace/tests/`: files on disk (`store.rs`), OAuth 2.0 flows including the implicit grant's fragment hand-off (`oauth.rs`), Digest and NTLM handshakes against the test servers (`auth.rs`); the published test vectors of every auth scheme (RFCs, MS-NLMP, the AWS SigV4 suite, Akamai, Hawk, JWT) inline in `crates/workspace/src/auth/` |
 | Import and export | inline tests in `crates/formats/src/{curl,postman,openapi,mock,snippet}.rs` (`snippet` has an ignored test that syntax-checks the generated code with node, python3 and swiftc: `cargo test -p zorvik-formats snippet -- --ignored`) |
 | API specs | `crates/formats/src/spec_check.rs` (the schema checks), `crates/api/src/spec_update.rs` (merging edits), `crates/api/tests/api.rs` (import keeps the spec, responses checked, preview and update, base URL prompt) |
-| Scripts | `crates/script/src/tests.rs` (the `pm` API, sandbox limits), `crates/api/tests/scripts.rs` (scripts around real sends) |
+| Dynamic variables | `crates/workspace/src/dynamic/tests.rs`: every Postman name exists, every value has its format, check digits (Luhn, IBAN, ISBN, EAN, Base58Check), ordered IDs, date offsets, bad arguments; it also writes the website's reference table |
+| Response filters | `crates/formats/src/filter.rs` (JSONPath, jq, errors, cut-off), `app/src/components/response/filterModel.test.ts` (XPath) |
+| Scripts | `crates/script/src/tests.rs` (the `pm` API, sandbox limits, `pm.sendRequest`, cookies, timers, promise errors, visualizer, `jsonSchema`, with a fake host), `crates/script/src/libs/tests.rs` (the bundled libraries), `crates/api/tests/scripts.rs` (scripts around real sends: a token fetched with `pm.sendRequest`, the cookie jar, skip, visualize) |
+| Auth in sends | `crates/api/tests/auth.rs`: Digest and NTLM against the test servers, every signing type reaching the server signed, errors, load tests refusing challenge auth |
 | App API | `crates/api/tests/`: RPC methods, GraphQL, gRPC, DNS, MQTT, mocks, the collection runner (repeat until, event streams, skip reasons), load tests |
 | Servers | `crates/servers/tests/`: every server kind on port 0, driven by real clients |
 | Load generator | `crates/load/tests/runner.rs`: both models against real servers (counts, ramps, overload latency, stop, errors, data rows per user, capture chains, timing phases, Server-Timing); JSON paths, captures and Server-Timing parsing in `crates/load/src/capture.rs` |
@@ -26,7 +29,7 @@ E2E needs the CLI built once, because the AI agent tests start the real `zorvik 
 | AI agents | `crates/mcp/tests/agents.rs` (bridge, listener, token proof, confirmations; mock servers built, started and inspected; variables, history, streams, files and exports) and `app/e2e/agents.spec.ts` |
 | Training Bootcamp | `crates/academy` (the course loads and validates, patterns, XP and badge rules), `crates/api/tests/academy.rs` (every lab finished step by step with its solutions; progress, rewards, reset), `app/src/components/academy/academy.test.ts`, `app/e2e/academy.spec.ts`. One lab: `ACADEMY_LESSON=<id> cargo test -p zorvik-api --test academy` |
 | UI logic | `app/src/**/*.test.ts(x)` (Vitest, jsdom) |
-| User flows | `app/e2e/*.spec.ts`: requests, GraphQL, gRPC, scripts, runner, load tests, servers, docs, appearance, AI agents, the Academy |
+| User flows | `app/e2e/*.spec.ts`: requests, response filters and examples (`responses.spec.ts`), the auth forms, GraphQL, gRPC, scripts, runner, load tests, servers, docs, appearance, AI agents, the Academy |
 
 ## End-to-end setup
 `app/playwright.config.ts` starts three things, on ports chosen to avoid clashes with your own servers:
@@ -37,7 +40,7 @@ E2E needs the CLI built once, because the AI agent tests start the real `zorvik 
 The browser drives the production UI against the production API, so E2E covers the same code the desktop app runs. Locally it reuses servers that are already running; CI starts fresh ones.
 
 ## Test servers (`crates/testkit`)
-- **`TestServer`**: HTTP/1.1 and h2c, or TLS with h2 through ALPN and a generated CA. Endpoints include `/echo`, `/anything/*`, `/status/{code}`, `/redirect/{n}`, `/delay/{ms}`, `/gzip`, `/brotli`, `/bytes/{n}`, `/cookies`, `/basic-auth/{user}/{pass}`, `/bearer`, `/json`, `/sse`, `/ws` (echo), `/graphql` and `/graphql-auth`.
+- **`TestServer`**: HTTP/1.1 and h2c, or TLS with h2 through ALPN and a generated CA. Endpoints include `/echo`, `/anything/*`, `/status/{code}`, `/redirect/{n}`, `/delay/{ms}`, `/gzip`, `/brotli`, `/bytes/{n}`, `/cookies`, `/basic-auth/{user}/{pass}`, `/bearer`, `/digest-auth/{qop}/{user}/{passwd}[/{algorithm}]` (httpbin-style Digest), `/ntlm/{domain}/{user}/{passwd}` (NTLMv2, one handshake per connection), `/json`, `/sse`, `/ws` (echo), `/graphql` and `/graphql-auth`.
 - **`TestProxy`**: CONNECT and forward proxy with optional Basic auth.
 - **`H3TestServer`**: HTTP/3 over QUIC.
 - **OAuth 2.0 server**: client credentials, password, authorization code with PKCE, refresh.

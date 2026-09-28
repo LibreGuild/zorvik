@@ -9,8 +9,10 @@ use serde_json::{Map, Value};
 
 use crate::import::{ImportError, ImportedCollection, ImportedItem};
 use crate::model::{
-    ApiKeyLocation, Auth, Body, BodyType, ClientAuthMethod, DEFAULT_REDIRECT_URI, Environment, FolderMeta, GrantType,
-    GraphqlBody, KeyValue, MultipartField, OAuth2Config, Request, RequestKind, RequestSettings, Scripts, Variable,
+    ApiKeyLocation, AsapConfig, Auth, AwsSigV4Config, Body, BodyType, ClientAuthMethod, DEFAULT_REDIRECT_URI,
+    EdgeGridConfig, Environment, Example, FolderMeta, GrantType, GraphqlBody, HawkAlgorithm, HawkConfig, JwtAlgorithm,
+    JwtConfig, KeyValue, MAX_EXAMPLE_BODY, MultipartField, OAuth1Config, OAuth1Method, OAuth2Config, Request,
+    RequestKind, RequestSettings, Scripts, Variable,
 };
 
 /// Import a Postman collection (schema v2.0 or v2.1).
@@ -132,15 +134,8 @@ fn check_collection_shape(obj: &Map<String, Value>) -> Result<(), ImportError> {
 }
 
 /// Script APIs Zorvik doesn't have: text to look for, name for the warning.
-const UNSUPPORTED_APIS: &[(&str, &str)] = &[
-    ("pm.sendRequest", "pm.sendRequest"),
-    ("require(", "require"),
-    ("setTimeout", "setTimeout"),
-    ("setInterval", "setInterval"),
-    ("pm.cookies", "pm.cookies"),
-    ("pm.visualizer", "pm.visualizer"),
-    ("CryptoJS", "CryptoJS"),
-];
+const UNSUPPORTED_APIS: &[(&str, &str)] =
+    &[("pm.vault", "pm.vault"), ("pm.execution.runRequest", "pm.execution.runRequest")];
 
 #[derive(Default)]
 struct Importer {
@@ -239,7 +234,32 @@ impl Importer {
         if req.docs.is_empty() {
             req.docs = description(obj.get("description"));
         }
+        req.examples = self.examples(obj.get("response"), &req.url, &label);
         ImportedItem::Request(req)
+    }
+
+    /// Saved responses (`response`): Postman's examples.
+    fn examples(&mut self, v: Option<&Value>, url: &str, label: &str) -> Vec<Example> {
+        let mut examples = Vec::new();
+        for (i, r) in list(v).filter_map(Value::as_object).enumerate() {
+            let mut body = r.get("body").map(text).unwrap_or_default();
+            if body.len() > MAX_EXAMPLE_BODY {
+                self.warn(format!("{label}: example {} is larger than 1 MB; its body was left out.", i + 1));
+                body.clear();
+            }
+            let mut sent = Request::new("", RequestKind::Http);
+            if let Some(Value::Object(original)) = r.get("originalRequest") {
+                apply_url(original.get("url"), &mut sent);
+            }
+            examples.push(Example {
+                name: trimmed(r.get("name")).unwrap_or_else(|| format!("Example {}", i + 1)),
+                status: r.get("code").and_then(Value::as_u64).and_then(|c| u16::try_from(c).ok()).unwrap_or(200),
+                headers: headers(r.get("header")),
+                body,
+                url: if sent.url == url { String::new() } else { sent.url },
+            });
+        }
+        examples
     }
 
     /// `event` scripts: `prerequest` → pre-request, `test` → post-response.
@@ -403,11 +423,118 @@ impl Importer {
                 location: if get("in") == "query" { ApiKeyLocation::Query } else { ApiKeyLocation::Header },
             },
             "oauth2" => self.oauth2(&p, label),
+            "digest" => Auth::Digest { username: get("username"), password: get("password") },
+            "ntlm" => Auth::Ntlm {
+                username: get("username"),
+                password: get("password"),
+                domain: get("domain"),
+                workstation: get("workstation"),
+            },
+            "awsv4" => Auth::AwsSigV4(AwsSigV4Config {
+                access_key: get("accessKey"),
+                secret_key: get("secretKey"),
+                session_token: get("sessionToken"),
+                region: get("region"),
+                service: get("service"),
+                location: if flag(p.get("addAuthDataToQuery")) {
+                    ApiKeyLocation::Query
+                } else {
+                    ApiKeyLocation::Header
+                },
+            }),
+            "oauth1" => self.oauth1(&p, label),
+            "jwt" => {
+                let algorithm = jwt_algorithm(&get("algorithm")).unwrap_or_else(|| {
+                    self.warn(format!("{label}: JWT algorithm '{}' is not supported; using HS256.", get("algorithm")));
+                    JwtAlgorithm::HS256
+                });
+                let secret = if algorithm.uses_secret() { get("secret") } else { get("privateKey") };
+                Auth::Jwt(JwtConfig {
+                    algorithm,
+                    secret,
+                    secret_base64: flag(p.get("isSecretBase64Encoded")),
+                    payload: match get("payload") {
+                        s if s.trim().is_empty() => "{}".into(),
+                        s => s,
+                    },
+                    header: get("header"),
+                    prefix: p.get("headerPrefix").map(text).unwrap_or_else(|| "Bearer".into()),
+                    location: if get("addTokenTo") == "queryParam" {
+                        ApiKeyLocation::Query
+                    } else {
+                        ApiKeyLocation::Header
+                    },
+                    query_param: trimmed(p.get("queryParamKey")).unwrap_or_else(|| "token".into()),
+                })
+            }
+            "hawk" => Auth::Hawk(HawkConfig {
+                id: get("authId"),
+                key: get("authKey"),
+                algorithm: if get("algorithm").eq_ignore_ascii_case("sha1") {
+                    HawkAlgorithm::Sha1
+                } else {
+                    HawkAlgorithm::Sha256
+                },
+                ext: get("extraData"),
+                app: get("app"),
+                dlg: get("delegation"),
+                include_payload_hash: flag(p.get("includePayloadHash")),
+            }),
+            "edgegrid" => Auth::EdgeGrid(EdgeGridConfig {
+                client_token: get("clientToken"),
+                client_secret: get("clientSecret"),
+                access_token: get("accessToken"),
+                headers_to_sign: get("headersToSign"),
+                ..EdgeGridConfig::default()
+            }),
+            "asap" => Auth::Asap(AsapConfig {
+                issuer: get("iss"),
+                subject: get("sub"),
+                audience: get("aud"),
+                key_id: get("kid"),
+                private_key: get("privateKey"),
+                algorithm: jwt_algorithm(&get("alg")).unwrap_or(JwtAlgorithm::RS256),
+                expires_in: expiry_seconds(&get("exp")).unwrap_or(3600),
+                claims: get("claims"),
+            }),
             other => {
                 self.warn(format!("{label}: '{other}' auth is not supported; imported with no auth."));
                 Auth::None
             }
         }
+    }
+
+    fn oauth1(&mut self, p: &Map<String, Value>, label: &str) -> Auth {
+        let get = |k: &str| p.get(k).map(text).unwrap_or_default();
+        let signature_method = match get("signatureMethod").trim().to_ascii_uppercase().as_str() {
+            "" | "HMAC-SHA1" => OAuth1Method::HmacSha1,
+            "HMAC-SHA256" => OAuth1Method::HmacSha256,
+            "HMAC-SHA512" => OAuth1Method::HmacSha512,
+            "RSA-SHA1" => OAuth1Method::RsaSha1,
+            "RSA-SHA256" => OAuth1Method::RsaSha256,
+            "RSA-SHA512" => OAuth1Method::RsaSha512,
+            "PLAINTEXT" => OAuth1Method::Plaintext,
+            other => {
+                self.warn(format!("{label}: OAuth 1.0 signature method '{other}' is not supported; using HMAC-SHA1."));
+                OAuth1Method::HmacSha1
+            }
+        };
+        // Postman's default is the header; `addParamsToHeader: false` means the query or body.
+        let in_header = p.get("addParamsToHeader").is_none_or(|v| flag(Some(v)));
+        Auth::OAuth1(OAuth1Config {
+            consumer_key: get("consumerKey"),
+            consumer_secret: get("consumerSecret"),
+            token: get("token"),
+            token_secret: get("tokenSecret"),
+            signature_method,
+            private_key: get("privateKey"),
+            callback: get("callback"),
+            verifier: get("verifier"),
+            realm: get("realm"),
+            include_version: p.get("version").is_none_or(|v| !text(v).trim().is_empty()),
+            include_body_hash: flag(p.get("includeBodyHash")),
+            location: if in_header { ApiKeyLocation::Header } else { ApiKeyLocation::Query },
+        })
     }
 
     fn oauth2(&mut self, p: &Map<String, Value>, label: &str) -> Auth {
@@ -431,12 +558,7 @@ impl Importer {
             "password_credentials" | "password" => (GrantType::Password, true),
             "authorization_code_with_pkce" => (GrantType::AuthorizationCode, true),
             "authorization_code" | "" => (GrantType::AuthorizationCode, false),
-            "implicit" => {
-                self.warn(format!(
-                    "{label}: the OAuth 2.0 implicit grant is not supported; imported as authorization code with PKCE."
-                ));
-                (GrantType::AuthorizationCode, true)
-            }
+            "implicit" => (GrantType::Implicit, false),
             other => {
                 self.warn(format!(
                     "{label}: OAuth 2.0 grant type '{other}' is not supported; imported as authorization code."
@@ -448,7 +570,7 @@ impl Importer {
         let mut redirect_uri = get_trimmed("redirect_uri");
         if redirect_uri.is_empty() || redirect_uri.starts_with("https://oauth.pstmn.io/") {
             redirect_uri = DEFAULT_REDIRECT_URI.to_string();
-            if grant_type == GrantType::AuthorizationCode {
+            if matches!(grant_type, GrantType::AuthorizationCode | GrantType::Implicit) {
                 self.warn(format!(
                     "{label}: OAuth 2.0 redirect URI set to {DEFAULT_REDIRECT_URI}; register this URI with the provider."
                 ));
@@ -499,6 +621,24 @@ impl Importer {
             header_prefix,
         })
     }
+}
+
+fn jwt_algorithm(name: &str) -> Option<JwtAlgorithm> {
+    serde_json::from_value(Value::String(name.trim().to_ascii_uppercase())).ok()
+}
+
+/// `3600`, `60s`, `15m` or `1h` (Postman's ASAP expiry) in seconds.
+fn expiry_seconds(text: &str) -> Option<u32> {
+    let t = text.trim();
+    let (number, unit) = t.find(|c: char| !c.is_ascii_digit()).map_or((t, ""), |i| t.split_at(i));
+    let n: u32 = number.parse().ok()?;
+    let factor = match unit.trim() {
+        "" | "s" => 1,
+        "m" => 60,
+        "h" => 3600,
+        _ => return None,
+    };
+    n.checked_mul(factor)
 }
 
 /// Where a warning about a child of `parent` points.
@@ -1273,23 +1413,88 @@ mod tests {
     fn unsupported_auth_becomes_none_with_warning() {
         let c = import(
             r#"{"info": {"name": "Legacy", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
-                "auth": {"type": "awsv4", "awsv4": [{"key": "region", "value": "eu-west-1"}]},
-                "item": [{"name": "Signed", "auth": {"type": "hawk", "hawk": []}, "item": [
-                    {"name": "Digest", "request": {"url": "https://x.test", "auth": {"type": "digest", "digest": [
-                        {"key": "username", "value": "u"}]}}}
-                ]}]}"#,
+                "auth": {"type": "kerberos", "kerberos": []},
+                "item": [{"name": "Plain", "request": {"url": "https://x.test"}}]}"#,
         );
         assert_eq!(c.auth, Auth::None);
-        assert_eq!(folder(&c.items, "Signed").0.auth, Auth::None);
-        assert_eq!(request(&c, "Digest").auth, Auth::None);
+        assert_eq!(c.warnings, ["Collection: 'kerberos' auth is not supported; imported with no auth."]);
+    }
+
+    #[test]
+    fn signing_auth_types() {
+        let c = import(&collection(
+            r#"
+            {"name": "Digest", "request": {"url": "https://x.test", "auth": {"type": "digest", "digest": [
+                {"key": "username", "value": "u"}, {"key": "password", "value": "p"}, {"key": "algorithm", "value": "MD5"}]}}},
+            {"name": "NTLM", "request": {"url": "https://x.test", "auth": {"type": "ntlm", "ntlm": [
+                {"key": "username", "value": "u"}, {"key": "password", "value": "p"}, {"key": "domain", "value": "CORP"}]}}},
+            {"name": "AWS", "request": {"url": "https://x.test", "auth": {"type": "awsv4", "awsv4": [
+                {"key": "accessKey", "value": "AKID"}, {"key": "secretKey", "value": "{{aws_secret}}"},
+                {"key": "region", "value": "eu-west-1"}, {"key": "service", "value": "execute-api"},
+                {"key": "addAuthDataToQuery", "value": true}]}}},
+            {"name": "OAuth1", "request": {"url": "https://x.test", "auth": {"type": "oauth1", "oauth1": [
+                {"key": "consumerKey", "value": "ck"}, {"key": "consumerSecret", "value": "cs"},
+                {"key": "signatureMethod", "value": "HMAC-SHA256"}, {"key": "addParamsToHeader", "value": false},
+                {"key": "version", "value": "1.0"}, {"key": "includeBodyHash", "value": true}]}}},
+            {"name": "JWT", "request": {"url": "https://x.test", "auth": {"type": "jwt", "jwt": [
+                {"key": "algorithm", "value": "RS256"}, {"key": "privateKey", "value": "-----BEGIN PRIVATE KEY-----"},
+                {"key": "payload", "value": "{\"sub\": \"1\"}"}, {"key": "addTokenTo", "value": "queryParam"},
+                {"key": "queryParamKey", "value": "jwt"}]}}},
+            {"name": "Hawk", "request": {"url": "https://x.test", "auth": {"type": "hawk", "hawk": [
+                {"key": "authId", "value": "id"}, {"key": "authKey", "value": "k"}, {"key": "algorithm", "value": "sha1"},
+                {"key": "extraData", "value": "e"}, {"key": "includePayloadHash", "value": true}]}}},
+            {"name": "EdgeGrid", "request": {"url": "https://x.test", "auth": {"type": "edgegrid", "edgegrid": [
+                {"key": "accessToken", "value": "at"}, {"key": "clientToken", "value": "ct"},
+                {"key": "clientSecret", "value": "sec"}]}}},
+            {"name": "ASAP", "request": {"url": "https://x.test", "auth": {"type": "asap", "asap": [
+                {"key": "iss", "value": "svc"}, {"key": "aud", "value": "api"}, {"key": "kid", "value": "svc/1"},
+                {"key": "privateKey", "value": "pem"}, {"key": "exp", "value": "15m"}]}}}
+            "#,
+        ));
+        assert!(c.warnings.is_empty(), "{:?}", c.warnings);
+        assert_eq!(request(&c, "Digest").auth, Auth::Digest { username: "u".into(), password: "p".into() });
         assert_eq!(
-            c.warnings,
-            [
-                "Collection: 'awsv4' auth is not supported; imported with no auth.",
-                "Folder 'Signed': 'hawk' auth is not supported; imported with no auth.",
-                "Request 'Signed / Digest': 'digest' auth is not supported; imported with no auth.",
-            ]
+            request(&c, "NTLM").auth,
+            Auth::Ntlm { username: "u".into(), password: "p".into(), domain: "CORP".into(), workstation: "".into() }
         );
+        let Auth::AwsSigV4(aws) = &request(&c, "AWS").auth else { panic!("aws") };
+        assert_eq!(
+            (aws.access_key.as_str(), aws.secret_key.as_str(), aws.region.as_str(), aws.service.as_str(), aws.location),
+            ("AKID", "{{aws_secret}}", "eu-west-1", "execute-api", ApiKeyLocation::Query)
+        );
+        let Auth::OAuth1(o1) = &request(&c, "OAuth1").auth else { panic!("oauth1") };
+        assert_eq!(
+            (o1.signature_method, o1.location, o1.include_version, o1.include_body_hash),
+            (OAuth1Method::HmacSha256, ApiKeyLocation::Query, true, true)
+        );
+        let Auth::Jwt(jwt) = &request(&c, "JWT").auth else { panic!("jwt") };
+        assert_eq!(
+            (jwt.algorithm, jwt.secret.as_str(), jwt.location, jwt.query_param.as_str()),
+            (JwtAlgorithm::RS256, "-----BEGIN PRIVATE KEY-----", ApiKeyLocation::Query, "jwt")
+        );
+        let Auth::Hawk(hawk) = &request(&c, "Hawk").auth else { panic!("hawk") };
+        assert_eq!((hawk.algorithm, hawk.ext.as_str(), hawk.include_payload_hash), (HawkAlgorithm::Sha1, "e", true));
+        let Auth::EdgeGrid(eg) = &request(&c, "EdgeGrid").auth else { panic!("edgegrid") };
+        assert_eq!((eg.client_secret.as_str(), eg.max_body), ("sec", 131_072));
+        let Auth::Asap(asap) = &request(&c, "ASAP").auth else { panic!("asap") };
+        assert_eq!((asap.key_id.as_str(), asap.expires_in, asap.algorithm), ("svc/1", 900, JwtAlgorithm::RS256));
+    }
+
+    #[test]
+    fn examples_are_imported() {
+        let r = one(r#"{"name": "Get user", "request": {"method": "GET", "url": "https://api.test/users/1"},
+                "response": [
+                    {"name": "Found", "code": 200, "header": [{"key": "Content-Type", "value": "application/json"}],
+                     "body": "{\"id\": 1}", "originalRequest": {"method": "GET", "url": "https://api.test/users/1"}},
+                    {"code": 404, "body": "", "originalRequest": {"method": "GET", "url": {
+                        "raw": "https://api.test/users/9?full=1", "query": [{"key": "full", "value": "1"}]}}}
+                ]}"#);
+        assert_eq!(r.examples.len(), 2);
+        assert_eq!((r.examples[0].name.as_str(), r.examples[0].status), ("Found", 200));
+        assert_eq!(r.examples[0].headers, vec![KeyValue::new("Content-Type", "application/json")]);
+        assert_eq!((r.examples[0].body.as_str(), r.examples[0].url.as_str()), (r#"{"id": 1}"#, ""));
+        assert_eq!((r.examples[1].name.as_str(), r.examples[1].status), ("Example 2", 404));
+        assert_eq!(r.examples[1].url, "https://api.test/users/9?full=1");
     }
 
     #[test]
@@ -1363,7 +1568,7 @@ mod tests {
         assert_eq!(password.header_prefix, "");
 
         let Auth::OAuth2(implicit) = &request(&c, "Implicit").auth else { panic!("oauth2") };
-        assert_eq!(implicit.grant_type, GrantType::AuthorizationCode);
+        assert_eq!(implicit.grant_type, GrantType::Implicit);
         assert_eq!(implicit.redirect_uri, "http://localhost:8080/cb");
 
         assert_eq!(
@@ -1375,9 +1580,8 @@ mod tests {
         assert!(warned("'PKCE'", "register this URI"), "{:?}", c.warnings);
         assert!(warned("'PKCE'", "resource"));
         assert!(!c.warnings.iter().any(|w| w.contains("ignored")));
-        assert!(warned("'Implicit'", "implicit grant"));
         assert!(warned("'Saved token'", "Bearer"));
-        assert_eq!(c.warnings.len(), 4, "{:?}", c.warnings);
+        assert_eq!(c.warnings.len(), 3, "{:?}", c.warnings);
     }
 
     #[test]
@@ -1413,12 +1617,12 @@ mod tests {
         let item = |name: &str, code: &str| json!({"name": name, "event": [{"listen": "prerequest", "script": {"exec": [code]}}], "request": {"url": "https://x.test"}});
         let c = import(
             &json!({"info": {"name": "U"}, "item": [
-                item("A", "pm.sendRequest('https://x.test', (e, r) => {}); setTimeout(() => {}, 1);"),
-                item("B", "const _ = require('lodash');"),
-                item("C", "pm.sendRequest('x');"),
-                item("D", "pm.sendRequest('x');"),
-                item("E", "pm.sendRequest('x'); pm.sendRequest('y');"),
-                {"name": "F", "event": [{"listen": "test", "script": {"exec": "pm.visualizer.set('')"}}], "item": []},
+                item("A", "pm.vault.get('k'); pm.execution.runRequest('x');"),
+                item("B", "const _ = require('lodash'); pm.sendRequest('x', () => {}); setTimeout(() => {}, 1);"),
+                item("C", "pm.vault.get('a');"),
+                item("D", "pm.vault.get('b');"),
+                item("E", "pm.vault.get('c'); pm.vault.get('d');"),
+                {"name": "F", "event": [{"listen": "test", "script": {"exec": "pm.execution.runRequest('')"}}], "item": []},
                 {"name": "G", "event": [{"listen": "shutdown", "script": {"exec": "x()"}}], "request": {"url": "https://x.test"}}
             ]})
             .to_string(),
@@ -1427,13 +1631,11 @@ mod tests {
             c.warnings,
             [
                 "Request 'G': skipped a 'shutdown' script (only pre-request and test scripts run).",
-                "4 scripts use pm.sendRequest, which Zorvik does not support (it fails when run): Request 'A', Request 'C', Request 'D', ….",
-                "1 script uses setTimeout, which Zorvik does not support (it fails when run): Request 'A'.",
-                "1 script uses require, which Zorvik does not support (it fails when run): Request 'B'.",
-                "1 script uses pm.visualizer, which Zorvik does not support (it fails when run): Folder 'F'.",
+                "4 scripts use pm.vault, which Zorvik does not support (it fails when run): Request 'A', Request 'C', Request 'D', ….",
+                "2 scripts use pm.execution.runRequest, which Zorvik does not support (it fails when run): Request 'A', Folder 'F'.",
             ]
         );
-        assert!(request(&c, "C").scripts.pre_request.contains("pm.sendRequest"), "imported anyway");
+        assert!(request(&c, "C").scripts.pre_request.contains("pm.vault"), "imported anyway");
     }
 
     #[test]

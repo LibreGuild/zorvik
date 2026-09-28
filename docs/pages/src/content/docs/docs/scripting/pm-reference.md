@@ -16,10 +16,14 @@ Signatures use TypeScript-style notation. `?` marks an optional argument.
 | `pm` | The script API described on this page |
 | `console` | Script console: `log`, `info`, `warn`, `error`, `debug`, `dir`, `trace`, `clear` |
 | `atob(text)`, `btoa(text)` | Base64 decode and encode (Latin-1 text) |
+| `require(name)`, `pm.require(name)` | The [built-in libraries](../sandbox/#libraries): lodash, crypto-js, moment, ajv, … |
+| `CryptoJS`, `_`, `tv4`, `cheerio` | Postman's library globals: crypto-js, lodash, tv4 and cheerio, loaded when first used |
+| `xml2Json(text)` | XML to a JSON object, as in Postman (xml2js; a single child element is not an array). Throws for text that isn't XML |
+| `crypto.getRandomValues(array)`, `crypto.randomUUID()` | Secure random numbers and UUIDs |
 | `postman`, `tests`, `responseBody`, `responseCode`, `responseHeaders`, `responseTime`, `environment`, `globals`, `data`, `iteration` | The [legacy Postman API](#legacy-postman-api) |
 | Standard JavaScript | `JSON`, `Math`, `Date`, `RegExp`, `Array`, `Object`, `Map`, `Set`, `Promise`, `queueMicrotask`, typed arrays and the other built-ins of the language |
 
-See [Sandbox and limits](../sandbox/) for what is not available (network, files, timers, modules).
+See [Sandbox and limits](../sandbox/) for what is not available (network, files, timers, npm packages).
 
 ## pm.info
 
@@ -288,6 +292,7 @@ Available in post-response scripts. In pre-request scripts `pm.response` is `und
 | `text()` | string | The body as text (invalid UTF-8 replaced) |
 | `json()` | any | The body parsed as JSON. Throws `SyntaxError: pm.response.json(): the response body is not valid JSON (…)` when it isn't. |
 | `to` | response assertion | Chai-style assertions on the response; see [Response assertions](../assertions/#response-assertions) |
+| `cookies` | cookie list | The cookies this response set (`Set-Cookie`); see [pm.cookies](#pmcookies) for its methods |
 | `events` | `{event, data, id}[]` | Only for Server-Sent Events requests in a collection run; see below |
 | `toJSON()` | object | `{ code, status, header: [{key, value}], body }` |
 
@@ -367,7 +372,7 @@ Passing `pm.response` to `pm.expect` gives the [response assertions](../assertio
 | Member | Description |
 |---|---|
 | `pm.execution.setNextRequest(name: string or null)` | In a collection run, which request runs next |
-| `pm.execution.skipRequest()` | Not supported: throws `pm.execution.skipRequest is not supported in Zorvik` |
+| `pm.execution.skipRequest()` | In a pre-request script: don't send this request. A single send shows **Not sent**; a collection run reports it as skipped (with the reason) and goes on. In a post-response script it does nothing. |
 
 `setNextRequest` takes a request's name, or its path under `requests/` (as in `pm.info.requestId`). After the current request finishes, the run continues with that request instead of the next one in the list. `setNextRequest(null)` ends the current iteration.
 
@@ -383,6 +388,82 @@ Passing `pm.response` to `pm.expect` gives the [response assertions](../assertio
 if (pm.response.json().status !== "done") {
   pm.execution.setNextRequest("Check job");   // run this request again
 }
+```
+
+## pm.sendRequest
+
+Sends another request from a script: to get a token before the request, to create test data, or to clean up after it.
+
+```js title="Pre-request script: get a token first"
+const res = await pm.sendRequest({
+  url: pm.variables.replaceIn("{{baseUrl}}/login"),
+  method: "POST",
+  header: { "Content-Type": "application/json" },
+  body: { mode: "raw", raw: JSON.stringify({ user: pm.environment.get("user"), password: pm.environment.get("password") }) },
+});
+pm.request.headers.upsert({ key: "Authorization", value: "Bearer " + res.json().token });
+```
+
+| Form | |
+|---|---|
+| `pm.sendRequest(url)` | A `GET` of that URL |
+| `pm.sendRequest({ url, method, header, body })` | `header`: `[{key, value, disabled}]`, `{ name: value }` or `"Name: value"` lines. `body.mode`: `raw` (`raw` text; with `options.raw.language: "json"` it gets `Content-Type: application/json`), `urlencoded` (`[{key, value}]`), `formdata` (text fields), `graphql` (`{query, variables}`) |
+| `pm.sendRequest(request, (err, res) => …)` | Calls back later with an error or the [response](#pmresponse) (with `code`, `headers`, `json()`, `cookies`…) |
+| `await pm.sendRequest(request)` | Without a callback it returns a promise. `await` works at the top level of a script. |
+
+- `{{variables}}` in the request are **not** filled in, as in Postman: use `pm.variables.replaceIn`.
+- It uses the app's settings (proxy, certificates, the cookie jar) and the time left of the script's [time limit](../sandbox/#limits). A request an AI agent's run makes may only go to hosts the user approved.
+- Each call shows in the Console: `pm.sendRequest POST https://api.test/login → 200 OK`.
+- A script can send up to 100 requests. A failure (no connection, a timeout) reaches the callback as `err`, or rejects the promise.
+
+## pm.cookies
+
+The cookies the [cookie jar](../../requests/cookies/) sends to this request's URL (before sending in a pre-request script, after the response in a post-response script). `pm.response.cookies` has the same methods for the cookies the response set.
+
+| Method | Returns |
+|---|---|
+| `get(name)` | The value, or `undefined` |
+| `has(name, value?)` | Whether the cookie is there (with that value) |
+| `one(name)` | `{ name, value, domain, path, expires, secure, httpOnly }` |
+| `all()`, `toObject()`, `count()`, `each(fn)`, `filter(fn)`, `map(fn)` | The list, `{ name: value }`, how many, … |
+
+`pm.cookies.jar()` reads and changes the jar, for the request's own site only (the same host, or its subdomains or parent domain): another site's cookies are refused with *Scripts can only use the cookies of the request's own site*.
+
+| Method | Does |
+|---|---|
+| `get(url, name, (err, value) => …)` | One cookie's value |
+| `getAll(url, (err, cookies) => …)` | Every cookie for that URL |
+| `set(url, name, value, (err) => …)` | Store a cookie (path `/`) |
+| `unset(url, name, (err) => …)`, `clear(url, (err) => …)` | Remove one, or all, for that URL |
+
+Without a callback each returns a promise. With the cookie jar switched off (Settings → Requests), the jar methods fail with *The cookie jar is off*.
+
+## pm.visualizer
+
+Shows the response your way: a table, a list, a summary. The response pane gets a **Visualize** tab.
+
+```js title="Post-response script"
+const template = `
+  <table>
+    <tr><th>Name</th><th>Price</th></tr>
+    {{#each items}}<tr><td>{{name}}</td><td>{{price}}</td></tr>{{/each}}
+  </table>`;
+pm.visualizer.set(template, { items: pm.response.json() });
+```
+
+| Method | |
+|---|---|
+| `set(template, data)` | Renders a [Handlebars](https://handlebarsjs.com) template with `data` (values are HTML-escaped; `{{{raw}}}` isn't) |
+| `clear()` | Removes it |
+
+The result is plain HTML and CSS in a sandbox: **scripts in the template don't run** and nothing loads from the internet, so Postman templates that draw charts with a JavaScript library show only their HTML. Inline `<svg>` and CSS work. At most 5 MB.
+
+## Timers
+
+`setTimeout`, `setInterval`, `setImmediate` and their `clear…` functions work. The script waits for its timers (and the promises they start) before it ends, within its [time limit](../sandbox/#limits): an interval nobody clears runs until the script is stopped.
+
+```js
+setTimeout(() => pm.environment.set("checkedAt", Date.now()), 500);
 ```
 
 ## console
@@ -433,23 +514,13 @@ postman.setEnvironmentVariable("token", JSON.parse(responseBody).token);
 
 ## Not supported
 
-These exist in Postman but not in Zorvik. Calling them (or, for properties, reading them) throws an error `X is not supported in Zorvik`, so a script fails clearly instead of silently doing nothing.
+These exist in Postman but not in Zorvik. Using them throws an error, so a script fails clearly instead of silently doing nothing.
 
 | API | Error message |
 |---|---|
-| `pm.sendRequest(…)` | `pm.sendRequest is not supported in Zorvik` |
-| `pm.require(…)` | `pm.require is not supported in Zorvik` |
-| `require(…)` | `require is not supported in Zorvik` |
-| `pm.execution.skipRequest()` | `pm.execution.skipRequest is not supported in Zorvik` |
-| `pm.cookies` | `pm.cookies is not supported in Zorvik` |
-| `pm.response.cookies` | `pm.response.cookies is not supported in Zorvik` |
-| `pm.visualizer` | `pm.visualizer is not supported in Zorvik` |
-| `pm.vault` | `pm.vault is not supported in Zorvik` |
-| `pm.response.to.have.jsonSchema(…)` | `pm.response.to.have.jsonSchema is not supported in Zorvik` |
-| `setTimeout`, `setInterval`, `setImmediate`, `clearTimeout`, `clearInterval`, `clearImmediate` | `setTimeout is not supported in Zorvik` (and so on) |
-| `CryptoJS` | `CryptoJS is not supported in Zorvik` |
-| `xml2Json(…)` | `xml2Json is not supported in Zorvik` |
+| `pm.vault` | `pm.vault is not supported in Zorvik` (use [secret variables](../../variables/secrets/)) |
+| `pm.execution.runRequest(…)` | `pm.execution.runRequest is not a function` (use [`pm.sendRequest`](#pmsendrequest)) |
 
-`pm.cookies`, `pm.response.cookies`, `pm.visualizer`, `pm.vault` and `CryptoJS` throw as soon as they're read, so even `typeof CryptoJS` or `if (pm.cookies)` throws. To read cookies the server set, read the header: `pm.response.headers.get("set-cookie")`.
+`pm.vault` throws as soon as it's read, so even `if (pm.vault)` throws.
 
-Other Postman sandbox libraries (`lodash`/`_`, `moment`, `cheerio`, `tv4`, `ajv`, `chai` as a global) are not defined. See [Sandbox and limits](../sandbox/#postman-compatibility) for the full comparison.
+`require` of a package that isn't [built in](../sandbox/#libraries) throws `Cannot find module 'name'. Scripts can require only these built-in libraries: …`. See [Sandbox and limits](../sandbox/#postman-compatibility) for the full comparison.

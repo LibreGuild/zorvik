@@ -166,6 +166,8 @@ fn send_summary(request: &Value, result: &ApiResult<Value>) -> Value {
                 "tests": tests,
                 "testsPassed": passed,
                 "testsFailed": tests.len() - passed,
+                // `pm.visualizer.set` made a Visualize tab.
+                "visualized": r.pointer("/scripts/visualization").is_some_and(Value::is_string),
                 "redirects": meta["redirects"].as_array().map_or(0, Vec::len),
                 "tls": meta["tls"],
                 "auth": auth,
@@ -577,5 +579,27 @@ impl Api {
             }
         }
         self.emit_academy(Some(rewards));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_send_says_whether_scripts_made_a_visualization() {
+        let request = json!({ "name": "r", "seq": 0, "method": "GET", "url": "{{api}}/x" });
+        let answer = |scripts: Value| {
+            let r = json!({
+                "meta": { "status": 200, "request": { "method": "GET", "url": "http://127.0.0.1/x", "headers": [] }, "headers": [] },
+                "body": { "text": "{}" },
+                "scripts": scripts,
+            });
+            send_summary(&request, &Ok(r))
+        };
+        let shown = answer(json!({ "tests": [], "console": [], "errors": [], "visualization": "<table></table>" }));
+        assert_eq!(shown["visualized"], json!(true));
+        assert_eq!(answer(json!({ "tests": [], "console": [], "errors": [] }))["visualized"], json!(false));
+        assert_eq!(answer(Value::Null)["visualized"], json!(false));
     }
 }

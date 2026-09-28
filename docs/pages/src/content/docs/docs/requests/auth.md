@@ -1,11 +1,11 @@
 ---
 title: Auth
-description: Basic, Bearer, API key and OAuth 2.0 authentication, how tokens are fetched and cached, and how auth is inherited from folders and the workspace.
+description: Basic, Bearer, API key, OAuth 2.0 and 1.0, JWT, Digest, NTLM, AWS Signature v4, Hawk, Akamai EdgeGrid and Atlassian ASAP, how tokens are fetched and signatures made, and how auth is inherited from folders and the workspace.
 sidebar:
   order: 3
 ---
 
-Auth adds credentials to a request: an `Authorization` header, an API key, or an OAuth 2.0 access token that Zorvik fetches for you. You can set it in three places:
+Auth adds credentials to a request: an `Authorization` header, an API key, an OAuth 2.0 access token that Zorvik fetches for you, a signature made for every send, or the answer to the server's challenge. You can set it in three places:
 
 | Where | How |
 |---|---|
@@ -25,6 +25,16 @@ Set auth once on a folder or the workspace, and leave its requests on **Inherit 
 | **Bearer token** | `bearer` | `Authorization: Bearer <token>` |
 | **API key** | `apiKey` | A header or a query parameter with your key |
 | **OAuth 2.0** | `oauth2` | `Authorization: Bearer <access token>`, with the token fetched, cached and refreshed |
+| **OAuth 1.0** | `oauth1` | A signed `Authorization: OAuth …` header (or query parameters) |
+| **JWT (signed by Zorvik)** | `jwt` | A token Zorvik signs from your claims, as `Authorization: Bearer <token>` or a query parameter |
+| **Digest auth** | `digest` | The answer to the server's Digest challenge |
+| **NTLM (Windows)** | `ntlm` | The NTLMv2 handshake with the server |
+| **AWS Signature v4** | `awsSigV4` | A signed `Authorization: AWS4-HMAC-SHA256 …` header, or a presigned URL |
+| **Hawk** | `hawk` | A signed `Authorization: Hawk …` header |
+| **Akamai EdgeGrid** | `akamaiEdgeGrid` | A signed `Authorization: EG1-HMAC-SHA256 …` header |
+| **Atlassian ASAP** | `asap` | A short-lived JWT signed with your service's key, as `Authorization: Bearer <token>` |
+
+The signing types (OAuth 1.0, JWT, AWS, Hawk, EdgeGrid, ASAP) are signed **for every send**, after pre-request scripts ran, over the final method, URL, headers and body, with a fresh timestamp and nonce. In [load tests](../../load-testing/overview/) each request is signed separately. Digest and NTLM can't be load tested: they answer a challenge on the connection that received it.
 
 When the request's auth is not inherited, the **Auth** tab shows its type, for example **Auth** `Bearer`.
 
@@ -97,27 +107,26 @@ auth:
 
 ## OAuth 2.0
 
-Zorvik gets an access token from your identity provider and sends it as `Authorization: Bearer <token>`. It supports three grant types:
+Zorvik gets an access token from your identity provider and sends it as `Authorization: Bearer <token>`. It supports four grant types:
 
 | Grant type (menu) | In the file (`grantType`) | How the token is obtained |
 |---|---|---|
 | **Client credentials** | `clientCredentials` | Automatically when you send |
 | **Password** | `password` | Automatically when you send, with a username and password |
 | **Authorization code** | `authorizationCode` | You sign in once in your browser with **Get token**; PKCE by default |
-
-Other grants, such as the implicit grant, are not supported.
+| **Implicit (legacy)** | `implicit` | You sign in with **Get token**; the token comes back in the redirect itself, without a token URL. Older single-page apps use it; prefer the authorization code with PKCE when the provider offers it. |
 
 ### Fields
 
 | Field | Grant types | Default | Meaning |
 |---|---|---|---|
 | **Grant type** | all | Client credentials | See above |
-| **Authorization URL** | Authorization code | | The provider's authorize endpoint, e.g. `https://id.example.com/oauth/authorize` |
-| **Token URL** | all | | The provider's token endpoint |
+| **Authorization URL** | Authorization code, implicit | | The provider's authorize endpoint, e.g. `https://id.example.com/oauth/authorize` |
+| **Token URL** | all but implicit | | The provider's token endpoint |
 | **Client ID** | all | | |
-| **Client secret** | all | | Leave empty for public clients |
+| **Client secret** | all but implicit | | Leave empty for public clients |
 | **Username**, **Password** | Password | | The resource owner's credentials |
-| **Redirect URI** | Authorization code | `http://127.0.0.1:53682/callback` | Where the provider sends you back; Zorvik listens there while you sign in |
+| **Redirect URI** | Authorization code, implicit | `http://127.0.0.1:53682/callback` | Where the provider sends you back; Zorvik listens there while you sign in |
 | **Scope** | all | | Space-separated scopes, e.g. `read write` |
 | **Audience** | all | | Sent as `audience` when set (used by some providers) |
 | **Client auth** | all | Basic auth header | How the client ID and secret reach the token endpoint: **Basic auth header** or **In request body** |
@@ -194,9 +203,127 @@ Details:
 - If the provider redirects with an `error`, the sign-in fails with that error and its description.
 - If the port is taken, *Could not listen on 127.0.0.1:53682 for the OAuth redirect*. Choose another port and register that URI instead.
 - The Authorization URL must start with `http://` or `https://`.
+- **Implicit grant**: the same steps, but the authorization URL asks for `response_type=token` and the provider puts the token in the redirect's `#fragment`, which browsers never send to a server. The page Zorvik shows at the redirect reads the fragment and hands it to Zorvik, then says *Signed in*. The token has no refresh token: sign in again when it expires.
 
 :::tip
 Set OAuth 2.0 on a folder and choose **Get token** there, in **Folder settings → Auth**. Every request inside that inherits it uses the same token.
+:::
+
+## OAuth 1.0
+
+Signs each request with OAuth 1.0a (RFC 5849), as Twitter/X, older Atlassian and many enterprise APIs expect.
+
+| Field | Default | Meaning |
+|---|---|---|
+| **Signature method** | HMAC-SHA1 | HMAC-SHA1, HMAC-SHA256, HMAC-SHA512, RSA-SHA1, RSA-SHA256, RSA-SHA512 or PLAINTEXT |
+| **Consumer key**, **Consumer secret** | | Your app's credentials (the secret for HMAC and PLAINTEXT) |
+| **Private key** | | RSA methods: a PEM private key (PKCS#1 or PKCS#8) instead of the consumer secret |
+| **Token**, **Token secret** | | The user's access token and its secret, when you have them |
+| **Callback URL**, **Verifier**, **Realm** | | Sent when set |
+| **Send oauth_version=1.0** | On | |
+| **Sign the body** | Off | Adds `oauth_body_hash` (for JSON and other bodies that aren't form data) |
+| **Add to** | Authorization header | Or the query string |
+
+The query parameters and, for `application/x-www-form-urlencoded` bodies, the form fields are part of the signature. Every send gets a new timestamp and nonce.
+
+```yaml
+auth:
+  type: oauth1
+  consumerKey: "{{consumerKey}}"
+  consumerSecret: "{{consumerSecret}}"
+  token: "{{accessToken}}"
+  tokenSecret: "{{tokenSecret}}"
+  signatureMethod: HMAC-SHA256
+```
+
+## JWT (signed by Zorvik)
+
+Zorvik builds and signs a fresh JSON Web Token for every send, from claims you write.
+
+| Field | Default | Meaning |
+|---|---|---|
+| **Algorithm** | HS256 | HS256/384/512 (a shared secret), RS256/384/512 and PS256/384/512 (an RSA key), ES256/384 (an EC key) |
+| **Secret** / **Private key** | | HS: the secret (**The secret is base64** to decode it first). Others: a PEM private key; RSA keys of 2048, 3072 or 4096 bits (PKCS#1 or PKCS#8), EC keys as PKCS#8 or SEC1 with their public part |
+| **Payload** | `{"sub": "1234567890"}` | The claims, as JSON. Variables work: `{"sub": "{{userId}}", "iat": {{$timestamp}}, "exp": {{$timestamp(+1h)}}}` |
+| **Header** | | Extra header fields as JSON, such as `{"kid": "key-1"}` (`alg` and `typ` are set for you) |
+| **Add to** | Authorization header | With **Prefix** (`Bearer`; empty sends the bare token), or a query parameter named **Parameter** (`token`) |
+
+A payload that isn't a JSON object, or a key that doesn't fit the algorithm, stops the send with an error saying what to change.
+
+## Digest auth
+
+HTTP Digest (RFC 7616 and RFC 2617). Zorvik sends the request, reads the server's `401` challenge and sends it again with the answer, on the same connection.
+
+| Field | Meaning |
+|---|---|
+| **Username**, **Password** | Your credentials |
+
+The rest comes from the server's challenge: algorithms MD5, MD5-sess, SHA-256, SHA-256-sess and SHA-512-256, `qop` `auth` (preferred) or `auth-int` (the body is signed too), `opaque`, `userhash`, and non-ASCII usernames (`username*`). A wrong password gets the server's `401` as the response. **Request sent** in the response's **Info** tab shows the `Authorization: Digest …` header of the second attempt; the time includes both round trips.
+
+## NTLM (Windows)
+
+NTLMv2, for IIS, SharePoint, Exchange and other Windows servers.
+
+| Field | Meaning |
+|---|---|
+| **Username** | `user`, `DOMAIN\user` or `user@domain` |
+| **Password** | |
+| **Domain**, **Workstation** | Optional; the domain is taken from the username when it has one |
+
+Zorvik sends the negotiate message, answers the server's challenge and sends the request again, all on one connection, so NTLM always uses HTTP/1.1 (choosing HTTP/2 for the request is refused). The server's timestamp is used when it sends one. Servers that require Extended Protection (channel binding over TLS) or Kerberos refuse it.
+
+## AWS Signature v4
+
+Signs each request for AWS: API Gateway, S3, Lambda function URLs, OpenSearch and the other services.
+
+| Field | Meaning |
+|---|---|
+| **Access key**, **Secret key** | Your credentials, e.g. `{{awsAccessKeyId}}` and `{{awsSecretAccessKey}}` |
+| **Session token** | For temporary credentials (STS, SSO): sent as `X-Amz-Security-Token` |
+| **Region** | e.g. `eu-west-1` |
+| **Service** | e.g. `execute-api`, `s3`, `lambda`, `es` |
+| **Add to** | **Authorization header** (with `X-Amz-Date`), or **Query string (presigned URL)**, valid for an hour |
+
+The signature covers the method, the path (encoded as the service expects; S3 is different), the query, the `Host` header, your headers (not `User-Agent`, `Authorization` and a few connection headers) and a hash of the body. For S3, `X-Amz-Content-Sha256` is added; set it yourself (for example `UNSIGNED-PAYLOAD`) to sign differently.
+
+## Hawk
+
+| Field | Meaning |
+|---|---|
+| **Hawk ID**, **Hawk key** | Your credentials |
+| **Algorithm** | SHA-256 (default) or SHA-1 |
+| **Extra data (ext)**, **App ID**, **Delegation (dlg)** | Sent when set |
+| **Sign the body** | Adds the payload hash (Content-Type and body); the server must check it |
+
+## Akamai EdgeGrid
+
+For Akamai's APIs. Put the host from your `.edgerc` (`akab-….luna.akamaiapis.net`) in the URL.
+
+| Field | Meaning |
+|---|---|
+| **Client token**, **Client secret**, **Access token** | From your `.edgerc` or API client |
+| **Headers to sign** | Usually empty; comma-separated names |
+| **Max body** | Bytes of a POST body in the signature (131072, Akamai's default) |
+
+## Atlassian ASAP
+
+Atlassian's service-to-service auth: a JWT your service signs, valid for a short time.
+
+| Field | Default | Meaning |
+|---|---|---|
+| **Issuer** | | Your service |
+| **Audience** | | The receiving service (comma-separated for several) |
+| **Key ID** | | The `kid` the receiver finds your public key by, e.g. `my-service/key-1` |
+| **Private key** | | PEM |
+| **Algorithm** | RS256 | RS, PS or ES |
+| **Subject** | | Optional |
+| **Expires in** | 3600 | Seconds (at most 3600) |
+| **Extra claims** | | Optional JSON |
+
+Each send gets a new token with `iat`, `exp` and a unique `jti`.
+
+:::tip[Keep keys and secrets out of the files]
+Private keys, secret keys and passwords are saved in the request, folder or workspace file like every field. Put them in [secret variables](../../variables/secrets/) and use `{{name}}` in the field.
 :::
 
 ## Inheritance
@@ -218,7 +345,7 @@ A request that isn't saved yet only inherits from the workspace, because it isn'
 
 ### When you set an Authorization header yourself
 
-An `Authorization` header in the **Headers** of the request, a folder or the workspace wins over **Basic auth**, **Bearer token** and **OAuth 2.0**: they add nothing (and no OAuth token is fetched). An **API key** header is skipped when a header with the same name exists.
+An `Authorization` header in the **Headers** of the request, a folder or the workspace wins over every auth type that uses it: Basic, Bearer, OAuth 2.0 and 1.0, JWT, Digest, NTLM, AWS, Hawk, EdgeGrid and ASAP add nothing (and no OAuth token is fetched). An **API key** header is skipped when a header with the same name exists.
 
 **No auth** stops inherited *auth*, but not inherited *headers*: an `Authorization` header set in a folder's or the workspace's headers is still sent.
 
@@ -228,4 +355,4 @@ WebSocket, event stream (SSE) and gRPC requests have the same **Auth** tab. MQTT
 
 ## Importing auth
 
-Imports bring auth along: Postman's basic, bearer, API key, OAuth 2.0, no-auth and inherit settings, and OpenAPI security schemes (with placeholders such as `{{bearerToken}}` and `{{clientId}}` in the new environment). See [Import & export](../import-export/).
+Imports bring auth along: every Postman auth type listed above, with its settings, and OpenAPI security schemes (Basic, Bearer, Digest, API keys and every OAuth 2.0 flow, with placeholders such as `{{bearerToken}}` and `{{clientId}}` in the new environment). See [Import & export](../import-export/).

@@ -8,7 +8,7 @@ Three workflows:
 ## Checks (every pull request and every push)
 | Job | What it does |
 |---|---|
-| Rust (Linux) | `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, and that the generated TypeScript bindings are committed |
+| Rust (Linux) | `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, and that the generated files (TypeScript bindings, the dynamic variables reference) are committed |
 | Rust (Windows) | `cargo test` on real Windows networking, paths and trash |
 | UI | TypeScript typecheck, Vitest unit tests, production build |
 | E2E | Playwright drives the real UI against the real Rust API and local test servers |
@@ -23,7 +23,7 @@ A pull request can merge only when all four pass. Pull requests from first-time 
 
 A push to `main` only runs the checks. The nightly workflow compares `main` with the `nightly` tag and, when they differ, starts CI on `main` by hand (`workflow_dispatch`), which builds and publishes. A maintainer can do the same at any time: **Actions → CI → Run workflow** on `main`.
 
-After the checks pass, `release-draft` creates a draft release for the run and checks that the tag matches the version in `Cargo.toml`, `app/package.json` and `tauri.conf.json`. Then three jobs build in parallel with `npm run package` (the app with the `zorvik` command line inside), pack the command line on its own, and upload to the draft. Then `sign-updates` signs the files the app's updater installs and adds `latest.json` (see [Updates](#updates)). Finally `publish` makes the draft public: as the tagged release with notes, or as the new nightly. If any build fails, nothing is published and the previous release stays.
+After the checks pass, `release-draft` creates a draft release for the run and checks that the tag matches the version in `Cargo.toml`, `app/package.json` and `tauri.conf.json`. Then three jobs build in parallel with `npm run package` (the app with the `zorvik` command line inside), pack the command line on its own, and upload to the draft. Then `sign-updates` signs the files the app's updater installs and adds `latest.json` (see [Updates](#updates)). Finally `publish` makes the draft public: as the tagged release with notes, or as the new nightly. If any build fails, nothing is published and the previous release stays. For a tagged release, `release-website` then builds the [website](#website) from the release's code and `release-website-publish` attaches it and starts `pages.yml`.
 
 ## Cutting a release
 1. Make sure `main` is green and the nightly build works.
@@ -38,7 +38,7 @@ After the checks pass, `release-draft` creates a draft release for the run and c
    git tag -a v0.2.0 -m "Highlights of this release, in a few lines."
    git push origin v0.2.0
    ```
-4. CI builds and publishes "Zorvik 0.2.0". Below the tag message, the notes list the downloads and the merged pull requests, grouped by label ([`.github/release.yml`](../.github/release.yml)).
+4. CI builds and publishes "Zorvik 0.2.0", then rebuilds the [website](#website), whose main site now shows this version's docs. Below the tag message, the notes list the downloads and the merged pull requests, grouped by label ([`.github/release.yml`](../.github/release.yml)).
 
 Only maintainers can push `v*` tags. Versions follow [SemVer](https://semver.org): while Zorvik is `0.x`, a minor bump may change behaviour; patch releases only fix.
 
@@ -64,7 +64,7 @@ The command line on its own, for CI machines and servers (each archive has `zorv
 
 Linux packages are built on Ubuntu 22.04, the oldest supported system, so they run on newer ones.
 
-Two more files are for the updater, not for people: `latest.json` and `Zorvik-macOS-universal.app.tar.gz` (the macOS app the updater installs).
+Two more files are for the updater, not for people: `latest.json` and `Zorvik-macOS-universal.app.tar.gz` (the macOS app the updater installs). Tagged releases also carry `zorvik-website.tar.gz`, the release's website (see [Website](#website)).
 
 ## Updates
 The app updates itself from GitHub Releases (`app/src-tauri/src/updates.rs`, the Tauri updater). It reads one file:
@@ -100,12 +100,25 @@ Updates only install from release builds: debug builds check but never install.
 The builds are not code-signed yet. Windows SmartScreen asks once (**More info → Run anyway**). On macOS the first open is blocked; allow it in System Settings → Privacy & Security → **Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/Zorvik.app`. The macOS app is ad-hoc signed so it runs on Apple silicon.
 
 ## Website
-The website lives in [`docs/pages`](pages/README.md): an Astro site with the home page and the developer docs (Starlight) under `/docs`. It is published to GitHub Pages at <https://libreguild.github.io/zorvik/> by `pages.yml`:
-- on pushes to `main` that change the site, its pictures or the course;
-- after every release (the release job starts it, so the version and sizes on the page update);
-- once a day, so the release details on the page stay fresh.
+The website lives in [`docs/pages`](pages/README.md): an Astro site with the home page and the developer docs (Starlight) under `/docs`. `pages.yml` publishes it to GitHub Pages in two parts, built in one run and published together:
 
-Pull requests that touch the site build it without publishing. Page views are counted by GoatCounter, without cookies.
+| Part | Address | Built from | Shows |
+|---|---|---|---|
+| **Main site** | <https://libreguild.github.io/zorvik/> | the latest release's code | the docs of the version people download |
+| **Preview** | <https://libreguild.github.io/zorvik/next/> | `main` | the docs of the next version, with a banner on every page that links to the same page on the main site (or its docs home when the page is new). Search engines are asked not to list it, and it has no sitemap |
+
+The latest release is GitHub's "latest" release (`releases/latest`): the newest published release that isn't a pre-release, the same one the download buttons and the app's update check use. A `v*` tag whose release is still a draft doesn't count. The main site is built when the release is made, not by `pages.yml`: after `publish`, the `release-website` job in `ci.yml` builds `docs/pages` from the tag (read-only permissions, no secrets) and `release-website-publish` attaches the result to the release as `zorvik-website.tar.gz`. `pages.yml` downloads that file from the latest release and never runs a release's code, so its own permissions (and the npm cache it shares with `main`) stay out of reach of code that isn't `main`'s. When the latest release has no `zorvik-website.tar.gz` (no release yet, or one made before releases carried their website), the main site is built from `main`, with a warning in the run. Both parts' download buttons point at the latest release; the preview's home page adds that nightly builds are on the releases page.
+
+The workflow runs:
+- on pushes to `main` that change the site, its pictures or the course (the preview changes; the main site is rebuilt as it was);
+- after every release (`release-website-publish` starts it), so the main site shows the new release's docs, version and sizes;
+- by hand: **Actions → Website → Run workflow** on `main`.
+
+Pull requests that touch the site build their own version both ways (as the main site and as the preview) and check the links, without publishing. Page views are counted by GoatCounter on both parts, without cookies.
+
+**Docs changes go live with the next release.** Docs describe the code on the same branch, so a docs change belongs in the pull request of the change it describes. To correct the docs of the current release, fix them on `main` too: the fix shows in the preview as soon as it merges, and on the main site with the next release.
+
+The build reads `SITE_BASE` (the base path, `/zorvik` by default) and `SITE_CHANNEL=next` (the banner and `noindex`); the workflow also sets `SITE_RELEASE_DIST` to the built main site, so the banner only links to pages that exist there. The main site is built with the release's own sources, config and link check. After both builds, the workflow checks the links once more across the combined site (the main site with the preview in `next/`).
 
 ## Repository automation
 - **Dependabot** opens grouped weekly updates for Cargo, npm (the app and the website) and GitHub Actions ([`.github/dependabot.yml`](../.github/dependabot.yml)), plus immediate security updates.
