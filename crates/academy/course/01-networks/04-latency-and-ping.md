@@ -13,11 +13,11 @@ lab:
       kind: tcp
   steps:
     - text: |
-        Open **Tools → Ping**. Enter the host `127.0.0.1`, set **Using** to **TCP**, **TCP port** to `{{target_port}}`, and press **Start**.
+        Open **Tools → Ping**. Enter the host `127.0.0.1`, set **Using** to **TCP**, **TCP port** to `{{=target_port}}`, and press **Start**.
       hints:
-        - A TCP ping times how long it takes to open a connection to one port. The lab server listens on `{{target_port}}`.
+        - A TCP ping times how long it takes to open a connection to one port. The lab server listens on `{{=target_port}}`.
         - In Tools → Ping, type 127.0.0.1 as the host, click TCP next to Using, and put the lab port in the TCP port field.
-        - "Host `127.0.0.1` · Using: TCP · TCP port `{{target_port}}` · Start. Each reply shows the time in milliseconds."
+        - "Host `127.0.0.1` · Using: TCP · TCP port `{{=target_port}}` · Start. Each reply shows the time in milliseconds."
       check:
         all:
           - call: { method: tools.ping, ok: true, result: { mode: tcp, port: "{{target_port}}" } }

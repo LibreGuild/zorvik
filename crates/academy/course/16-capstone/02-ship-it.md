@@ -123,9 +123,9 @@ lab:
             body: *contract
   steps:
     - text: |
-        **Import the contract.** The back-end team deployed Rocket Pizza to a staging server, and it publishes its contract at `{{staging}}/openapi.yaml`. In the **Collection**, click **＋** → **Import…**, open **OpenAPI URL**, paste that address and press **Import**.
+        **Import the contract.** The back-end team deployed Rocket Pizza to a staging server, and it publishes its contract at `{{=staging}}/openapi.yaml`. In the **Collection**, click **＋** → **Import…**, open **OpenAPI URL**, paste that address and press **Import**.
 
-        (The contract is also in the Bootcamp workspace folder as `rocket-pizza.yaml`. Importing the file asks for the **base URL**; give it `{{staging}}`.)
+        (The contract is also in the Bootcamp workspace folder as `rocket-pizza.yaml`. Importing the file asks for the **base URL**; give it `{{=staging}}`.)
       hints:
         - Importing turns every operation in the contract into a saved request, in a new folder.
         - The ＋ button at the top of the Collection section has Import… just below the New entries. The Lab Guide shows the full staging address.
@@ -207,7 +207,7 @@ lab:
             params: { id: List pizzas load test, test: *launchTest }
         - wait: 3500
     - text: |
-        **A mock for the mobile team,** so they can build even when staging is down. In **Servers**, **＋** → **Mock from OpenAPI…** → **URL** `{{staging}}/openapi.yaml`, name it **Rocket Pizza mock**, press **Create mock**, then **Start** it. The lab orders from its `GET /pizzas`.
+        **A mock for the mobile team,** so they can build even when staging is down. In **Servers**, **＋** → **Mock from OpenAPI…** → **URL** `{{=staging}}/openapi.yaml`, name it **Rocket Pizza mock**, press **Create mock**, then **Start** it. The lab orders from its `GET /pizzas`.
       hints:
         - A mock made from the contract answers with the contract's examples, so it can't drift from it.
         - Mock from OpenAPI… is at the bottom of the ＋ menu in Servers. After Create mock, the new server opens in a tab with a Start button.

@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-04
+
+### Fixed
+- Variable suggestions (after typing `{{`) no longer run off the window: long examples, such as lorem ipsum text, are cut short.
+- Training Bootcamp: where a step asks you to type into a field that doesn't take variables (a port, Tools → Ping, Port check and TLS inspector, environment values, import and mock-from-OpenAPI URLs), the Lab Guide now shows the lab's actual value instead of `{{variable}}`.
+
 ## [0.2.0] - 2026-09-29
 
 ### Added
@@ -103,7 +109,8 @@ The first public release.
 - In-app docs, light and dark themes, zoom and font settings.
 - Installers for Windows, macOS (universal) and Linux (deb, rpm, AppImage).
 
-[Unreleased]: https://github.com/LibreGuild/zorvik/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/LibreGuild/zorvik/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/LibreGuild/zorvik/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/LibreGuild/zorvik/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/LibreGuild/zorvik/compare/v0.1.0...v0.1.2
 [0.1.0]: https://github.com/LibreGuild/zorvik/releases/tag/v0.1.0

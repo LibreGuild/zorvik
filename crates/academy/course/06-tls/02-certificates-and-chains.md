@@ -10,11 +10,11 @@ lab:
   playground: { tls: true }
   steps:
     - text: |
-        Open **Tools → TLS inspector** and inspect the practice HTTPS server at `{{playgroundTls}}`.
+        Open **Tools → TLS inspector** and inspect the practice HTTPS server at `{{=playgroundTls}}`.
       hints:
         - The inspector's **Server** field takes a host, a `host:port` or a whole `https://` address.
         - In the sidebar open **Tools**, then **TLS inspector**. Paste the address shown here into **Server**.
-        - "Server = {{playgroundTls}}, then press Inspect. It's fine that it says Not trusted: that's the next lesson."
+        - "Server = `{{=playgroundTls}}`, then press Inspect. It's fine that it says Not trusted: that's the next lesson."
       check:
         call: { method: tools.tlsInspect, ok: true, result: { chain: [{ commonName: localhost }] } }
       solution:

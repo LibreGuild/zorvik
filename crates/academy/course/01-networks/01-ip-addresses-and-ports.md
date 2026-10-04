@@ -31,11 +31,11 @@ lab:
       solution:
         - call: { method: tools.interfaces }
     - text: |
-        The lab started a small server on your computer, listening on port `{{api_port}}`. Open **Port check** (also under Tools), enter the host `127.0.0.1`, choose **Custom** ports, type `{{api_port}}` and press **Check**.
+        The lab started a small server on your computer, listening on port `{{=api_port}}`. Open **Port check** (also under Tools), enter the host `127.0.0.1`, choose **Custom** ports, type `{{=api_port}}` and press **Check**.
       hints:
         - Port check tries to connect to each port you give it. "Open" means a program is listening.
         - In Port check, type 127.0.0.1 as the host and click Custom next to Ports.
-        - "Host: `127.0.0.1` · Ports: Custom → `{{api_port}}` · Check. The port shows as open."
+        - "Host: `127.0.0.1` · Ports: Custom → `{{=api_port}}` · Check. The port shows as open."
       check:
         call:
           method: tools.portCheck

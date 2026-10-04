@@ -31,10 +31,10 @@ lab:
       solution:
         - answer: unknown issuer
     - text: |
-        A trust error isn't the only kind. Use **Tools → TLS inspector** on `{{playgroundTls}}` again, this time with **Server name (SNI)** set to `shop.example`, as if you'd connected by a name the certificate doesn't cover. Check **Name matches**.
+        A trust error isn't the only kind. Use **Tools → TLS inspector** on `{{=playgroundTls}}` again, this time with **Server name (SNI)** set to `shop.example`, as if you'd connected by a name the certificate doesn't cover. Check **Name matches**.
       hints:
         - The SNI field sets the name your client asks for and checks against the certificate.
-        - "Server = {{playgroundTls}}, Server name (SNI) = shop.example, then Inspect."
+        - "Server = `{{=playgroundTls}}`, Server name (SNI) = shop.example, then Inspect."
         - "The summary shows Name matches: No. The certificate only lists localhost, 127.0.0.1 and ::1."
       check:
         call: { method: tools.tlsInspect, ok: true, params: { sni: "*" }, result: { hostnameMatches: false } }

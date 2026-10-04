@@ -32,7 +32,7 @@ lab:
             body: '{"environment": "staging", "version": "2.0.3", "healthy": true}'
   steps:
     - text: |
-        Press **⌘/Ctrl + E** to open **Environments & variables**. Click **+** next to *Environments*, rename the new environment to **Dev**, and add one variable: `baseUrl`, with the Dev server's address `{{dev}}` as its value. Press **Save changes**.
+        Press **⌘/Ctrl + E** to open **Environments & variables**. Click **+** next to *Environments*, rename the new environment to **Dev**, and add one variable: `baseUrl`, with the Dev server's address `{{=dev}}` as its value. Press **Save changes**.
       hints:
         - An environment is a named list of variables. Dev needs just one, called baseUrl.
         - In the dialog, click + next to "Environments", type Dev in the name field at the top, then type baseUrl in the Variable column and the address in the Value column.
@@ -43,7 +43,7 @@ lab:
       solution:
         - call: { method: env.create, params: { environment: { name: Dev, variables: [{ key: baseUrl, value: "{{dev}}" }] } } }
         - call: { method: env.save, params: { id: Dev, environment: { name: Dev, variables: [{ key: baseUrl, value: "{{dev}}" }] } } }
-    - text: With **Dev** selected in the dialog, click **Duplicate**. Rename the copy to **Staging**, change its `baseUrl` to the Staging server's address, `{{staging}}`, and save.
+    - text: With **Dev** selected in the dialog, click **Duplicate**. Rename the copy to **Staging**, change its `baseUrl` to the Staging server's address, `{{=staging}}`, and save.
       hints:
         - Duplicate copies every variable, so you only change what is different.
         - The Duplicate button is at the top right of the dialog, next to Delete. The copy is called "Dev copy".
