@@ -65,6 +65,17 @@ test("environment variables are substituted", async ({ page }) => {
   await expect(page.getByTestId("response")).toContainText('"from": "env"');
 });
 
+test("variable suggestions stay within the field, long examples cut short", async ({ page }) => {
+  await newTab(page, "HTTP request");
+  const input = page.getByLabel("URL", { exact: true });
+  await input.pressSequentially("{{$randomLoremP");
+  const item = page.getByRole("button", { name: /\$randomLoremParagraphs/ });
+  await expect(item).toBeVisible();
+  const field = (await input.boundingBox())!;
+  const menu = (await item.locator("..").boundingBox())!;
+  expect(menu.x + menu.width).toBeLessThanOrEqual(field.x + field.width + 1);
+});
+
 test("saves a request into the collection", async ({ page }) => {
   await newTab(page, "HTTP request");
   await setUrl(page, `${HTTP}/status/204`);

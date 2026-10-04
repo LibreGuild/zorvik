@@ -67,12 +67,12 @@ lab:
             body: *comet
   steps:
     - text: |
-        The Comet Coffee team published their API contract at `{{docs}}/comet-coffee.yaml`. In **Servers**, click **＋** → **Mock from OpenAPI…**, choose **URL**, paste that address, name the server **Comet Coffee mock** and press **Create mock**.
+        The Comet Coffee team published their API contract at `{{=docs}}/comet-coffee.yaml`. In **Servers**, click **＋** → **Mock from OpenAPI…**, choose **URL**, paste that address, name the server **Comet Coffee mock** and press **Create mock**.
 
         (The same document is also in the Bootcamp workspace folder as `comet-coffee.yaml`, if you prefer **File**.)
       hints:
         - Mock from OpenAPI is at the bottom of the ＋ menu in the Servers section, below the server kinds.
-        - The Lab Guide shows the full address of {{docs}}. Copy it, then add /comet-coffee.yaml at the end.
+        - Copy the whole address from the step above, /comet-coffee.yaml included.
         - Servers → ＋ → Mock from OpenAPI… → URL → paste the address → Server name Comet Coffee mock → Create mock.
       check:
         call: { method: mock.fromOpenApi, ok: true, result: { routes: ">=3" } }

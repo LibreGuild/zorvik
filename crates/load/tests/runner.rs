@@ -115,7 +115,8 @@ async fn closed_model_follows_think_time_and_reuses_connections() {
     let n = summary.totals.requests;
     assert!((70..=110).contains(&n), "{n} requests");
     assert_eq!(summary.totals.errors, 0);
-    assert_eq!(summary.totals.connections, 5);
+    // Users share one pool, so it opens as many connections as requests overlap: at most one per user.
+    assert!((1..=5).contains(&summary.totals.connections), "{} connections", summary.totals.connections);
     assert_eq!(summary.totals.status_codes, vec![(200, n)]);
     assert!(summary.passed && !summary.stopped_early);
     assert!(summary.duration_ms >= 2000 && summary.duration_ms < 3000, "{}", summary.duration_ms);

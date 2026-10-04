@@ -1,6 +1,7 @@
 // The Markdown lessons are written in (docs/academy.md): headings, paragraphs, lists,
 // tables, code, callouts and diagrams. Everything becomes React elements; no HTML is
-// injected. `{{name}}` in code shows as a variable, with its value while a lab runs.
+// injected. `{{name}}` in code shows as a variable, with its value while a lab runs;
+// `{{=name}}` shows the value itself.
 import { Fragment, memo, useMemo, type ReactNode } from "react";
 import { AlertTriangle, Info, Lightbulb, Sparkles } from "lucide-react";
 import { openExternal } from "../../lib/platform";
@@ -152,8 +153,9 @@ export function Inline({ text, vars }: { text: string; vars?: Record<string, str
   return <>{out}</>;
 }
 
-/** Inline code; a lone `{{name}}` is a variable chip. */
-function Code({ text, vars }: { text: string; vars?: Record<string, string> }) {
+/** Inline code; a lone `{{name}}` is a variable chip. `{{=name}}` is the value itself while a lab runs (for fields that don't take variables). */
+function Code({ text: raw, vars }: { text: string; vars?: Record<string, string> }) {
+  const text = raw.replace(/\{\{=\s*([\w.-]+)\s*\}\}/g, (_, name: string) => vars?.[name] ?? `{{${name}}}`);
   const v = /^\{\{\s*([\w.-]+)\s*\}\}$/.exec(text);
   if (v) {
     const value = vars?.[v[1]];

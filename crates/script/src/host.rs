@@ -77,8 +77,8 @@ pub trait Host: Send + Sync {
 }
 
 /// Adds the host functions to the prelude's `host` object: `send(json)`, `cookies(url)`,
-/// `cookie(op, url, name, value)`, `dynamic(expression)` and `sleep(ms)`. JSON goes in and
-/// out, so the prelude sees plain objects. `deadline` is when the script must stop.
+/// `cookie(op, url, name, value)`, `dynamic(expression)`, `now()` and `sleep(ms)`. JSON goes in
+/// and out, so the prelude sees plain objects. `deadline` is when the script must stop.
 pub(crate) fn install<'js>(
     ctx: &Ctx<'js>,
     object: &Object<'js>,
@@ -168,10 +168,15 @@ pub(crate) fn install<'js>(
         })?,
     )?;
 
+    // Timers keep time with `now` and wait with `sleep`, both on the monotonic clock: `Date.now()`
+    // follows the wall clock, which on Windows moves in steps of about 15 ms.
+    let epoch = Instant::now();
+    object.set("now", Function::new(ctx.clone(), move || epoch.elapsed().as_secs_f64() * 1000.0)?)?;
+
     object.set(
         "sleep",
         Function::new(ctx.clone(), move |ms: f64| {
-            let wanted = Duration::from_millis(ms.clamp(0.0, 3_600_000.0) as u64);
+            let wanted = Duration::try_from_secs_f64(ms.min(3_600_000.0) / 1000.0).unwrap_or_default();
             std::thread::sleep(wanted.min(left()));
         })?,
     )?;

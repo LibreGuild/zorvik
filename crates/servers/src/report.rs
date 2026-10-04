@@ -310,6 +310,8 @@ impl Reporter {
     }
 
     pub fn closed(&self, conn: u64, peer: &SocketAddr, reason: &str) {
+        // Rust 1.99 deprecates this for `try_update`, which the minimum Rust version (`rust-version`) lacks.
+        #[allow(deprecated)]
         let _ = self.counters.open.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1));
         let summary = if reason.is_empty() { "Disconnected".to_string() } else { format!("Disconnected: {reason}") };
         self.admit(None);

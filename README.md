@@ -19,6 +19,10 @@
 </p>
 
 <p align="center">
+  <a href="https://devhunt.org/tool/zorvik"><img alt="zorvik on DevHunt" src="https://devhunt.org/badge/zorvik.svg"></a>
+</p>
+
+<p align="center">
   <a href="https://github.com/LibreGuild/zorvik/releases/latest"><b>Download</b></a> ·
   <a href="https://libreguild.github.io/zorvik/">Website</a> ·
   <a href="https://libreguild.github.io/zorvik/docs/">Docs</a> ·

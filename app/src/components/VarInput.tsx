@@ -188,7 +188,7 @@ export const VarInput = forwardRef<HTMLInputElement, VarInputProps>(function Var
         <VariableHint name={hover.name} left={hover.left} info={variables.find((v) => v.key === hover.name)} dynamic={catalog.get(hover.name.replace(/\(.*$/, "").trim())} />
       )}
       {menu && (
-        <div ref={list} className="zv-pop absolute left-0 top-full z-50 mt-1 max-h-60 min-w-[220px] overflow-auto rounded-lg border border-line bg-elev p-1 shadow-pop">
+        <div ref={list} className="zv-pop absolute left-0 top-full z-50 mt-1 max-h-60 min-w-[220px] max-w-[min(28rem,100%)] overflow-auto rounded-lg border border-line bg-elev p-1 shadow-pop">
           {menu.items.map((item, i) => (
             <button
               key={item}

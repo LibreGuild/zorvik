@@ -109,6 +109,18 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
     <script is:inline data-goatcounter="https://zorvik.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>
+    <!-- DevHunt launch banner. Its script also brings a page-wide CSS reset; the script after it keeps only the banner's own rules. -->
+    <script is:inline defer data-url="https://devhunt.org/tool/zorvik" src="https://cdn.jsdelivr.net/gh/sidiDev/devhunt-banner/indexV0.js"></script>
+    <script is:inline>
+      new MutationObserver((_, watch) => {
+        const sheet = document.querySelector(".dh-banner")?.parentElement?.querySelector("style")?.sheet;
+        if (!sheet) return;
+        watch.disconnect();
+        for (let i = sheet.cssRules.length - 1; i >= 0; i--) if (!sheet.cssRules[i].cssText.includes(".dh-banner")) sheet.deleteRule(i);
+        sheet.insertRule(".dh-banner { border-bottom-style: solid; }");
+        sheet.insertRule(".dh-banner p { margin: 0; }");
+      }).observe(document.documentElement, { childList: true, subtree: true });
+    </script>
   </head>
   <body>
     <a class="skip" href="#main">Skip to content</a>
@@ -595,6 +607,7 @@ curl -fsSL {github}/releases/latest/download/zorvik-cli-linux-x86_64.tar.gz \
           <a href={`${github}/blob/main/CONTRIBUTING.md`}>Contribute</a>
           <a href={`${github}#license`}>License</a>
         </nav>
+        <a href="https://devhunt.org/tool/zorvik"><img src="https://devhunt.org/badge/zorvik.svg" alt="zorvik on DevHunt" width="220" height="54" /></a>
         <p class="fine">MIT or Apache-2.0 · A <a href="https://github.com/LibreGuild">LibreGuild</a> project · This site counts page views without cookies (GoatCounter).</p>
       </div>
     </footer>

@@ -1788,7 +1788,7 @@
       if (typeof fn !== 'function') throw new TypeError('setTimeout and setInterval need a function');
       var delay = Math.max(0, Number(ms) || 0);
       timerSeq++;
-      timers.push({ id: timerSeq, at: Date.now() + delay, fn: fn, args: args, every: repeat ? Math.max(1, delay) : 0 });
+      timers.push({ id: timerSeq, at: host.now() + delay, fn: fn, args: args, every: repeat ? Math.max(1, delay) : 0 });
       return timerSeq;
     }
     function clearTimer(id) {
@@ -1804,11 +1804,11 @@
       if (!timers.length) return false;
       var next = timers[0];
       for (var i = 1; i < timers.length; i++) if (timers[i].at < next.at) next = timers[i];
-      var wait = next.at - Date.now();
+      var wait = next.at - host.now();
       if (wait > 0) host.sleep(wait);
       // The sleep ends early at the script's time limit: a timer that isn't due never runs.
-      if (Date.now() < next.at) return false;
-      if (next.every) next.at = Math.max(next.at, Date.now()) + next.every;
+      if (host.now() < next.at) return false;
+      if (next.every) next.at = Math.max(next.at, host.now()) + next.every;
       else clearTimer(next.id);
       next.fn.apply(undefined, next.args);
       return true;

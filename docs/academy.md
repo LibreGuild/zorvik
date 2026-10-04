@@ -79,7 +79,8 @@ A lesson without a lab and without a quiz gets a **Mark as done** button.
 - `##` and `###` headings, paragraphs, `**bold**`, `*italic*`, `` `code` ``, `[links](https://…)` (open in the browser).
 - Lists (`-` and `1.`), GitHub tables, fenced code blocks (```` ```json ````, `http`, `bash`, `js`, `yaml`, `text`).
 - Callouts: `> [!note] Title`, `> [!tip] Title`, `> [!warning] Title` followed by `>` lines.
-- `` `{{name}}` `` shows a variable (its value when a lab runs).
+- `` `{{name}}` `` shows a variable (its value when you hover it while a lab runs).
+- `` `{{=name}}` `` shows the lab's value itself, also inside longer code (`` `{{=docs}}/spec.yaml` ``). Use it where the learner types into a field that doesn't take variables: ports, Tools → Ping, Port check and TLS inspector, environment values, import and mock-from-OpenAPI URLs. Lab ports are picked when the lab starts, so never write a port number into a lesson.
 - Diagrams in fenced blocks:
 
 ````markdown
