@@ -98,7 +98,7 @@ hmac = "0.13"
 ring = "0.17"
 pem = "4"
 # RSA-SHA1 (OAuth 1.0a), which ring only verifies.
-num-bigint = "0.4"
+num-bigint = "0.5"
 rusqlite = { version = "0.40", features = ["bundled"] }
 ts-rs = { version = "12", features = ["serde-json-impl"] }
 trash = "5"
