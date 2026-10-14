@@ -63,7 +63,7 @@ rquickjs = { version = "0.14", features = ["macro"] }
 # gRPC: dynamic messages, JSON mapping, `.proto` compiling without protoc.
 prost = "0.14"
 prost-reflect = { version = "0.16", features = ["serde"] }
-protox = "0.9"
+protox = "0.10"
 hyper = { version = "1.11", features = ["client", "server", "http1", "http2"] }
 hyper-util = { version = "0.1.21", features = ["tokio", "server", "server-auto", "service", "http1", "http2"] }
 http = "1"
@@ -98,7 +98,7 @@ hmac = "0.13"
 ring = "0.17"
 pem = "4"
 # RSA-SHA1 (OAuth 1.0a), which ring only verifies.
-num-bigint = "0.4"
+num-bigint = "0.5"
 rusqlite = { version = "0.40", features = ["bundled"] }
 ts-rs = { version = "12", features = ["serde-json-impl"] }
 trash = "5"
