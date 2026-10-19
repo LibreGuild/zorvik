@@ -656,7 +656,8 @@ mod tests {
         assert_eq!(c.details.issuer_common_name.as_deref(), Some("Test Root"));
         assert_eq!(c.extended_key_usage, ["Server authentication"]);
         assert_eq!(c.version, 3);
-        assert_eq!(c.pem.trim(), server.cert_pem.trim());
+        // rcgen writes the platform's line endings; the decoder writes \n.
+        assert_eq!(c.pem.trim(), server.cert_pem.replace("\r\n", "\n").trim());
         assert!(r.items[1].certificate.as_ref().unwrap().details.is_ca);
         // The key: its type, and that it belongs to the server certificate. Never echoed.
         let key = r.items[2].key.as_ref().unwrap();
