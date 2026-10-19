@@ -5,7 +5,7 @@ import { ArrowDown, ArrowUp, Plus, X } from "lucide-react";
 import type { LoadModel } from "../../bindings/LoadModel";
 import type { LoadStage } from "../../bindings/LoadStage";
 import { useLoadTests, runFor } from "../../store/loadtests";
-import { Button, cx, IconButton, Tooltip } from "../ui";
+import { Button, cx, IconButton, NumberInput, Tooltip } from "../ui";
 import {
   formatCount,
   formatDuration,
@@ -21,7 +21,7 @@ import {
   timeLabel,
   totalDuration,
 } from "./model";
-import { NumberInput, useElementWidth } from "./parts";
+import { useElementWidth } from "./parts";
 
 const MAX_STAGE_SECS = 86_400;
 
@@ -98,6 +98,7 @@ export const StagesEditor = memo(function StagesEditor({
             value={peak}
             min={0}
             max={info.limit}
+            softMax
             {...scaling}
             onChange={(v) => onChange((list) => scaleTargets(base.current ?? list, v ?? 0))}
             className="w-28"
@@ -138,7 +139,7 @@ export const StagesEditor = memo(function StagesEditor({
                 <span className="hidden w-[52px] shrink-0 truncate text-[10.5px] text-faint @min-[400px]:inline">{what}</span>
               </div>
               <div className="flex min-w-0 items-center gap-1.5">
-                <NumberInput aria-label={`Stage ${i + 1} target`} value={s.target} min={0} max={info.limit} onChange={(v) => update(i, { target: v ?? 0 })} className="h-7 min-w-0" />
+                <NumberInput aria-label={`Stage ${i + 1} target`} value={s.target} min={0} max={info.limit} softMax onChange={(v) => update(i, { target: v ?? 0 })} className="h-7 min-w-0" />
               </div>
               <div className="flex items-center justify-end gap-0.5">
                 <IconButton label={`Move stage ${i + 1} up`} data-move="up" size={22} disabled={i === 0} onClick={() => move(i, -1)}>

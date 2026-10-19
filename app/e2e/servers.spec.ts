@@ -31,7 +31,7 @@ test("a TCP server runs in the background and a TCP client talks to it", async (
   await page.getByRole("button", { name: "New tab" }).click();
   await page.getByRole("menuitem", { name: "TCP connection" }).click();
   await page.getByLabel("URL", { exact: true }).fill(`tcp://127.0.0.1:${PORT}`);
-  await page.getByRole("button", { name: "Connect" }).click();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(page.getByTestId("stream-status")).toHaveText("Connected");
   await page.locator('[data-testid="stream-pane"] .cm-content').click();
   await page.keyboard.type("hello over tcp");

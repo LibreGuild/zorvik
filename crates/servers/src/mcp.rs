@@ -40,7 +40,7 @@ pub(crate) async fn run(listener: TcpListener, ctx: Ctx) -> Result<(), String> {
     let mcp =
         Arc::new(Mcp { live: ctx.live.clone(), reporter: ctx.reporter.clone(), sessions: Mutex::new(HashMap::new()) });
     tokio::spawn(announce_changes(mcp.clone(), ctx.live.clone(), ctx.cancel.clone()));
-    tokio::spawn(report_problems(ctx.live.clone(), ctx.reporter.clone(), ctx.cancel.clone()));
+    crate::report_problems(&ctx, |live| live.server.mcp.problems());
     let handler: Handler = {
         let mcp = mcp.clone();
         Arc::new(move |req: Request<Incoming>, peer: Peer| -> HandlerFuture {
@@ -471,22 +471,6 @@ async fn keep_alive(tx: mpsc::Sender<Bytes>, closed: CancellationToken) {
             }
             _ = closed.cancelled() => return,
             _ = tx.closed() => return,
-        }
-    }
-}
-
-/// Settings clients would trip over are reported when they appear.
-async fn report_problems(mut live: watch::Receiver<Arc<Live>>, reporter: Reporter, stopped: CancellationToken) {
-    let mut reported: Vec<String> = Vec::new();
-    loop {
-        let problems = live.borrow_and_update().server.mcp.problems();
-        for p in problems.iter().filter(|p| !reported.contains(p)) {
-            reporter.error(None, None, p.clone());
-        }
-        reported = problems;
-        tokio::select! {
-            changed = live.changed() => if changed.is_err() { return },
-            _ = stopped.cancelled() => return,
         }
     }
 }

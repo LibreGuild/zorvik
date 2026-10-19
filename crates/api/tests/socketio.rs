@@ -121,3 +121,144 @@ async fn a_socketio_request_talks_to_a_socketio_server() {
     let e = api.call("socket.connect", json!({ "connId": "bad", "request": bad, "path": null })).await.unwrap_err();
     assert!(e.message.starts_with("The auth payload is not valid JSON"), "{}", e.message);
 }
+
+#[tokio::test]
+async fn socketio_saved_emits_steps_repeats_and_runs() {
+    let data = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let events = Arc::new(Collect::default());
+    let api = Api::new(data.path().to_path_buf(), events.clone());
+    let call = |method: &'static str, params: Value| {
+        let api = &api;
+        async move {
+            match api.call(method, params).await {
+                Ok(v) => v,
+                Err(e) => panic!("{method} failed: {} ({})", e.message, e.code),
+            }
+        }
+    };
+    call("workspace.create", json!({ "path": dir.path(), "name": "IO" })).await;
+    let server = json!({ "name": "Rooms", "kind": "socketio", "port": 0,
+        "socketio": { "mode": "rules", "rules": [
+            { "event": "join", "replyEvent": "joined", "replyArgs": "{\"room\": {{event.arg0}}}" },
+        ] } });
+    let id: String = serde_json::from_value(call("server.create", json!({ "server": server })).await).unwrap();
+    let server = call("server.read", json!({ "id": id })).await;
+    let info = call("server.start", json!({ "id": id, "server": server })).await;
+    let url = info["url"].as_str().unwrap().to_string();
+
+    let request = json!({ "name": "Rooms", "kind": "socketio", "url": format!("{url}/chat"),
+        "socketio": {
+            "messages": [
+                { "name": "Join", "event": "join", "text": "lobby" },
+                { "name": "Beat", "event": "beat", "format": "json", "text": "[{{$randomInt(1, 1)}}]" },
+            ],
+            "onConnect": [
+                { "type": "send", "message": "Join" },
+                { "type": "wait", "event": "joined", "match": "json", "pattern": "$[0].room == lobby" },
+                { "type": "repeat", "message": "Beat", "everyMs": 40 },
+            ],
+        } });
+    call("socket.connect", json!({ "connId": "io", "request": request, "path": null })).await;
+    let notes = || {
+        events
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::Socket { conn_id, event: SocketEvent::Info { text, .. } } if conn_id == "io" => {
+                    Some(text.clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    for _ in 0..200 {
+        if notes().iter().any(|t| t.starts_with("On connect: sending Beat")) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let seen = notes();
+    assert!(seen.contains(&"On connect: sent Join".to_string()), "{seen:?}");
+    assert!(
+        seen.iter()
+            .any(|t| t.starts_with("On connect: got the event \"joined\" with arguments where $[0].room == lobby")),
+        "{seen:?}"
+    );
+    // The heartbeat emits, with its variable filled in each time.
+    let beats = || {
+        events
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e, StreamEvent::Socket { event: SocketEvent::Message { direction: Direction::Sent, topic: Some(t), text: Some(x), .. }, .. } if t == "beat" && x == "[1]"))
+            .count()
+    };
+    for _ in 0..200 {
+        if beats() >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(beats() >= 2);
+
+    // The composer's repeating emit, then stop.
+    call(
+        "socket.repeat",
+        json!({ "connId": "io", "message": { "name": "", "event": "hello", "text": "hi" }, "everyMs": 30 }),
+    )
+    .await;
+    let hellos = || {
+        events.0.lock().unwrap().iter().filter(|e| matches!(e, StreamEvent::Socket { event: SocketEvent::Message { direction: Direction::Sent, topic: Some(t), text: Some(x), .. }, .. } if t == "hello" && x == "[\"hi\"]")).count()
+    };
+    for _ in 0..200 {
+        if hellos() >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    call("socket.stopRepeat", json!({ "connId": "io" })).await;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let stopped = hellos();
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    assert_eq!(hellos(), stopped);
+    let e = api
+        .call("socket.repeat", json!({ "connId": "io", "message": { "name": "x", "text": "hi" }, "everyMs": 30 }))
+        .await
+        .unwrap_err();
+    assert!(e.message.contains("no event to emit"), "{}", e.message);
+    call("socket.close", json!({ "connId": "io" })).await;
+
+    // In a collection run, the waits are tests.
+    let folder = call("folder.create", json!({ "parent": "", "name": "Live" })).await;
+    let mut saved = request.clone();
+    saved["socketio"]["onConnect"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "type": "wait", "event": "never", "timeoutMs": 100 }));
+    call("request.create", json!({ "parent": folder, "request": saved })).await;
+    let started = call("runner.start", json!({ "folder": folder })).await;
+    let run_id = started["runId"].as_str().unwrap().to_string();
+    // The run's events: wait for the result.
+    let mut text = String::new();
+    for _ in 0..250 {
+        text = events
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e, StreamEvent::Runner { run_id: r, .. } if *r == run_id))
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if text.contains("\"finished\"") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(40)).await;
+    }
+    assert!(text.contains("Wait for the event \\\"joined\\\" with arguments where $[0].room == lobby"), "{text}");
+    assert!(text.contains("Wait for the event \\\"never\\\""), "{text}");
+}

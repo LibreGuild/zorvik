@@ -62,7 +62,7 @@ const folder = (path: string, name: string, children: TreeNode[]): TreeNode => (
 const tree: TreeNode[] = [
   folder("users", "Users", [
     req("users/list.yaml", "List"),
-    req("users/socket.yaml", "Socket", { requestKind: "websocket" }),
+    req("users/socket.yaml", "Socket", { requestKind: "tcp" }),
     req("users/events.yaml", "Events", { requestKind: "sse" }),
     folder("users/admin", "Admin", [req("users/admin/ban.yaml", "Ban", { method: "POST" })]),
     req("users/broken.yaml", "Broken", { error: "bad yaml" }),
@@ -122,7 +122,7 @@ beforeEach(() => {
 });
 
 describe("requests of a run", () => {
-  it("lists a folder's HTTP and event-stream requests in sidebar order, with their folder trail", () => {
+  it("lists a folder's HTTP, event-stream, WebSocket and MCP requests in sidebar order, with their folder trail", () => {
     const users = runnableRequests(tree, "users")!;
     expect(users.map((r) => [r.path, r.trail])).toEqual([
       ["users/list.yaml", "Users"],

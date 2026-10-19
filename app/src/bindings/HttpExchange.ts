@@ -18,6 +18,12 @@ requestBody: string, status: number, responseHeaders: Array<Header>, responseBod
  */
 route: string | null, 
 /**
- * Fault injected instead of the normal answer (`error`, `reset`, `hang`) or `proxy`.
+ * Fault injected instead of the normal answer (`error`, `reset`, `hang`), `proxy`, or
+ * which answer of a route's sequence it was (`answer 2 of 3`).
  */
-note: string | null, };
+note: string | null, 
+/**
+ * `response_body` is the whole body as text (not cut, binary or compressed), so the
+ * answer can be saved as a route.
+ */
+responseBodyComplete: boolean, };

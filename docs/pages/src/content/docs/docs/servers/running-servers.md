@@ -128,7 +128,9 @@ The right side of a server's tab is its **Traffic** panel.
 | DNS query | Question and answer summary. |
 | Note / error | Server notes, rule problems, TLS handshake failures, bad clients. |
 
-Click a message, HTTP or DNS entry to expand it: payloads in full (JSON pretty-printed, binary as hex), HTTP request and response headers and bodies with the route that answered (or **no route matched**) and any note (**error**, **reset**, **hang**, **proxy**, **CORS preflight**, **client left**, **server stopped**), or the DNS answer in `dig` format. Every block has a copy button.
+Click a message, HTTP or DNS entry to expand it: payloads in full (JSON pretty-printed, binary as hex), HTTP request and response headers and bodies with the route that answered (or **no route matched**) and any note (**error**, **reset**, **hang**, **proxy**, **CORS preflight**, **client left**, **server stopped**, or **answer 2 of 3** for a route's [answer sequence](../mock-api/#answer-sequences)), or the DNS answer in `dig` format. Every block has a copy button.
+
+On a mock API that forwards unmatched requests, a forwarded exchange has a **Save as route** button, and **Save proxied answers as routes** at the top of the panel saves them all: see [Record the backend's answers as routes](../mock-api/#record-the-backends-answers-as-routes).
 
 **Filter traffic** matches entry summaries, payloads and client addresses (case-insensitive); type `#3` for connection 3. **Clear traffic** (bin icon) empties the log.
 
@@ -151,6 +153,10 @@ zorvik serve ./my-workspace "Users API" --env Staging --port 8080
 ```
 
 It takes the environment (`--env`), variables (`--var key=value`), another port or address (`--port`, `--host`), `-k` to skip certificate checks when forwarding, and `--json` for JSON lines. See [zorvik serve](../../cli/serve/).
+
+## Docs
+
+The **Docs** section at the bottom of a server's settings holds notes about the server (what it is for, which routes matter), in Markdown. They show as formatted text; **Edit** (or a double-click) changes them. See [Docs](../../requests/http/#docs) for what the Markdown can hold. Docs are saved with the server and don't change what it answers.
 
 ## AI agents
 

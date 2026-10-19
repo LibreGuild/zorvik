@@ -155,8 +155,20 @@ pub enum SocketEvent {
 }
 
 impl SocketEvent {
+    /// An acknowledgement the client sent by itself (Socket.IO, answering the server).
+    pub fn is_automatic_ack(&self) -> bool {
+        matches!(
+            self,
+            SocketEvent::Message { direction: Direction::Sent, detail: Some(d), .. }
+                if d.starts_with(crate::socketio::ACK_OF)
+        )
+    }
+
+    /// A message for the log. What was sent is kept only as its start (see
+    /// [`crate::framing::sent_preview`]); `size` is always the whole message's.
     pub fn message(direction: Direction, bytes: &[u8]) -> Self {
-        let (text, base64) = display_payload(bytes);
+        let shown = if direction == Direction::Sent { crate::framing::sent_preview(bytes) } else { bytes };
+        let (text, base64) = display_payload(shown);
         SocketEvent::Message {
             direction,
             text,

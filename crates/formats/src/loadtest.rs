@@ -20,6 +20,9 @@ fn is_one(v: &u32) -> bool {
 fn is_zero(v: &u64) -> bool {
     *v == 0
 }
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
 fn default_in_flight() -> u32 {
     1000
 }
@@ -163,6 +166,11 @@ pub struct Threshold {
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     #[ts(optional, as = "Option<bool>")]
     pub enabled: bool,
+    /// Stop the run early when this threshold has failed for this many
+    /// seconds in a row (checked live, after the warm-up); never when missing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub abort_after_secs: Option<u32>,
 }
 
 /// A saved load test.
@@ -184,6 +192,17 @@ pub struct LoadTest {
     #[serde(default, skip_serializing_if = "is_zero")]
     #[ts(optional, as = "Option<u32>")]
     pub think_time_ms: u64,
+    /// Closed model: each pause is random between `think_time_ms` and this, so
+    /// users don't send in lock-step. A fixed pause when missing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub think_time_max_ms: Option<u64>,
+    /// Requests that finish in the first seconds of the run are left out of the
+    /// numbers and thresholds (they are still charted): caches, JIT and
+    /// connection pools warm up first.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    #[ts(optional, as = "Option<u32>")]
+    pub warm_up_secs: u32,
     /// Open model: most requests in flight at once; more are counted as dropped.
     #[serde(default = "default_in_flight", skip_serializing_if = "is_default_in_flight")]
     #[ts(optional, as = "Option<u32>")]
@@ -230,6 +249,8 @@ impl LoadTest {
                 LoadStage { duration_secs: 10, target: 0 },
             ],
             think_time_ms: 0,
+            think_time_max_ms: None,
+            warm_up_secs: 0,
             max_in_flight: default_in_flight(),
             keep_alive: true,
             timeout_ms: None,
@@ -242,6 +263,7 @@ impl LoadTest {
                     value: 500.0,
                     target: None,
                     enabled: true,
+                    abort_after_secs: None,
                 },
                 Threshold {
                     metric: ThresholdMetric::ErrorRate,
@@ -249,6 +271,7 @@ impl LoadTest {
                     value: 1.0,
                     target: None,
                     enabled: true,
+                    abort_after_secs: None,
                 },
             ],
             docs: String::new(),
@@ -307,5 +330,22 @@ mod tests {
         assert!(again.contains("dataFile: users.csv") && again.contains("from: header"), "{again}");
         assert_eq!(serde_yaml_ng::from_str::<LoadTest>(&again).unwrap(), test);
         assert!(ThresholdOp::Lte.holds(1.0, 1.0) && !ThresholdOp::Lt.holds(1.0, 1.0));
+    }
+
+    #[test]
+    fn think_time_range_warm_up_and_abort_are_optional() {
+        let t = LoadTest::new("Smoke", vec!["a.yaml".into()]);
+        let yaml = serde_yaml_ng::to_string(&t).unwrap();
+        for field in ["thinkTimeMaxMs", "warmUpSecs", "abortAfterSecs"] {
+            assert!(!yaml.contains(field), "{yaml}");
+        }
+        let yaml = "name: X\nthinkTimeMs: 100\nthinkTimeMaxMs: 500\nwarmUpSecs: 10\ntargets: [{request: a.yaml}]\nthresholds:\n  - { metric: errorRate, op: '<', value: 5, abortAfterSecs: 10 }\n";
+        let test: LoadTest = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!((test.think_time_ms, test.think_time_max_ms, test.warm_up_secs), (100, Some(500), 10));
+        assert_eq!(test.thresholds[0].abort_after_secs, Some(10));
+        let again = serde_yaml_ng::to_string(&test).unwrap();
+        assert!(again.contains("thinkTimeMaxMs: 500") && again.contains("warmUpSecs: 10"), "{again}");
+        assert!(again.contains("abortAfterSecs: 10"), "{again}");
+        assert_eq!(serde_yaml_ng::from_str::<LoadTest>(&again).unwrap(), test);
     }
 }

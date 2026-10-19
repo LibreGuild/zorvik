@@ -12,7 +12,7 @@ use tokio::net::TcpStream;
 use zorvik_engine::{
     Client, Direction, HttpRequest, RequestOptions, TlsOptions, WsConnected, WsEvent, WsMessageKind, WsOutgoing,
 };
-use zorvik_formats::{MatchKind, ReplyMode, ReplyRule, Server, ServerKind, ServerTls};
+use zorvik_formats::{MatchKind, ReplyMode, ReplyRule, ScheduledMessage, Server, ServerKind, ServerTls};
 use zorvik_servers::{OutgoingMessage, TrafficDirection, TrafficKind};
 use zorvik_workspace::vars::VarContext;
 
@@ -101,6 +101,54 @@ async fn greeting_echo_and_rules() {
     ws.session.send(WsOutgoing::Close { code: Some(4000), reason: Some("bye".into()) }).unwrap();
     let close = events.wait_kind(TrafficKind::Close).await;
     assert!(close.summary.contains("closed by the client (4000 bye)"), "{}", close.summary);
+}
+
+#[tokio::test]
+async fn json_replies_scheduled_messages_and_closing_rules() {
+    let mut server = Server::new("WS", ServerKind::Websocket);
+    server.websocket.mode = ReplyMode::Rules;
+    server.websocket.rules = vec![
+        ReplyRule { matcher: MatchKind::Json, pattern: "$.op == bye".into(), close: Some(4001), ..Default::default() },
+        ReplyRule {
+            matcher: MatchKind::Json,
+            pattern: "$.id".into(),
+            reply: r#"{"id": {{message.id}}, "result": "{{message.params.q}}!"}"#.into(),
+            ..Default::default()
+        },
+    ];
+    server.websocket.schedule = vec![
+        ScheduledMessage { message: "tick".into(), every_ms: 60, enabled: true },
+        ScheduledMessage { message: "never".into(), every_ms: 10, enabled: false },
+    ];
+    let (running, _events) = start(server).await;
+    let mut ws = connect(&running.url, &RequestOptions::default()).await;
+
+    // The scheduled message keeps coming, one interval apart.
+    let started = std::time::Instant::now();
+    assert_eq!(next_text(&mut ws).await, "tick");
+    assert_eq!(next_text(&mut ws).await, "tick");
+    assert!(started.elapsed() >= Duration::from_millis(110), "{:?}", started.elapsed());
+
+    ws.session.send(WsOutgoing::Text { text: r#"{"id": 42, "params": {"q": "hi"}}"#.into() }).unwrap();
+    let reply = loop {
+        let text = next_text(&mut ws).await;
+        if text != "tick" {
+            break text;
+        }
+    };
+    assert_eq!(reply, r#"{"id": 42, "result": "hi!"}"#);
+
+    ws.session.send(WsOutgoing::Text { text: r#"{"op": "bye"}"#.into() }).unwrap();
+    loop {
+        match next(&mut ws).await {
+            WsEvent::Closed { code, .. } => {
+                assert_eq!(code, Some(4001));
+                break;
+            }
+            WsEvent::Message { text: Some(t), .. } if t == "tick" => {}
+            other => panic!("expected the close, got {other:?}"),
+        }
+    }
 }
 
 #[tokio::test]

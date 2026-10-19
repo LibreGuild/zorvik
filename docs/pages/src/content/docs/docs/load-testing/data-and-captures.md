@@ -135,7 +135,7 @@ The header name, in any case: `ETag`, `location`, `X-Request-Id`. The first head
 
 ### `regex`: a regular expression over the body
 
-The first match's **first group** is the value; a pattern without a group takes the whole match. For example `token=(\w+)` on `...token=abc123...` gives `abc123`, and `[A-Z]{3}-\d+` gives the whole match. The syntax is Rust's `regex` crate (no look-around or back-references). An invalid pattern stops the test before it starts ("capture 'token': invalid regular expression: …").
+The first match's **first group** is the value; a pattern without a group takes the whole match. For example `token=(\w+)` on `...token=abc123...` gives `abc123`, and `[A-Z]{3}-\d+` gives the whole match. The syntax is Rust's `regex` crate (no look-around or back-references). An invalid pattern stops the test before it starts ("capture 'token': invalid regular expression: …"). The [Regex tester](../../tools/regex-tester/) shows what a pattern captures before you run the test.
 
 ### How captures behave
 

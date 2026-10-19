@@ -83,7 +83,7 @@ The workspace menu contains:
 
 ## Workspace settings
 
-**Workspace menu → Workspace settings…** has four tabs:
+**Workspace menu → Workspace settings…** has five tabs:
 
 | Tab | What it holds |
 |---|---|
@@ -91,6 +91,7 @@ The workspace menu contains:
 | **Default auth** | Auth for every request left on **Inherit from parent** whose folders don't set one. The default is **No auth**. See [Auth](../../requests/auth/#inheritance). |
 | **Default headers** | Headers sent with every request in the workspace unless a folder or the request sets the same header |
 | **Scripts** | Pre-request and post-response scripts that run around every request. See [Scripts & tests](../../scripting/overview/). |
+| **Docs** | Notes about the workspace, in Markdown. See [Docs](../../requests/http/#docs). |
 
 Workspace **variables** are edited under **Environments & variables** (<kbd>Mod</kbd>+<kbd>E</kbd>), not here. See [Variables & environments](../../variables/variables-and-environments/#workspace-variables).
 
@@ -149,7 +150,7 @@ The collection itself has the same **Import…**, **Run…**, **Mock the collect
 | **Auth** | Requests inside that are left on **Inherit from parent**. The folder itself can inherit from its parent folder or the workspace. |
 | **Headers** | Every request inside. A request, or a folder deeper down, that sets the same header replaces it. |
 | **Scripts** | Pre-request and post-response scripts that run for every request inside |
-| **Docs** | Notes about the folder, in Markdown |
+| **Docs** | Notes about the folder, in Markdown. See [Docs](../../requests/http/#docs). |
 | **API spec** | Only for folders imported from an OpenAPI document: where the kept document is, and **Check responses against the spec** |
 
 ### How settings flow down

@@ -81,7 +81,7 @@ It targets a host outside your computer and private networks. Load only systems 
 
 ### Are load test results shared with my team?
 
-No. The run history stays on your computer (the newest 30 runs per test). Export an [HTML or JSON report](../../load-testing/results-and-reports/#export-html-and-json) to share one.
+No. The run history stays on your computer (the newest 30 runs per test). Export an [HTML, JSON or CSV report](../../load-testing/results-and-reports/#export-html-json-and-csv) to share one.
 
 ## AI agents
 

@@ -53,6 +53,7 @@ th{color:var(--ink-2);font-weight:600;font-size:13px}
 th:first-child,td:first-child{text-align:left;white-space:normal;overflow-wrap:anywhere}
 tr:last-child td{border-bottom:0}
 .muted{color:var(--muted)}.pass{color:var(--good)}.fail{color:var(--bad)}
+.note{color:var(--ink-2);margin:-4px 0 16px}
 .split{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
 .split section{margin:0}
 footer{color:var(--muted);font-size:12px;text-align:center;margin-top:24px}
@@ -140,6 +141,7 @@ pub(crate) fn report(title: &str, s: &Summary) -> String {
     let failed_thresholds = s.thresholds.iter().filter(|t| !t.passed).count();
     let verdict = match (&s.error, s.passed) {
         (Some(_), _) => "✗ Failed (error)".to_string(),
+        (None, false) if s.stopped_by_threshold.is_some() => "✗ Failed (stopped by a threshold)".to_string(),
         (None, true) if s.thresholds.is_empty() => "✓ Passed (no thresholds)".to_string(),
         (None, true) => "✓ Passed".to_string(),
         (None, false) => format!("✗ Failed ({failed_thresholds} of {} thresholds)", s.thresholds.len()),
@@ -155,6 +157,13 @@ pub(crate) fn report(title: &str, s: &Summary) -> String {
     );
     if let Some(error) = &s.error {
         let _ = writeln!(out, "<p class=\"error\">{}</p>", esc(error));
+    }
+    if let Some(label) = &s.stopped_by_threshold {
+        let _ = writeln!(
+            out,
+            "<p class=\"error\">Stopped early: the threshold {} failed for longer than it allows.</p>",
+            esc(label)
+        );
     }
 
     // Key numbers.
@@ -188,6 +197,13 @@ pub(crate) fn report(title: &str, s: &Summary) -> String {
         tile(&mut out, "Generator CPU", &format!("{cpu:.0} %"), "peak, 100 % = one core");
     }
     out.push_str("</section>\n");
+    if s.warm_up_ms > 0 {
+        let _ = writeln!(
+            out,
+            "<p class=\"note\">Warm-up: requests that finished in the first {} are in the charts but not in these numbers or the thresholds.</p>",
+            duration(s.warm_up_ms)
+        );
+    }
 
     if !s.thresholds.is_empty() {
         out.push_str("<section><h2>Thresholds</h2><div class=\"table\"><table>\n");
@@ -226,7 +242,7 @@ pub(crate) fn report(title: &str, s: &Summary) -> String {
         if misses {
             out.push_str("<th>Capture misses</th>");
         }
-        out.push_str("<th>Data in</th></tr>\n");
+        out.push_str("<th>Data in</th><th>Status codes</th></tr>\n");
         for target in &s.targets {
             let m = &target.metrics;
             let _ = write!(
@@ -249,7 +265,7 @@ pub(crate) fn report(title: &str, s: &Summary) -> String {
                 let class = if m.capture_misses > 0 { " class=\"fail\"" } else { "" };
                 let _ = write!(out, "<td{class}>{}</td>", thousands(m.capture_misses));
             }
-            let _ = writeln!(out, "<td>{}</td></tr>", bytes(m.bytes_in));
+            let _ = writeln!(out, "<td>{}</td><td>{}</td></tr>", bytes(m.bytes_in), status_list(m));
         }
         out.push_str("</table></div></section>\n");
     }
@@ -338,6 +354,19 @@ fn share(part: u64, whole: u64) -> f64 {
 
 fn latency_cells(l: &LatencySummary) -> String {
     [l.min, l.avg, l.p50, l.p90, l.p95, l.p99, l.p999, l.max].iter().map(|v| format!("<td>{}</td>", ms(*v))).collect()
+}
+
+/// A request's answers in brief: `200 × 950, 503 × 12` (the four most frequent)
+/// and its network errors, `timeout × 3`.
+fn status_list(m: &MetricsSummary) -> String {
+    let mut parts: Vec<String> =
+        m.status_codes.iter().take(4).map(|(code, n)| format!("{code} × {}", thousands(*n))).collect();
+    let rest: u64 = m.status_codes.iter().skip(4).map(|(_, n)| n).sum();
+    if rest > 0 {
+        parts.push(format!("other × {}", thousands(rest)));
+    }
+    parts.extend(m.error_kinds.iter().map(|(kind, n)| format!("{} × {}", esc(kind), thousands(*n))));
+    if parts.is_empty() { "–".to_string() } else { parts.join(", ") }
 }
 
 fn status_table(out: &mut String, t: &MetricsSummary) {
@@ -792,6 +821,8 @@ mod tests {
             stopped_early: false,
             error: None,
             peak_cpu_percent: None,
+            warm_up_ms: 0,
+            stopped_by_threshold: None,
         }
     }
 
@@ -836,6 +867,23 @@ mod tests {
         // No charts, no script.
         let empty = report("Smoke", &Summary { points: Vec::new(), ..small_run() });
         assert!(!empty.contains("<script"));
+    }
+
+    #[test]
+    fn warm_up_stop_and_status_per_request() {
+        let mut run = small_run();
+        assert!(!report("Smoke", &run).contains("Warm-up") && !report("Smoke", &run).contains("Stopped early"));
+        run.warm_up_ms = 10_000;
+        run.stopped_by_threshold = Some("errorRate < 1 % · <b>".into());
+        run.passed = false;
+        run.stopped_early = true;
+        run.targets[0].metrics.status_codes = vec![(200, 590), (503, 7), (500, 1), (404, 1), (429, 1)];
+        run.targets[0].metrics.error_kinds = vec![("timeout".into(), 2)];
+        let html = report("Smoke", &run);
+        assert!(html.contains("Warm-up: requests that finished in the first 10 s"), "{html}");
+        assert!(html.contains("✗ Failed (stopped by a threshold)"));
+        assert!(html.contains("the threshold errorRate &lt; 1 % · &lt;b&gt; failed"), "{html}");
+        assert!(html.contains("<td>200 × 590, 503 × 7, 500 × 1, 404 × 1, other × 1, timeout × 2</td>"), "{html}");
     }
 
     #[test]

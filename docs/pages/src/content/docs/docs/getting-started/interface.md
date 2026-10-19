@@ -48,7 +48,7 @@ The rail on the far left switches the sidebar between seven sections. Hover an i
 | **Collection** | The requests and folders of the workspace, with **Filter** and **+** (new request, new folder, import, run, mock, load test). See [Workspaces](../workspaces/#requests). |
 | **Load tests** | The workspace's load tests. A pulsing dot on the icon means one is running. See [Load testing](../../load-testing/overview/). |
 | **Servers** | Mock APIs and other servers. A badge on the icon counts the running ones. See [Mock servers](../../servers/mock-api/). |
-| **Tools** | Network tools that open in their own tab: **TLS inspector**, **DNS lookup**, **Port check**, **Ping**, **Network interfaces**, **Encoders** and **HTTP/3 check** |
+| **Tools** | Tools that open in their own tab: **TLS inspector**, **DNS lookup**, **Port check**, **Ping**, **Network interfaces**, **Encoders**, **HTTP/3 check**, **Certificate decoder**, **JSON compare**, **Filter playground** and **Regex tester**. See [Network tools](../../tools/network-tools/) |
 | **History** | Every request you sent in this workspace. See [Responses](../../requests/responses/#history). |
 | **AI agents** | What connected agents do, and how to connect one. A green dot on the icon means an agent is connected. See [AI agents](../../agents/setup/). |
 | **Docs** | Short in-app docs for every feature |

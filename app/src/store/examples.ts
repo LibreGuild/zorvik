@@ -13,6 +13,16 @@ export function exampleHeaders(headers: SendResult["meta"]["headers"]): KeyValue
   return headers.filter((h) => !SKIPPED.includes(h.name.toLowerCase())).map((h) => ({ key: h.name, value: h.value, enabled: true }));
 }
 
+/** The example's Content-Type (enabled header), lowercased; "" without one. */
+export function exampleContentType(example: Example): string {
+  return (example.headers ?? []).find((h) => h.enabled !== false && h.key.toLowerCase() === "content-type")?.value.toLowerCase() ?? "";
+}
+
+/** Whether the body is meant as JSON: its Content-Type says so, or it starts like an object or array. */
+export function isJsonExample(example: Example): boolean {
+  return exampleContentType(example).includes("json") || /^\s*[{[]/.test(example.body ?? "");
+}
+
 /** A name that isn't taken yet: "200 OK", "200 OK (2)"… */
 export function exampleName(base: string, taken: string[]): string {
   if (!taken.includes(base)) return base;
@@ -28,7 +38,8 @@ export function exampleName(base: string, taken: string[]): string {
  */
 export async function saveAsExample(tabId: string, result: SendResult): Promise<boolean> {
   if (!isRequestTab(useTabs.getState().tabs.find((t) => t.id === tabId))) return false;
-  const { text } = await api.responseText(result.responseId);
+  // A JSON body is kept indented (two spaces), its numbers exactly as the server sent them.
+  const { text } = await api.responseText(result.responseId, true);
   // As the tab is now: edits typed while the body loaded wait to be saved with the others.
   const tab = useTabs.getState().tabs.find((t) => t.id === tabId);
   if (!isRequestTab(tab)) return false;

@@ -135,6 +135,18 @@ fn app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wr
     Menu::with_items(app, &[&app_menu, &edit, &window])
 }
 
+/// The app's own page: `tauri://localhost` (macOS, Linux), `http(s)://tauri.localhost`
+/// (Windows), or the dev server in a debug build.
+fn is_app_page(url: &tauri::Url) -> bool {
+    match url.scheme() {
+        "tauri" => true,
+        "http" | "https" => {
+            url.host_str() == Some("tauri.localhost") || (cfg!(debug_assertions) && url.host_str() == Some("localhost"))
+        }
+        _ => false,
+    }
+}
+
 pub fn run() {
     zorvik_engine::raise_open_file_limit();
     let builder = tauri::Builder::default();
@@ -152,6 +164,14 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Only the app's own page (see the CSP), which opens the microphone when the user starts a
+        // recording. The system still asks once (macOS, Windows privacy settings).
+        .on_permission_request(|webview, kind| match kind {
+            tauri::webview::PermissionKind::Microphone if webview.url().is_ok_and(|url| is_app_page(&url)) => {
+                tauri::webview::PermissionResponse::Allow
+            }
+            _ => tauri::webview::PermissionResponse::Default,
+        })
         .manage(updates::Updates::default())
         .setup(|app| {
             let handle = app.handle().clone();
@@ -222,4 +242,19 @@ pub fn run() {
             }
             _ => {}
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_app_page;
+
+    #[test]
+    fn only_the_app_page_gets_the_microphone() {
+        let page = |url: &str| is_app_page(&tauri::Url::parse(url).unwrap());
+        assert!(page("tauri://localhost/index.html"));
+        assert!(page("http://tauri.localhost/"));
+        assert!(!page("https://example.com/"));
+        assert!(!page("http://tauri.localhost.example.com/"));
+        assert!(!page("about:blank"));
+    }
 }

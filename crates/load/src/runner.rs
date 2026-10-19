@@ -128,6 +128,8 @@ fn failed(started_at: f64, error: String) -> Summary {
         stopped_early: false,
         error: Some(error),
         peak_cpu_percent: None,
+        warm_up_ms: 0,
+        stopped_by_threshold: None,
     }
 }
 
@@ -155,6 +157,7 @@ fn run_thread(prepared: Prepared, on_event: EventFn, stop: CancellationToken) {
         plan.thresholds.clone(),
         profile.clone(),
         plan.model == LoadModel::ArrivalRate,
+        plan.warm_up,
     )));
     let weights: Vec<u32> = plan.targets.iter().map(|t| t.weight).collect();
     let (samples, rx) = mpsc::channel(CHANNEL);
@@ -170,6 +173,8 @@ fn run_thread(prepared: Prepared, on_event: EventFn, stop: CancellationToken) {
         profile,
         model: plan.model,
         think_time: plan.think_time,
+        think_time_max: plan.think_time_max,
+        seed: started_at.to_bits() ^ u64::from(std::process::id()),
         max_in_flight: plan.max_in_flight,
         timeout: plan.options.timeout,
         t0: Instant::now(),
@@ -267,6 +272,9 @@ struct Shared {
     profile: Profile,
     model: LoadModel,
     think_time: Duration,
+    think_time_max: Option<Duration>,
+    /// Seeds each user's think time generator.
+    seed: u64,
     max_in_flight: u32,
     timeout: Option<Duration>,
     t0: Instant,
@@ -441,7 +449,7 @@ async fn run(
     started_at: f64,
 ) -> Summary {
     let quit = CancellationToken::new();
-    let aggregator = tokio::spawn(aggregate(shared.clone(), rx, quit.clone(), on_event));
+    let aggregator = tokio::spawn(aggregate(shared.clone(), rx, quit.clone(), stop.clone(), on_event));
     shared.set_phase(RunPhase::Running);
     match shared.model {
         LoadModel::VirtualUsers => shared.tasks.spawn(virtual_users(shared.clone())),
@@ -487,11 +495,13 @@ async fn run(
     lock(&shared.recorder).summary(info)
 }
 
-/// Receives samples and sends a snapshot every 250 ms. Returns the peak CPU.
+/// Receives samples and sends a snapshot every 250 ms; stops the run (`stop`)
+/// when a threshold has failed for its `abortAfterSecs`. Returns the peak CPU.
 async fn aggregate(
     shared: Arc<Shared>,
     mut rx: mpsc::Receiver<Sample>,
     quit: CancellationToken,
+    stop: CancellationToken,
     on_event: EventFn,
 ) -> Option<f32> {
     let mut cpu = Cpu::new();
@@ -504,9 +514,18 @@ async fn aggregate(
             _ = quit.cancelled() => break,
             _ = tick.tick() => {
                 let cpu_percent = cpu.sample();
-                let (phase, elapsed, active) = (shared.phase(), shared.t0.elapsed(), shared.active.load(Ordering::Relaxed));
+                let (mut phase, elapsed, active) = (shared.phase(), shared.t0.elapsed(), shared.active.load(Ordering::Relaxed));
+                // Stopping already (the user pressed Stop): a threshold failing now didn't stop it.
+                if stop.is_cancelled() && phase == RunPhase::Running {
+                    phase = RunPhase::Stopping;
+                }
                 let snapshot = lock(&shared.recorder).snapshot(phase, elapsed, active, cpu_percent);
+                let abort = snapshot.stopped_by_threshold.is_some() && !stop.is_cancelled();
                 on_event(LoadEvent::Snapshot { snapshot });
+                if abort {
+                    tracing::debug!("a threshold failed for its abortAfterSecs: stopping the load test");
+                    stop.cancel();
+                }
             }
             n = rx.recv_many(&mut batch, 1024) => {
                 if n == 0 {
@@ -560,6 +579,7 @@ async fn user(shared: Arc<Shared>, retire: CancellationToken, index: usize) {
     shared.active.fetch_add(1, Ordering::AcqRel);
     let _active = Active(&shared.active);
     let mut vars = UserVars::new(shared.row(index));
+    let mut think = Think::new(shared.think_time, shared.think_time_max, shared.seed, index);
     let mut step = 0;
     while !retire.is_cancelled() && !shared.ending.is_cancelled() {
         let target = if shared.in_order { shared.picker.at(step) } else { shared.picker.next() };
@@ -574,13 +594,43 @@ async fn user(shared: Arc<Shared>, retire: CancellationToken, index: usize) {
         if shared.abort.is_cancelled() {
             break;
         }
-        if !shared.think_time.is_zero() {
+        let pause = think.next();
+        if !pause.is_zero() {
             tokio::select! {
-                _ = tokio::time::sleep(shared.think_time) => {}
+                _ = tokio::time::sleep(pause) => {}
                 _ = retire.cancelled() => break,
                 _ = shared.ending.cancelled() => break,
             }
         }
+    }
+}
+
+/// One user's pauses: fixed, or uniformly random between the shortest and the
+/// longest (SplitMix64 per user: no shared state, no locks).
+struct Think {
+    min: Duration,
+    /// Microseconds above `min` a pause may take; 0 for a fixed pause.
+    spread_us: u64,
+    state: u64,
+}
+
+impl Think {
+    fn new(min: Duration, max: Option<Duration>, seed: u64, user: usize) -> Self {
+        let spread_us = max.map_or(0, |max| max.saturating_sub(min).as_micros() as u64);
+        let state = seed ^ (user as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        Self { min, spread_us, state }
+    }
+
+    fn next(&mut self) -> Duration {
+        if self.spread_us == 0 {
+            return self.min;
+        }
+        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        self.min + Duration::from_micros(z % (self.spread_us + 1))
     }
 }
 
@@ -654,5 +704,30 @@ impl Cpu {
         }
         self.last = Some(Instant::now());
         self.value
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn think_time_spreads_over_the_range() {
+        let ms = Duration::from_millis;
+        let mut fixed = Think::new(ms(100), None, 7, 0);
+        assert!((0..10).all(|_| fixed.next() == ms(100)));
+        let mut same = Think::new(ms(100), Some(ms(100)), 7, 0);
+        assert_eq!(same.next(), ms(100));
+
+        let mut a = Think::new(ms(100), Some(ms(300)), 7, 0);
+        let pauses: Vec<Duration> = (0..2000).map(|_| a.next()).collect();
+        assert!(pauses.iter().all(|p| (ms(100)..=ms(300)).contains(p)));
+        let mean = pauses.iter().sum::<Duration>() / pauses.len() as u32;
+        assert!((ms(190)..=ms(210)).contains(&mean), "{mean:?}");
+        let low = pauses.iter().filter(|p| **p < ms(150)).count();
+        assert!((400..600).contains(&low), "{low}");
+        // Users of one run don't share a sequence.
+        let mut b = Think::new(ms(100), Some(ms(300)), 7, 1);
+        assert_ne!((0..5).map(|_| b.next()).collect::<Vec<_>>(), pauses[..5]);
     }
 }

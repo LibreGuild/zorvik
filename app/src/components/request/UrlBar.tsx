@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Activity, ChevronDown, Loader2, MoreHorizontal, Plug, PlugZap, Save, Send, Square, Terminal } from "lucide-react";
+import { Activity, ChevronDown, Loader2, MoreHorizontal, Plug, PlugZap, Save, Send, Square, Terminal, Unplug } from "lucide-react";
 import type { Request } from "../../bindings/Request";
 import { METHODS, methodColor, methodLabel } from "../../lib/http";
 import { modKey } from "../../lib/platform";
@@ -7,6 +7,7 @@ import { syncPathParams } from "../../lib/url";
 import { loadTestRequest } from "../../store/loadtests";
 import { isSubscription } from "../../store/graphql";
 import { cancelCall } from "../../store/grpc";
+import { closeWithCode } from "../../store/composer";
 import { cancel, disconnect, isDirty, isLive, saveTab, send, type Tab, updateDraft } from "../../store/tabs";
 import { toast } from "../../store/toasts";
 import { openModal } from "../../store/ui";
@@ -97,6 +98,9 @@ export function UrlBar({ tab }: { tab: Tab }) {
         entries={[
           ...(kind === "http" && !subscription ? [{ label: "Copy as cURL or code…", icon: <Terminal size={14} />, onSelect: () => openModal({ type: "export", tabId: tab.id }) }] : []),
           ...(kind === "http" && !subscription ? [{ label: "Load test this request…", icon: <Activity size={14} />, onSelect: () => void loadTestThis(tab) }] : []),
+          ...(kind === "websocket" && tab.stream.status === "open"
+            ? [{ label: "Close with a code…", icon: <Unplug size={14} />, onSelect: () => void closeWithCode(tab.id) }]
+            : []),
           { label: "Save as…", icon: <Save size={14} />, onSelect: () => openModal({ type: "saveAs", tabId: tab.id }) },
         ]}
       />

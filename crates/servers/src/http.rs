@@ -9,7 +9,7 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
@@ -22,17 +22,18 @@ use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use zorvik_engine::http::canonical_name;
 use zorvik_engine::{Header, HttpRequest};
-use zorvik_formats::{HttpMockConfig, KeyValue, MockFallback, MockFault, MockRoute};
+use zorvik_formats::matching::MessageMatcher;
+use zorvik_formats::{HttpMockConfig, KeyValue, MatchKind, MockFallback, MockFault, MockRoute, MockStep};
 use zorvik_workspace::vars::VarContext;
 
 use crate::report::{HttpExchange, MAX_ENTRY_PAYLOAD, Reporter};
 use crate::tcp::TLS_HANDSHAKE_TIMEOUT;
 use crate::template::{RequestValues, render};
-use crate::{Control, Ctx, Live, StartOptions};
+use crate::{Control, Ctx, Live, PerConfig, StartOptions};
 
 /// Larger request bodies are answered with 413.
 const MAX_REQUEST_BODY: usize = 10 << 20;
@@ -287,7 +288,7 @@ fn headers_size(headers: &HeaderMap) -> u64 {
 
 pub(crate) async fn run(listener: TcpListener, ctx: Ctx) -> Result<(), String> {
     let mock = Arc::new(Mock {
-        live: ctx.live.clone(),
+        live: PerConfig::new(ctx.live.clone(), Prepared::new),
         reporter: ctx.reporter.clone(),
         options: ctx.options.clone(),
         stopped: ctx.cancel.clone(),
@@ -306,10 +307,87 @@ pub(crate) async fn run(listener: TcpListener, ctx: Ctx) -> Result<(), String> {
 }
 
 struct Mock {
-    live: watch::Receiver<Arc<Live>>,
+    /// The configuration, and what its routes need besides it.
+    live: PerConfig<Prepared>,
     reporter: Reporter,
     options: Arc<StartOptions>,
     stopped: CancellationToken,
+}
+
+/// What the routes need besides the configuration, worked out once per change.
+struct Prepared {
+    /// Per route: its JSON body condition.
+    conditions: Vec<BodyCondition>,
+    /// Per route: calls so far (for sequences). A route that stays the same keeps counting
+    /// through other edits; a changed one starts again.
+    calls: Vec<Arc<AtomicU64>>,
+}
+
+impl Prepared {
+    fn new(live: &Live, previous: Option<(&Live, &Prepared)>) -> Self {
+        let routes = &live.server.http.routes;
+        let conditions = routes.iter().map(|r| BodyCondition::new(&r.match_json, &live.vars)).collect();
+        let calls = routes
+            .iter()
+            .enumerate()
+            .map(|(i, route)| {
+                previous
+                    .filter(|(old, _)| old.server.http.routes.get(i).is_some_and(|old| same_calls(old, route)))
+                    .and_then(|(_, prepared)| prepared.calls.get(i).cloned())
+                    .unwrap_or_default()
+            })
+            .collect();
+        Self { conditions, calls }
+    }
+}
+
+/// Whether two versions of a route count their calls as one: they take the same requests and
+/// have the same sequence (the route's own answer may change).
+fn same_calls(a: &MockRoute, b: &MockRoute) -> bool {
+    (&a.method, &a.path, a.status, &a.sequence, a.sequence_repeat)
+        == (&b.method, &b.path, b.status, &b.sequence, b.sequence_repeat)
+        && (&a.match_query, &a.match_headers, &a.match_body, &a.match_json)
+            == (&b.match_query, &b.match_headers, &b.match_body, &b.match_json)
+}
+
+/// A route's JSON body condition (`matchJson`).
+enum BodyCondition {
+    None,
+    /// Filled in with the configuration's variables and compiled; `None` when it doesn't parse
+    /// (the route never matches).
+    Fixed(Option<MessageMatcher>),
+    /// With dynamic values (`{{$randomInt}}`): filled in for each request.
+    PerRequest,
+}
+
+impl BodyCondition {
+    fn new(condition: &str, vars: &VarContext) -> Self {
+        if condition.trim().is_empty() {
+            Self::None
+        } else if condition.contains("{{$") {
+            Self::PerRequest
+        } else {
+            Self::Fixed(json_matcher(&render(condition, None, vars)))
+        }
+    }
+
+    /// Whether the request's body is JSON meeting the condition (parsed once per request).
+    fn matches(&self, route: &MockRoute, request: &RequestValues, vars: &VarContext) -> bool {
+        let per_request;
+        let matcher = match self {
+            Self::None => return true,
+            Self::Fixed(matcher) => matcher.as_ref(),
+            Self::PerRequest => {
+                per_request = json_matcher(&render(&route.match_json, None, vars));
+                per_request.as_ref()
+            }
+        };
+        matcher.is_some_and(|m| request.json().is_some_and(|root| m.matches_json(root) == Some(true)))
+    }
+}
+
+fn json_matcher(condition: &str) -> Option<MessageMatcher> {
+    MessageMatcher::new(MatchKind::Json, condition.as_bytes()).ok()
 }
 
 enum BodyError {
@@ -385,6 +463,9 @@ impl Log {
             x.status = status.as_u16();
             x.response_headers = header_list(&headers);
             x.response_body = if head { String::new() } else { log_body(&body) };
+            let encoded = headers.get(header::CONTENT_ENCODING).is_some_and(|v| v != "identity");
+            x.response_body_complete =
+                head || (!encoded && body.len() <= MAX_ENTRY_PAYLOAD && std::str::from_utf8(&body).is_ok());
             x.note = note;
             x.duration_ms = self.duration_ms();
             let out = headers_size(&headers) + 17 + sent;
@@ -442,7 +523,7 @@ impl Mock {
         };
         let is_head = parts.method == Method::HEAD;
         // The configuration as it is now: edits apply from the next request on.
-        let live = self.live.borrow().clone();
+        let (live, prepared) = self.live.get();
         let config = &live.server.http;
         let origin = parts.headers.get(header::ORIGIN).cloned();
         let cors = |mut headers: HeaderMap| {
@@ -489,57 +570,69 @@ impl Mock {
         }
 
         let query = parse_query(&query_string);
-        let Some((route, params)) =
-            find_route(config, &parts.method, &path, &query, &parts.headers, &body_text, &live.vars)
-        else {
-            return Ok(self.fallback(&mut log, &parts, body, config, &live.vars, cors).await);
-        };
-        log.set_route(Some(route_label(route)));
-
-        let fault_hit = route.fault != MockFault::None
-            && (route.fault_percent >= 100 || rand::random_range(0..100u8) < route.fault_percent);
-        if fault_hit && route.fault == MockFault::Hang {
-            // Never answer; the request ends when the client gives up or the server stops.
-            log.unanswered("hang");
-            peer.closed.cancelled().await;
-            return Err(Abort);
-        }
-        if route.delay_ms > 0 {
-            tokio::select! {
-                _ = tokio::time::sleep(Duration::from_millis(route.delay_ms).min(MAX_DELAY)) => {}
-                _ = peer.closed.cancelled() => return Err(Abort),
-            }
-        }
-        if fault_hit && route.fault == MockFault::Reset {
-            log.unanswered("reset");
-            return Err(Abort);
-        }
-        if fault_hit {
-            let label = route_label(route);
-            let (headers, body) = json_error(&format!("Injected fault on route {label}"));
-            return Ok(log.respond(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                cors(headers),
-                body,
-                is_head,
-                Some("error".into()),
-            ));
-        }
-
-        let values = RequestValues {
+        let mut values = RequestValues {
             method: parts.method.as_str(),
             path: &path,
             query_string: &query_string,
-            params: &params,
+            params: &[],
             query: &query,
             headers: &request_headers,
             body: &body_text,
+            json: Default::default(),
         };
-        let (status, headers, body, problems) = route_response(route, &values, &live.vars);
+        let Some(Found { index, route, params }) = find_route(config, &prepared, &parts.method, &values, &live.vars)
+        else {
+            return Ok(self.fallback(&mut log, &parts, body, config, &live.vars, cors).await);
+        };
+        values.params = &params;
+        log.set_route(Some(route_label(route)));
+
+        // Which answer of the route's sequence this call gets (none without a sequence).
+        let call = (!route.sequence.is_empty()).then(|| prepared.calls[index].fetch_add(1, Ordering::Relaxed));
+        let step = call.and_then(|n| route.sequence_step(n)).and_then(|i| route.sequence.get(i));
+        let place = call.and_then(|n| sequence_place(route, n));
+        let note = |what: &str| match &place {
+            Some(place) if what.is_empty() => Some(place.clone()),
+            Some(place) => Some(format!("{what} · {place}")),
+            None => (!what.is_empty()).then(|| what.to_string()),
+        };
+        let fault = match step {
+            Some(step) => step.fault,
+            None if route.fault != MockFault::None
+                && (route.fault_percent >= 100 || rand::random_range(0..100u8) < route.fault_percent) =>
+            {
+                route.fault
+            }
+            None => MockFault::None,
+        };
+        let delay_ms = step.and_then(|s| s.delay_ms).unwrap_or(route.delay_ms);
+        if fault == MockFault::Hang {
+            // Never answer; the request ends when the client gives up or the server stops.
+            log.unanswered(&note("hang").unwrap_or_default());
+            peer.closed.cancelled().await;
+            return Err(Abort);
+        }
+        if delay_ms > 0 {
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(delay_ms).min(MAX_DELAY)) => {}
+                _ = peer.closed.cancelled() => return Err(Abort),
+            }
+        }
+        if fault == MockFault::Reset {
+            log.unanswered(&note("reset").unwrap_or_default());
+            return Err(Abort);
+        }
+        if fault == MockFault::Error {
+            let label = route_label(route);
+            let (headers, body) = json_error(&format!("Injected fault on route {label}"));
+            return Ok(log.respond(StatusCode::INTERNAL_SERVER_ERROR, cors(headers), body, is_head, note("error")));
+        }
+
+        let (status, headers, body, problems) = route_response(route, step, &values, &live.vars);
         for problem in problems {
             self.reporter.error(peer.conn, Some(&peer.addr), format!("Route {}: {problem}", route_label(route)));
         }
-        Ok(log.respond(status, cors(headers), body, is_head, None))
+        Ok(log.respond(status, cors(headers), body, is_head, note("")))
     }
 
     async fn fallback(
@@ -554,14 +647,15 @@ impl Mock {
         let is_head = parts.method == Method::HEAD;
         if config.fallback == MockFallback::Proxy {
             let base = render(&config.proxy_url, None, vars);
-            let (status, headers, body) = match self.forward(parts, body, &base, &log.peer).await {
-                Ok(answer) => answer,
+            // Only the backend's own answers are noted "proxy": the traffic panel saves those as routes.
+            let (status, headers, body, note) = match self.forward(parts, body, &base, &log.peer).await {
+                Ok((status, headers, body)) => (status, headers, body, "proxy"),
                 Err(message) => {
                     let (headers, body) = json_error(&message);
-                    (StatusCode::BAD_GATEWAY, headers, body)
+                    (StatusCode::BAD_GATEWAY, headers, body, "proxy failed")
                 }
             };
-            return log.respond(status, cors(headers), body, is_head, Some("proxy".into()));
+            return log.respond(status, cors(headers), body, is_head, Some(note.into()));
         }
         let routes: Vec<String> = config
             .routes
@@ -754,22 +848,32 @@ fn method_matches(route: &str, method: &Method) -> bool {
     route.is_empty() || route == "*" || route.eq_ignore_ascii_case("ANY") || route.eq_ignore_ascii_case(method.as_str())
 }
 
-/// The first enabled route answering this request, with its path parameters.
-/// HEAD requests fall back to GET routes when no route takes HEAD itself.
+/// The route answering a request.
+struct Found<'r> {
+    /// Its position in the configuration.
+    index: usize,
+    route: &'r MockRoute,
+    /// Values of its `:name` segments.
+    params: Vec<(String, String)>,
+}
+
+/// The first enabled route answering this request. HEAD requests fall back to GET routes when
+/// no route takes HEAD itself. `prepared` belongs to the same configuration as `config`.
 fn find_route<'r>(
     config: &'r HttpMockConfig,
+    prepared: &Prepared,
     method: &Method,
-    path: &str,
-    query: &[(String, String)],
-    headers: &HeaderMap,
-    body: &str,
+    request: &RequestValues,
     vars: &VarContext,
-) -> Option<(&'r MockRoute, Vec<(String, String)>)> {
+) -> Option<Found<'r>> {
     let pass = |method: &Method| {
-        config.routes.iter().filter(|r| r.enabled && method_matches(&r.method, method)).find_map(|route| {
-            let params = match_path(&route.path, path)?;
-            conditions_match(route, query, headers, body, vars).then_some((route, params))
-        })
+        config.routes.iter().enumerate().filter(|(_, r)| r.enabled && method_matches(&r.method, method)).find_map(
+            |(index, route)| {
+                let params = match_path(&route.path, request.path)?;
+                let condition = &prepared.conditions[index];
+                conditions_match(route, condition, request, vars).then_some(Found { index, route, params })
+            },
+        )
     };
     pass(method).or_else(|| if *method == Method::HEAD { pass(&Method::GET) } else { None })
 }
@@ -804,15 +908,9 @@ pub(crate) fn match_path(pattern: &str, path: &str) -> Option<Vec<(String, Strin
     (wanted.len() == got.len()).then_some(params)
 }
 
-/// `matchQuery`/`matchHeaders`/`matchBody` (plus a `?a=b` written in the route path).
-/// Expected values may use variables; an empty value only requires presence.
-fn conditions_match(
-    route: &MockRoute,
-    query: &[(String, String)],
-    headers: &HeaderMap,
-    body: &str,
-    vars: &VarContext,
-) -> bool {
+/// `matchQuery`/`matchHeaders`/`matchBody` (plus a `?a=b` written in the route path) and
+/// `matchJson`. Expected values may use variables; an empty value only requires presence.
+fn conditions_match(route: &MockRoute, json: &BodyCondition, request: &RequestValues, vars: &VarContext) -> bool {
     let expect = |value: &str| render(value, None, vars);
     let active = |kv: &&KeyValue| kv.enabled && !kv.key.trim().is_empty();
     let in_path = route.path.split_once('?').map(|(_, q)| parse_query(q)).unwrap_or_default();
@@ -822,44 +920,69 @@ fn conditions_match(
         .filter(active)
         .map(|kv| (kv.key.trim().to_string(), expect(&kv.value)))
         .chain(in_path)
-        .all(|(key, want)| query.iter().any(|(k, v)| *k == key && (want.is_empty() || *v == want)));
+        .all(|(key, want)| request.query.iter().any(|(k, v)| *k == key && (want.is_empty() || *v == want)));
     if !query_ok {
         return false;
     }
     let headers_ok = route.match_headers.iter().filter(active).all(|kv| {
         let want = expect(&kv.value);
-        let Ok(name) = HeaderName::from_bytes(kv.key.trim().as_bytes()) else { return false };
-        let mut values = headers.get_all(name).iter().peekable();
-        values.peek().is_some()
-            && (want.is_empty() || values.any(|v| String::from_utf8_lossy(v.as_bytes()).trim() == want.trim()))
+        let name = kv.key.trim();
+        let mut values = request.headers.iter().filter(|h| h.name.eq_ignore_ascii_case(name)).peekable();
+        values.peek().is_some() && (want.is_empty() || values.any(|h| h.value.trim() == want.trim()))
     });
-    headers_ok && (route.match_body.is_empty() || body.contains(expect(&route.match_body).as_str()))
+    headers_ok
+        && (route.match_body.is_empty() || request.body.contains(expect(&route.match_body).as_str()))
+        && json.matches(route, request, vars)
 }
 
-/// Status, headers and body of a route (rendered), plus problems for the log.
+/// `answer 2 of 3` for call `call` (0 for the first) of a route with a sequence; nothing once a
+/// sequence that doesn't repeat is over.
+fn sequence_place(route: &MockRoute, call: u64) -> Option<String> {
+    let total = route.sequence.len() as u64 + 1;
+    let at = if route.sequence_repeat { call % total } else { call };
+    (total > 1 && at < total).then(|| format!("answer {} of {total}", at + 1))
+}
+
+/// Status, headers and body of a route, or of one answer of its sequence (rendered), plus
+/// problems for the log.
 fn route_response(
     route: &MockRoute,
+    step: Option<&MockStep>,
     request: &RequestValues,
     vars: &VarContext,
 ) -> (StatusCode, HeaderMap, Bytes, Vec<String>) {
     let mut problems = Vec::new();
-    let status = StatusCode::from_u16(route.status).unwrap_or_else(|_| {
-        problems.push(format!("status {} is not valid, answered 500 instead", route.status));
+    let wanted = step.map_or(route.status, |s| s.status);
+    let status = StatusCode::from_u16(wanted).unwrap_or_else(|_| {
+        problems.push(format!("status {wanted} is not valid, answered 500 instead"));
         StatusCode::INTERNAL_SERVER_ERROR
     });
-    let body = render(&route.body, Some(request), vars);
+    let body = render(step.map_or(&route.body, |s| &s.body), Some(request), vars);
     let mut headers = HeaderMap::new();
-    for kv in route.headers.iter().filter(|kv| kv.enabled && !kv.key.trim().is_empty()) {
+    let mut add = |kv: &KeyValue, replace: bool, headers: &mut HeaderMap, replaced: &mut Vec<HeaderName>| {
         let name = render(kv.key.trim(), Some(request), vars);
         let value = render(&kv.value, Some(request), vars);
         match (HeaderName::from_bytes(name.trim().as_bytes()), HeaderValue::from_str(value.trim())) {
             // The length and framing follow from the body.
             (Ok(name), _) if name == header::CONTENT_LENGTH || name == header::TRANSFER_ENCODING => {}
             (Ok(name), Ok(value)) => {
+                // A step's header replaces the route's of that name (several of its own stay).
+                if replace && !replaced.contains(&name) {
+                    headers.remove(&name);
+                    replaced.push(name.clone());
+                }
                 headers.append(name, value);
             }
             _ => problems.push(format!("header \"{}\" is not valid and was left out", name.trim())),
         }
+    };
+    let active = |kv: &&KeyValue| kv.enabled && !kv.key.trim().is_empty();
+    let mut replaced = Vec::new();
+    for kv in route.headers.iter().filter(active) {
+        add(kv, false, &mut headers, &mut replaced);
+    }
+    for kv in step.map_or(&[][..], |s| &s.headers[..]).iter().filter(active) {
+        add(kv, true, &mut headers, &mut replaced);
     }
     if !body.is_empty() && !headers.contains_key(header::CONTENT_TYPE) {
         headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(guess_content_type(&body)));
@@ -884,8 +1007,33 @@ fn guess_content_type(body: &str) -> &'static str {
 mod tests {
     use super::*;
 
-    fn params(list: &[(&str, &str)]) -> Vec<(String, String)> {
+    type Params = Vec<(String, String)>;
+
+    fn params(list: &[(&str, &str)]) -> Params {
         list.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    fn live(routes: Vec<MockRoute>, vars: &VarContext) -> Live {
+        let mut server = zorvik_formats::Server::new("Mock", zorvik_formats::ServerKind::Http);
+        server.http.routes = routes;
+        Live { server, vars: vars.clone() }
+    }
+
+    /// The route answering a request, as the server finds it: `(name, method, path parameters)`.
+    fn find(
+        live: &Live,
+        method: &Method,
+        path: &str,
+        query: &str,
+        headers: &[Header],
+        body: &str,
+    ) -> Option<(String, String, Params)> {
+        let prepared = Prepared::new(live, None);
+        let query = parse_query(query);
+        let request =
+            RequestValues { method: method.as_str(), path, query: &query, headers, body, ..Default::default() };
+        find_route(&live.server.http, &prepared, method, &request, &live.vars)
+            .map(|found| (found.route.name.clone(), found.route.method.clone(), found.params))
     }
 
     #[test]
@@ -916,7 +1064,6 @@ mod tests {
     fn route_selection_and_conditions() {
         let route =
             |method: &str, path: &str| MockRoute { method: method.into(), path: path.into(), ..Default::default() };
-        let mut config = HttpMockConfig::default();
         let mut admin = route("GET", "/users/:id");
         admin.name = "admin".into();
         admin.match_query = vec![KeyValue::new("role", "admin")];
@@ -925,7 +1072,7 @@ mod tests {
         disabled.enabled = false;
         let mut body = route("POST", "/login");
         body.match_body = "{{user}}".into();
-        config.routes = vec![disabled, admin, route("GET", "/users/:id"), body, route("*", "/any")];
+        let routes = vec![disabled, admin, route("GET", "/users/:id"), body, route("*", "/any")];
         let mut vars = VarContext::new();
         vars.push_layer(&[zorvik_formats::Variable {
             key: "user".into(),
@@ -933,20 +1080,115 @@ mod tests {
             enabled: true,
             secret: false,
         }]);
-        let mut headers = HeaderMap::new();
-        let find = |method: &Method, path: &str, query: &str, headers: &HeaderMap, body: &str| {
-            find_route(&config, method, path, &parse_query(query), headers, body, &vars)
-                .map(|(r, p)| (r.name.clone(), r.method.clone(), p))
+        let live = live(routes, &vars);
+        let find = |method: &Method, path: &str, query: &str, headers: &[Header], body: &str| {
+            find(&live, method, path, query, headers, body)
         };
-        let plain = find(&Method::GET, "/users/7", "role=admin", &headers, "").unwrap();
+        let plain = find(&Method::GET, "/users/7", "role=admin", &[], "").unwrap();
         assert_eq!((plain.0.as_str(), plain.2), ("", params(&[("id", "7")])), "needs the header");
-        headers.insert("X-Token", HeaderValue::from_static("abc"));
+        let headers = [Header::new("X-Token", "abc")];
         assert_eq!(find(&Method::GET, "/users/7", "role=admin", &headers, "").unwrap().0, "admin");
         assert_eq!(find(&Method::HEAD, "/users/7", "", &headers, "").unwrap().1, "GET", "HEAD uses GET routes");
         assert!(find(&Method::POST, "/login", "", &headers, "user=bob").is_none());
         assert!(find(&Method::POST, "/login", "", &headers, "user=ann").is_some());
         assert_eq!(find(&Method::DELETE, "/any", "", &headers, "").unwrap().1, "*");
         assert!(find(&Method::DELETE, "/users/7", "", &headers, "").is_none());
+    }
+
+    #[test]
+    fn json_body_conditions() {
+        let mut admin =
+            MockRoute { name: "admin".into(), method: "POST".into(), path: "/login".into(), ..Default::default() };
+        admin.match_json = "$.user.role == {{role}}".into();
+        let mut broken =
+            MockRoute { name: "broken".into(), method: "POST".into(), path: "/login".into(), ..Default::default() };
+        broken.match_json = "$..x".into();
+        let any = MockRoute { method: "POST".into(), path: "/login".into(), ..Default::default() };
+        let mut dynamic =
+            MockRoute { name: "dynamic".into(), method: "POST".into(), path: "/login".into(), ..Default::default() };
+        dynamic.match_json = "$.n == {{$randomInt(4, 4)}}".into();
+        let mut vars = VarContext::new();
+        vars.push_layer(&[zorvik_formats::Variable {
+            key: "role".into(),
+            value: "\"admin\"".into(),
+            enabled: true,
+            secret: false,
+        }]);
+        let live = live(vec![broken, admin, dynamic, any], &vars);
+        let find = |body: &str| find(&live, &Method::POST, "/login", "", &[], body).unwrap().0;
+        assert_eq!(find(r#"{"user": {"role": "admin"}}"#), "admin");
+        assert_eq!(find(r#"{"user": {"role": "guest"}}"#), "");
+        assert_eq!(find("role=admin"), "", "not JSON");
+        assert_eq!(find(r#"{"n": 4}"#), "dynamic");
+        assert_eq!(sequence_place(&live.server.http.routes[3], 0), None, "no sequence");
+        // Compiled once per configuration; dynamic values are filled in for each request.
+        let prepared = Prepared::new(&live, None);
+        assert!(matches!(prepared.conditions[0], BodyCondition::Fixed(None)), "doesn't parse");
+        assert!(matches!(prepared.conditions[1], BodyCondition::Fixed(Some(_))));
+        assert!(matches!(prepared.conditions[2], BodyCondition::PerRequest));
+        assert!(matches!(prepared.conditions[3], BodyCondition::None));
+    }
+
+    #[test]
+    fn call_counters_carry_over_unrelated_edits() {
+        let step = MockStep { status: 503, ..Default::default() };
+        let flaky = MockRoute { path: "/flaky".into(), sequence: vec![step.clone()], ..Default::default() };
+        let other = MockRoute { path: "/other".into(), sequence: vec![step], ..Default::default() };
+        let vars = VarContext::new();
+        let first = live(vec![flaky.clone(), other.clone()], &vars);
+        let prepared = Prepared::new(&first, None);
+        prepared.calls[0].fetch_add(3, Ordering::Relaxed);
+        prepared.calls[1].fetch_add(5, Ordering::Relaxed);
+        // The answer's body, another route and the variables change: the count goes on.
+        let mut edited = flaky.clone();
+        edited.body = "new body".into();
+        let mut other_changed = other.clone();
+        other_changed.path = "/moved".into();
+        let mut vars2 = VarContext::new();
+        vars2.push_layer(&[zorvik_formats::Variable {
+            key: "a".into(),
+            value: "b".into(),
+            enabled: true,
+            secret: false,
+        }]);
+        let second = live(vec![edited.clone(), other_changed], &vars2);
+        let carried = Prepared::new(&second, Some((&first, &prepared)));
+        assert_eq!(carried.calls[0].load(Ordering::Relaxed), 3);
+        assert!(Arc::ptr_eq(&carried.calls[0], &prepared.calls[0]), "one counter for both versions");
+        assert_eq!(carried.calls[1].load(Ordering::Relaxed), 0, "a changed route starts again");
+        // A changed sequence starts again too.
+        let mut resequenced = edited;
+        resequenced.sequence_repeat = true;
+        let third = live(vec![resequenced], &vars2);
+        let restarted = Prepared::new(&third, Some((&second, &carried)));
+        assert_eq!(restarted.calls[0].load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn sequence_answers_and_headers() {
+        let route = MockRoute {
+            status: 200,
+            body: "ok {{request.method}}".into(),
+            headers: vec![KeyValue::new("Content-Type", "text/plain"), KeyValue::new("X-Kept", "1")],
+            sequence: vec![MockStep {
+                status: 503,
+                body: "busy".into(),
+                headers: vec![KeyValue::new("content-type", "application/json"), KeyValue::new("Retry-After", "1")],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let req = RequestValues { method: "GET", ..Default::default() };
+        let vars = VarContext::new();
+        let (status, headers, body, problems) = route_response(&route, Some(&route.sequence[0]), &req, &vars);
+        assert!(problems.is_empty());
+        assert_eq!((status.as_u16(), &body[..]), (503, &b"busy"[..]));
+        assert_eq!(headers.get_all(header::CONTENT_TYPE).iter().collect::<Vec<_>>(), ["application/json"]);
+        assert_eq!((headers["x-kept"].as_bytes(), headers["retry-after"].as_bytes()), (&b"1"[..], &b"1"[..]));
+        let (status, headers, body, _) = route_response(&route, None, &req, &vars);
+        assert_eq!((status.as_u16(), &body[..], headers.get("retry-after")), (200, &b"ok GET"[..], None));
+        let places: Vec<Option<String>> = (0..3).map(|n| sequence_place(&route, n)).collect();
+        assert_eq!(places, [Some("answer 1 of 2".into()), Some("answer 2 of 2".into()), None]);
     }
 
     #[test]

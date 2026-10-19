@@ -28,7 +28,7 @@ mod ws;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use futures_util::FutureExt as _;
 use futures_util::future::BoxFuture;
@@ -76,6 +76,57 @@ pub struct Live {
     pub server: Server,
     /// Environment and workspace variables for templates (`{{name}}`).
     pub vars: VarContext,
+}
+
+/// Something a server works out from its configuration (compiled conditions, counters) once
+/// per change instead of with every request, shared by its connections. It is built on first
+/// use after a change, from the new configuration and the previous one with what was built
+/// from it (to carry state over).
+pub(crate) struct PerConfig<T> {
+    live: watch::Receiver<Arc<Live>>,
+    built: Mutex<Option<(Arc<Live>, Arc<T>)>>,
+    build: fn(&Live, Option<(&Live, &T)>) -> T,
+}
+
+impl<T> PerConfig<T> {
+    pub(crate) fn new(live: watch::Receiver<Arc<Live>>, build: fn(&Live, Option<(&Live, &T)>) -> T) -> Self {
+        Self { live, built: Mutex::new(None), build }
+    }
+
+    /// The configuration as it is now, and what was built from it.
+    pub(crate) fn get(&self) -> (Arc<Live>, Arc<T>) {
+        // Locked first: callers never see an older configuration after a newer one.
+        let mut built = self.built.lock().unwrap_or_else(|e| e.into_inner());
+        let live = self.live.borrow().clone();
+        if let Some((built_for, value)) = built.as_ref()
+            && Arc::ptr_eq(built_for, &live)
+        {
+            return (live, value.clone());
+        }
+        let value = Arc::new((self.build)(&live, built.as_ref().map(|(old, value)| (&**old, &**value))));
+        *built = Some((live.clone(), value.clone()));
+        (live, value)
+    }
+}
+
+/// Report the settings clients would trip over (`problems` of the configuration) when they
+/// appear, not again on every edit while they stay, until the server stops.
+pub(crate) fn report_problems(ctx: &Ctx, problems: fn(&Live) -> Vec<String>) {
+    let (mut live, reporter, stopped) = (ctx.live.clone(), ctx.reporter.clone(), ctx.cancel.clone());
+    tokio::spawn(async move {
+        let mut reported: Vec<String> = Vec::new();
+        loop {
+            let found = problems(&live.borrow_and_update());
+            for p in found.iter().filter(|p| !reported.contains(p)) {
+                reporter.error(None, None, p.clone());
+            }
+            reported = found;
+            tokio::select! {
+                changed = live.changed() => if changed.is_err() { return },
+                _ = stopped.cancelled() => return,
+            }
+        }
+    });
 }
 
 /// From the UI to a running server.

@@ -48,7 +48,7 @@ Line breaks may be LF, CR or CRLF, and a leading byte order mark is ignored. A s
 
 ## The event log
 
-Each row shows the time, the event name as a badge, the start of the data and its size. Click a row to see the whole data (JSON pretty-printed) and the event's `id`. The status line counts the events; the filter box searches event data and names; the bin icon clears the log.
+Each row shows the time, the event name as a badge, the start of the data and its size. Click a row to see the whole data (JSON pretty-printed) and the event's `id`. The status line counts the events; the filter box searches event data and names, or takes a JSON condition such as `$.status == done`; the bin icon clears the log. The **View** menu (times between events) and **Export the log…** work as for [WebSocket](../websocket/#the-message-log).
 
 ## Event streams in collection runs
 

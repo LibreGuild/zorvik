@@ -1,12 +1,14 @@
 // A server tab: listener settings, the kind's configuration and live traffic.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Copy, Loader2, Play, RotateCw, Save, Square } from "lucide-react";
+import type { MockRoute } from "../../bindings/MockRoute";
 import type { Server } from "../../bindings/Server";
 import { copyText, modKey } from "../../lib/platform";
 import { applyToRunning, restartServer, runningFor, serverKey, startServer, stopServer, useServers } from "../../store/servers";
-import { isDirty, saveTab, type ServerTab, updateServerDraft } from "../../store/tabs";
+import { isDirty, saveTab, type ServerTab, updateServerDraft, updateServerTab } from "../../store/tabs";
 import { useUi } from "../../store/ui";
 import { useWorkspace } from "../../store/workspace";
+import { DocsEditor } from "../DocsEditor";
 import { Splitter } from "../Splitter";
 import { Banner, Button, cx, IconButton, Input, Switch, Tooltip } from "../ui";
 import { SERVER_KINDS } from "./kinds";
@@ -41,6 +43,12 @@ export function ServerView({ tab }: { tab: ServerTab }) {
   // Not on every stats update (4×/s): a big mock is costly to compare.
   const dirty = useMemo(() => isDirty(tab), [tab]);
   const change = (fn: (s: Server) => Server) => updateServerDraft(tab.id, fn);
+  // Routes recorded from the traffic go to the end of the list; the first new one is selected.
+  const addRoutes = (routes: MockRoute[]) =>
+    updateServerTab(tab.id, (t) => {
+      const http = t.draft.http ?? { routes: [] };
+      return { draft: { ...t.draft, http: { ...http, routes: [...http.routes, ...routes] } }, section: `route:${http.routes.length}` };
+    });
 
   // Edits apply to the running server as you type (except listener changes, which need a restart).
   const runId = running?.runId;
@@ -189,6 +197,16 @@ export function ServerView({ tab }: { tab: ServerTab }) {
       <div ref={area} className="flex min-h-0 flex-1 border-t border-line/60">
         <div style={{ width: `${split * 100}%` }} className="min-h-0 min-w-0 shrink-0 overflow-auto pb-6">
           <info.Editor server={server} onChange={change} running={running} tabId={tab.id} />
+          <EditorSection title="Docs">
+            <DocsEditor
+              key={tab.id}
+              variant="section"
+              value={server.docs ?? ""}
+              onChange={(docs) => change((s) => ({ ...s, docs }))}
+              placeholder="Notes about this server, in Markdown"
+              emptyText="No docs for this server yet."
+            />
+          </EditorSection>
         </div>
         <Splitter
           direction="horizontal"
@@ -199,7 +217,7 @@ export function ServerView({ tab }: { tab: ServerTab }) {
           }}
         />
         <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
-          <TrafficPanel serverId={tab.serverId} server={server} running={running} />
+          <TrafficPanel serverId={tab.serverId} server={server} running={running} onAddRoutes={server.kind === "http" ? addRoutes : undefined} />
         </div>
       </div>
     </div>

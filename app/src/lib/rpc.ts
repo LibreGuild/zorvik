@@ -1,6 +1,10 @@
 // Transport to the Rust API: Tauri IPC in the desktop app, the dev bridge
 // (HTTP) when running in a browser. Both call the same `zorvik_api::Api::call`.
 import { invoke } from "@tauri-apps/api/core";
+import type { ChunkMessage } from "../bindings/ChunkMessage";
+import type { FileStreamInfo } from "../bindings/FileStreamInfo";
+import type { SavedMessage } from "../bindings/SavedMessage";
+import type { FileStreamStarted } from "../bindings/FileStreamStarted";
 import type { FilterLanguage } from "../bindings/FilterLanguage";
 import type { FilterResult } from "../bindings/FilterResult";
 import type { ApiError } from "../bindings/ApiError";
@@ -59,6 +63,12 @@ import type { VariableInfo } from "../bindings/VariableInfo";
 import type { WorkspaceInfo } from "../bindings/WorkspaceInfo";
 import type { WorkspaceMeta } from "../bindings/WorkspaceMeta";
 import type { WsOutgoing } from "../bindings/WsOutgoing";
+import type { CertDecodeReport } from "../bindings/CertDecodeReport";
+import type { JsonDiff } from "../bindings/JsonDiff";
+import type { RecentResponseBody } from "../bindings/RecentResponseBody";
+import type { RecentResponseInfo } from "../bindings/RecentResponseInfo";
+import type { RegexFlags } from "../bindings/RegexFlags";
+import type { RegexTestResult } from "../bindings/RegexTestResult";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -138,14 +148,18 @@ export const api = {
     call<SendResult>("http.send", { requestId, request, path, standalone: opts?.standalone ?? false }),
   cancel: (requestId: string) => call<null>("http.cancel", { requestId }),
   saveResponse: (responseId: string, path: string) => call<null>("response.save", { responseId, path }),
-  responseText: (responseId: string) => call<{ text: string }>("response.text", { responseId }),
+  /** The whole body as text; `pretty` re-indents a JSON object or array (numbers kept exactly). */
+  responseText: (responseId: string, pretty = false) => call<{ text: string }>("response.text", { responseId, pretty }),
   filterResponse: (responseId: string, language: FilterLanguage, expression: string) =>
     call<FilterResult>("response.filter", { responseId, language, expression }),
 
   wsConnect: (connId: string, request: Request, path: string | null) =>
     call<StreamOpened>("ws.connect", { connId, request, path }),
   wsSend: (connId: string, message: WsOutgoing) => call<null>("ws.send", { connId, message }),
-  wsClose: (connId: string) => call<null>("ws.close", { connId, code: 1000, reason: "" }),
+  wsClose: (connId: string, code = 1000, reason = "") => call<null>("ws.close", { connId, code, reason }),
+  /** Keep sending `message` (variables filled in each time) until wsStopRepeat or the connection ends. */
+  wsRepeat: (connId: string, message: SavedMessage, everyMs: number) => call<null>("ws.repeat", { connId, message, everyMs }),
+  wsStopRepeat: (connId: string) => call<null>("ws.stopRepeat", { connId }),
   sseConnect: (connId: string, request: Request, path: string | null) =>
     call<StreamOpened>("sse.connect", { connId, request, path }),
   sseClose: (connId: string) => call<null>("sse.close", { connId }),
@@ -154,6 +168,25 @@ export const api = {
     call<SocketConnectResult>("socket.connect", { connId, request, path }),
   socketSend: (connId: string, message: SocketOutgoing) => call<null>("socket.send", { connId, message }),
   socketClose: (connId: string) => call<null>("socket.close", { connId }),
+  /** Keep sending `message` (variables filled in each time; Socket.IO: an emit of its event) until socketStopRepeat. */
+  socketRepeat: (connId: string, message: SavedMessage, everyMs: number) => call<null>("socket.repeat", { connId, message, everyMs }),
+  socketStopRepeat: (connId: string) => call<null>("socket.stopRepeat", { connId }),
+  /** A file's size and, for a WAV file, its audio format. */
+  fileStreamInfo: (path: string) => call<FileStreamInfo>("fileStream.info", { path }),
+  /** Stream a file over an open connection; progress comes as "fileStream" events. */
+  fileStreamStart: (p: {
+    connId: string;
+    path: string;
+    chunkSize: number;
+    intervalMs: number;
+    offset: number;
+    length: number | null;
+    repeat: boolean;
+    message: ChunkMessage;
+  }) => call<FileStreamStarted>("fileStream.start", p),
+  fileStreamStop: (connId: string) => call<null>("fileStream.stop", { connId }),
+  /** Save text or bytes (base64) the UI holds to a file the user picked. */
+  saveFile: (path: string, content: { text: string } | { base64: string }) => call<null>("file.save", { path, ...content }),
 
   /** DNS query of a request (name = url, type = method). `requestId` lets `cancel` stop it. */
   dnsQuery: (requestId: string | null, request: Request, path: string | null) =>
@@ -226,7 +259,7 @@ export const api = {
   loadRuns: (id: string) => call<LoadRunRecord[]>("load.runs", { id }),
   loadRun: (id: string, runId: string) => call<Summary>("load.run", { id, runId }),
   deleteLoadRun: (id: string, runId: string) => call<null>("load.deleteRun", { id, runId }),
-  exportLoadRun: (id: string, runId: string, path: string, format: "json" | "html") =>
+  exportLoadRun: (id: string, runId: string, path: string, format: "json" | "html" | "secondsCsv" | "requestsCsv") =>
     call<null>("load.export", { id, runId, path, format }),
 
   /** Run requests of a folder ("" = the collection) or `requests` in that order; events `runner {runId}`. */
@@ -248,6 +281,15 @@ export const api = {
     call<PingStarted>("tools.ping", { runId, host, count, intervalMs, mode, port }),
   netInterfaces: () => call<NetInterface[]>("tools.interfaces"),
   cancelTool: (runId: string) => call<null>("tools.cancel", { runId }),
+  jsonDiff: (left: string, right: string, ignoreArrayOrder: boolean) => call<JsonDiff>("tools.jsonDiff", { left, right, ignoreArrayOrder }),
+  regexTest: (pattern: string, flags: RegexFlags, text: string) => call<RegexTestResult>("tools.regexTest", { pattern, flags, text }),
+  /** PEM (or base64 DER) text, or a file the user picked. */
+  certDecode: (source: { text: string } | { path: string }) => call<CertDecodeReport>("tools.certDecode", source),
+  /** Responses sent from the app whose bodies are still kept (the last ones), newest first. */
+  recentResponses: () => call<RecentResponseInfo[]>("tools.recentResponses"),
+  recentResponse: (historyId: number) => call<RecentResponseBody>("tools.recentResponse", { historyId }),
+  /** JSONPath or jq over a JSON text (the response filter's engine). */
+  filterText: (text: string, language: FilterLanguage, expression: string) => call<FilterResult>("response.filter", { text, language, expression }),
 
   oauthGetToken: (auth: Auth, path: string | null) => call<TokenStatus>("oauth2.getToken", { auth, path }),
   oauthStatus: (auth: Auth, path: string | null) => call<TokenStatus>("oauth2.status", { auth, path }),

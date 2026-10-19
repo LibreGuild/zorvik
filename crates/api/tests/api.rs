@@ -226,6 +226,199 @@ async fn websocket_and_sse_stream_events() {
 }
 
 #[tokio::test]
+async fn websocket_on_connect_steps_and_repeating_sends() {
+    use zorvik_engine::{Direction, WsEvent};
+
+    let server = TestServer::start().await;
+    let h = Harness::new().await;
+    let env = h
+        .ok("env.create", json!({ "environment": { "name": "E", "variables": [{ "key": "who", "value": "ada" }] } }))
+        .await;
+    h.ok("env.setActive", json!({ "id": env })).await;
+    let request = json!({
+        "name": "r", "seq": 0, "method": "GET", "url": server.ws_url("/ws"), "kind": "websocket",
+        "websocket": {
+            "subprotocols": ["chat.v2"],
+            "messages": [
+                { "name": "Hi", "text": "hi {{who}}" },
+                { "name": "Beat", "text": "beat {{$randomInt(1, 9)}}" },
+            ],
+            "onConnect": [
+                { "type": "wait", "match": "exact", "pattern": "welcome" },
+                { "type": "send", "message": "Hi" },
+                { "type": "wait", "match": "regex", "pattern": "^hi " },
+                { "type": "repeat", "message": "Beat", "everyMs": 50 },
+                { "type": "wait", "match": "contains", "pattern": "nobody says this", "timeoutMs": 100 },
+            ],
+        },
+    });
+    let opened = h.ok("ws.connect", json!({ "connId": "w", "request": request })).await;
+    // The echo server takes the first subprotocol offered.
+    let protocol = opened["meta"]["headers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["name"].as_str().unwrap().eq_ignore_ascii_case("sec-websocket-protocol"))
+        .cloned();
+    assert_eq!(protocol.map(|h| h["value"].clone()), Some(json!("chat.v2")));
+    let text_of = |e: &StreamEvent| match e {
+        StreamEvent::Ws { event: WsEvent::Info { text, .. }, .. } => Some(text.clone()),
+        StreamEvent::Ws { event: WsEvent::Error { message }, .. } => Some(message.clone()),
+        _ => None,
+    };
+    h.wait_for(|evs| {
+        evs.iter().filter_map(text_of).any(|t| t.contains("nobody says this") && t.contains("within 100 ms"))
+    })
+    .await;
+    let notes: Vec<String> = h.events.0.lock().unwrap().iter().filter_map(text_of).collect();
+    assert!(notes.iter().any(|t| t == "On connect: sent Hi"), "{notes:?}");
+    assert!(notes.iter().any(|t| t == "On connect: sending Beat every 50 ms"), "{notes:?}");
+    // The heartbeat keeps going after the failed wait; variables are filled in each time.
+    let beats = |evs: &[StreamEvent]| {
+        evs.iter()
+            .filter(|e| matches!(e, StreamEvent::Ws { event: WsEvent::Message { direction: Direction::Sent, text: Some(t), .. }, .. } if t.starts_with("beat ") && t.len() == 6))
+            .count()
+    };
+    h.wait_for(|evs| beats(evs) >= 3).await;
+    assert!(h.events.0.lock().unwrap().iter().any(|e| matches!(e, StreamEvent::Ws { event: WsEvent::Message { direction: Direction::Received, text: Some(t), .. }, .. } if t == "hi ada")));
+
+    // The composer's repeating send, then stop.
+    h.ok(
+        "ws.repeat",
+        json!({ "connId": "w", "message": { "name": "", "format": "binary", "text": "0a 0b" }, "everyMs": 30 }),
+    )
+    .await;
+    let binary = |evs: &[StreamEvent]| {
+        evs.iter().filter(|e| matches!(e, StreamEvent::Ws { event: WsEvent::Message { direction: Direction::Sent, base64: Some(b), .. }, .. } if b == "Cgs=")).count()
+    };
+    h.wait_for(|evs| binary(evs) >= 2).await;
+    h.ok("ws.stopRepeat", json!({ "connId": "w" })).await;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let stopped_at = binary(&h.events.0.lock().unwrap());
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    assert_eq!(binary(&h.events.0.lock().unwrap()), stopped_at, "no more after the stop");
+    let err = h
+        .err(
+            "ws.repeat",
+            json!({ "connId": "w", "message": { "name": "", "format": "binary", "text": "zz" }, "everyMs": 30 }),
+        )
+        .await;
+    assert!(err.message.contains("not valid hex"), "{}", err.message);
+    let err = h.err("ws.repeat", json!({ "connId": "w", "message": { "name": "", "text": "x" }, "everyMs": 1 })).await;
+    assert!(err.message.contains("at most every 10 ms"), "{}", err.message);
+
+    // Closing with a code: the server's echo closes back with it, and the meaning is given.
+    h.ok("ws.send", json!({ "connId": "w", "message": { "type": "text", "text": "close" } })).await;
+    h.wait_for(|evs| {
+        evs.iter().any(|e| matches!(e, StreamEvent::Ws { event: WsEvent::Closed { code: Some(4000), meaning: Some(m), .. }, .. } if m == "Defined by the application"))
+    })
+    .await;
+    // The heartbeat ended with the connection.
+    let after = beats(&h.events.0.lock().unwrap());
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(beats(&h.events.0.lock().unwrap()), after);
+}
+
+#[tokio::test]
+async fn a_file_streams_over_a_websocket_in_paced_chunks() {
+    use zorvik_api::FileStreamEvent;
+    use zorvik_engine::{Direction, WsEvent, WsMessageKind};
+
+    let server = TestServer::start().await;
+    let h = Harness::new().await;
+    let file = h.ws_dir.path().join("audio.raw");
+    std::fs::write(&file, (0..=255u8).cycle().take(1000).collect::<Vec<_>>()).unwrap();
+    let info = h.ok("fileStream.info", json!({ "path": file })).await;
+    assert_eq!(
+        (info["name"].as_str(), info["size"].as_u64(), &info["wav"]),
+        (Some("audio.raw"), Some(1000), &Value::Null)
+    );
+    let mut req = http_request(&server.ws_url("/ws"));
+    req["kind"] = json!("websocket");
+
+    // Not connected yet.
+    let err =
+        h.err("fileStream.start", json!({ "connId": "f", "path": file, "chunkSize": 100, "intervalMs": 5 })).await;
+    assert_eq!(err.code, "notFound");
+    h.ok("ws.connect", json!({ "connId": "f", "request": req })).await;
+    // Bytes 100..1000 in chunks of 300; the echo server sends each one back.
+    let started = h
+        .ok(
+            "fileStream.start",
+            json!({ "connId": "f", "path": file, "chunkSize": 300, "intervalMs": 5, "offset": 100 }),
+        )
+        .await;
+    assert_eq!(started["total"], 900);
+    h.wait_for(|evs| {
+        evs.iter().any(|e| matches!(e, StreamEvent::FileStream { event: FileStreamEvent::Ended { .. }, .. }))
+    })
+    .await;
+    h.wait_for(|evs| {
+        evs.iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    StreamEvent::Ws {
+                        event: WsEvent::Message {
+                            direction: Direction::Received,
+                            kind: WsMessageKind::Binary,
+                            size: 300,
+                            ..
+                        },
+                        ..
+                    }
+                )
+            })
+            .count()
+            == 3
+    })
+    .await;
+    let ended = h.events.0.lock().unwrap().iter().find_map(|e| match e {
+        StreamEvent::FileStream { conn_id, event: FileStreamEvent::Ended { progress, stopped, error } } => {
+            Some((conn_id.clone(), progress.sent, progress.messages, *stopped, error.clone()))
+        }
+        _ => None,
+    });
+    assert_eq!(ended, Some(("f".into(), 900, 3, false, None)));
+
+    // Repeating runs until stopped; closing the connection stops it too.
+    h.events.0.lock().unwrap().clear();
+    h.ok(
+        "fileStream.start",
+        json!({ "connId": "f", "path": file, "chunkSize": 10, "intervalMs": 1000, "repeat": true }),
+    )
+    .await;
+    h.ok("fileStream.stop", json!({ "connId": "f" })).await;
+    h.wait_for(|evs| {
+        evs.iter().any(|e| {
+            matches!(
+                e,
+                StreamEvent::FileStream { event: FileStreamEvent::Ended { stopped: true, error: None, .. }, .. }
+            )
+        })
+    })
+    .await;
+    h.ok(
+        "fileStream.start",
+        json!({ "connId": "f", "path": file, "chunkSize": 10, "intervalMs": 1000, "repeat": true }),
+    )
+    .await;
+    h.ok("ws.close", json!({ "connId": "f" })).await;
+    h.wait_for(|evs| {
+        evs.iter()
+            .filter(|e| {
+                matches!(e, StreamEvent::FileStream { event: FileStreamEvent::Ended { stopped: true, .. }, .. })
+            })
+            .count()
+            == 2
+    })
+    .await;
+
+    let err = h.err("fileStream.start", json!({ "connId": "f", "path": file, "chunkSize": 0, "intervalMs": 5 })).await;
+    assert!(err.message.contains("Chunk size"), "{}", err.message);
+}
+
+#[tokio::test]
 async fn closing_a_stream_while_connecting_cancels_it() {
     // The UI closes a "connecting" stream when the user disconnects, closes the tab or
     // switches workspace. The close used to be ignored and the stream opened anyway (leaked).
@@ -611,6 +804,28 @@ async fn imported_requests_are_checked_and_updated_from_the_spec() {
     h.ok("folder.save", json!({ "path": folder, "meta": meta })).await;
     let sent = h.ok("http.send", json!({ "requestId": "s3", "request": request, "path": get })).await;
     assert!(sent["scripts"].is_null() || sent["scripts"]["tests"].as_array().unwrap().is_empty(), "{sent}");
+}
+
+#[tokio::test]
+async fn example_bodies_are_kept_as_sent_or_indented() {
+    let h = Harness::new().await;
+    let server = TestServer::start().await;
+    let json_body = h.ok("http.send", json!({ "requestId": "j", "request": http_request(&server.url("/json")) })).await;
+    let id = json_body["responseId"].as_str().unwrap();
+    let raw = h.ok("response.text", json!({ "responseId": id })).await;
+    assert!(raw["text"].as_str().unwrap().starts_with(r#"{"id":42,"name":"Zorvik""#), "{raw}");
+    // Indented with two spaces, keys in the server's order.
+    let pretty = h.ok("response.text", json!({ "responseId": id, "pretty": true })).await;
+    let text = pretty["text"].as_str().unwrap();
+    assert!(text.starts_with("{\n  \"id\": 42,\n  \"name\": \"Zorvik\","), "{text}");
+    assert!(text.contains("\"tags\": [\n    \"api\","), "{text}");
+
+    // Other bodies stay as they are.
+    let xml = h.ok("http.send", json!({ "requestId": "x", "request": http_request(&server.url("/xml")) })).await;
+    let id = xml["responseId"].as_str().unwrap();
+    let raw = h.ok("response.text", json!({ "responseId": id })).await;
+    let pretty = h.ok("response.text", json!({ "responseId": id, "pretty": true })).await;
+    assert_eq!(raw, pretty);
 }
 
 fn node<'a>(nodes: &'a Value, path: &str) -> Option<&'a Value> {

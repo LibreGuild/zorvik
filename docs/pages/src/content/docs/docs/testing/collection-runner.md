@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-The collection runner sends the requests of a folder (or of the whole collection) one after the other, with all their [scripts and tests](../../scripting/overview/), and reports which ones passed. It can repeat the list several times, feed each pass with a row of a [data file](../data-files/), poll a request until a condition holds, and test [Server-Sent Events](../repeat-and-streams/#event-streams-in-runs).
+The collection runner sends the requests of a folder (or of the whole collection) one after the other, with all their [scripts and tests](../../scripting/overview/), and reports which ones passed. It can repeat the list several times, feed each pass with a row of a [data file](../data-files/), poll a request until a condition holds, and test [Server-Sent Events](../repeat-and-streams/#event-streams-in-runs), [WebSocket conversations](../../protocols/websocket/#in-collection-runs) and [Socket.IO conversations](../../protocols/socketio/#in-collection-runs).
 
 The same runner is used in three places, so a folder behaves the same everywhere:
 
@@ -47,11 +47,13 @@ Changes made while a run is in progress apply to the next run.
 | Server-Sent Events (SSE) | Sent by `zorvik run` and by runs an AI agent starts: read until the request's stream settings say to stop. See [event streams in runs](../repeat-and-streams/#event-streams-in-runs). |
 | GraphQL subscriptions | Read like SSE requests: until the request's stream settings say to stop. See [GraphQL subscriptions](../../protocols/graphql/#subscriptions). |
 | MCP calls | Sent: each connects to the MCP server, makes its call (a tool, a resource or a prompt) and disconnects; its tests get the answer as the body. A program (stdio server) starts only if you allowed it in the app; `zorvik run` needs `--allow-programs`. See [MCP client](../../mcp/client/#in-runs-the-cli-and-for-agents). |
-| WebSocket, Socket.IO, TCP, UDP, MQTT | Skipped: they are live sessions |
+| WebSocket | Connected: the request's **On connect** steps run (each wait is a test), then it closes. See [WebSocket in collection runs](../../protocols/websocket/#in-collection-runs). |
+| Socket.IO | Connected: the request's **On connect** steps run (each wait for an event is a test), then it disconnects. See [Socket.IO in collection runs](../../protocols/socketio/#in-collection-runs). |
+| TCP, UDP, MQTT | Skipped: they are live sessions |
 | gRPC, DNS | Skipped: they don't run in the collection runner |
 
 :::note
-The Runner tab in the app, `zorvik run` and runs an AI agent starts all send HTTP, GraphQL, SSE and MCP requests.
+The Runner tab in the app, `zorvik run` and runs an AI agent starts all send HTTP, GraphQL, SSE, WebSocket, Socket.IO and MCP requests.
 :::
 
 Skipped requests are listed in `zorvik run` output and reports with the reason (see [skip reasons](../reports/#skip-reasons)). They don't count as passed or failed, and they don't wait for the delay.
@@ -62,7 +64,7 @@ For each iteration, the runner goes through the list in order. For each request 
 
 1. Waits for the **delay**, unless this is the first request the run sends.
 2. Runs the pre-request scripts (workspace, folders, request).
-3. Resolves `{{variables}}` (with this iteration's data row) and sends the request. An SSE request is read until its stop condition.
+3. Resolves `{{variables}}` (with this iteration's data row) and sends the request. An SSE request is read until its stop condition; a WebSocket or Socket.IO request connects, runs its On connect steps and closes.
 4. Runs the post-response scripts.
 5. If the request has **Repeat until** turned on, checks the condition and, if it doesn't hold yet, waits and goes back to step 2. See [Repeat until](../repeat-and-streams/).
 6. For a request imported from an OpenAPI document, checks the response against it ("Matches the API spec").

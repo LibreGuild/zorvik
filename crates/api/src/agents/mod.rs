@@ -3,7 +3,7 @@
 //! (`tools.rs`). The MCP protocol and transport live in `zorvik-mcp`.
 
 mod prompts;
-mod redact;
+pub(crate) mod redact;
 mod tools;
 
 use std::collections::{HashSet, VecDeque};
@@ -212,8 +212,23 @@ pub enum AgentEvent {
     /// A collection run the agent started.
     #[serde(rename_all = "camelCase")]
     Run { folder: String, run: RunStarted },
+    /// A live connection the agent opened: shown in a tab, live. `opened` is what
+    /// connecting returned (`StreamOpened` for WebSocket, `SocketOpened` for the others).
+    #[serde(rename_all = "camelCase")]
+    Stream { path: Option<String>, request: Box<Request>, conn_id: String, opened: Opened },
     /// The open workspace changed (another one opened, or the active environment).
     WorkspaceChanged,
+}
+
+/// What opening a live connection returned.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(untagged)]
+#[ts(export)]
+pub enum Opened {
+    /// WebSocket: the upgrade's answer.
+    Stream(Box<crate::StreamOpened>),
+    /// Socket.IO, TCP, UDP, MQTT.
+    Socket(Box<zorvik_engine::SocketOpened>),
 }
 
 /// Everything the Agents panel shows (after a window reload).
@@ -284,6 +299,8 @@ pub(crate) struct AgentHub {
     headless: AtomicBool,
     /// One "Allow AI agents?" question at a time.
     enabling: tokio::sync::Mutex<()>,
+    /// WebSocket connections agents opened, by connection id.
+    sockets: Mutex<std::collections::HashMap<String, tools::AgentSocket>>,
 }
 
 /// What an action needs approved.

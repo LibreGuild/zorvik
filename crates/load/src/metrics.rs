@@ -13,6 +13,11 @@
 //!
 //! Throughput is measured over the time requests were being started: the wait
 //! for the last answers after the end (or a stop) is not part of it.
+//!
+//! Warm-up: requests that finish in the first seconds of the run go into the
+//! chart only, not the numbers or thresholds (throughput counts from its end).
+//! Thresholds with `abortAfterSecs` are watched on every live snapshot: the
+//! first that fails for that long stops the run.
 
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
@@ -318,12 +323,25 @@ pub(crate) struct Recorder {
     rate: bool,
     /// When the run stopped starting requests (the planned end or a stop).
     sending_ended: Option<Duration>,
+    /// Requests that finish before this (µs since the start) are charted only.
+    warm_up_us: u64,
+    /// Per enabled threshold: since when it has failed, while the run is live.
+    failing_since: Vec<Option<Duration>>,
+    /// The label of the threshold that stopped the run (`abortAfterSecs`).
+    stopped_by: Option<String>,
 }
 
 impl Recorder {
     /// `names`: `(name, request path)` per target, in plan order.
-    pub(crate) fn new(names: Vec<(String, String)>, thresholds: Vec<Threshold>, profile: Profile, rate: bool) -> Self {
+    pub(crate) fn new(
+        names: Vec<(String, String)>,
+        thresholds: Vec<Threshold>,
+        profile: Profile,
+        rate: bool,
+        warm_up: Duration,
+    ) -> Self {
         let targets = names.iter().map(|_| Stats::new()).collect();
+        let failing_since = vec![None; thresholds.iter().filter(|t| t.enabled).count()];
         Self {
             names,
             total: Stats::new(),
@@ -338,13 +356,18 @@ impl Recorder {
             profile,
             rate,
             sending_ended: None,
+            warm_up_us: warm_up.as_micros() as u64,
+            failing_since,
+            stopped_by: None,
         }
     }
 
     pub(crate) fn record(&mut self, sample: &Sample) {
-        self.total.record(&sample.outcome);
-        if let Some(stats) = self.targets.get_mut(sample.target) {
-            stats.record(&sample.outcome);
+        if sample.at_us >= self.warm_up_us {
+            self.total.record(&sample.outcome);
+            if let Some(stats) = self.targets.get_mut(sample.target) {
+                stats.record(&sample.outcome);
+            }
         }
         let Outcome::Done { latency_us, status, error, .. } = &sample.outcome else { return };
         // A sample for a second already charted (very late) goes into the oldest open one.
@@ -424,7 +447,8 @@ impl Recorder {
     }
 
     fn metrics(&self, elapsed: Duration) -> (MetricsSummary, Vec<TargetSummary>) {
-        let secs = self.sending_ended.map_or(elapsed, |end| end.min(elapsed)).as_secs_f64();
+        let sending = self.sending_ended.map_or(elapsed, |end| end.min(elapsed));
+        let secs = sending.saturating_sub(Duration::from_micros(self.warm_up_us)).as_secs_f64();
         let targets = self
             .names
             .iter()
@@ -452,6 +476,7 @@ impl Recorder {
         self.sent = self.points.len();
         let (totals, targets) = self.metrics(elapsed);
         let thresholds = self.evaluate(&totals, &targets);
+        self.watch_aborts(phase, elapsed, &thresholds);
         Snapshot {
             phase,
             elapsed_ms: elapsed.as_millis() as u64,
@@ -463,6 +488,29 @@ impl Recorder {
             points,
             thresholds,
             cpu_percent,
+            warm_up_ms: self.warm_up_us / 1000,
+            stopped_by_threshold: self.stopped_by.clone(),
+        }
+    }
+
+    /// Live: note how long each threshold with `abortAfterSecs` has been failing
+    /// (without data it is not failing yet); the first to fail for that long stops the run.
+    fn watch_aborts(&mut self, phase: RunPhase, elapsed: Duration, results: &[ThresholdResult]) {
+        if phase != RunPhase::Running || self.stopped_by.is_some() {
+            return;
+        }
+        let enabled = self.thresholds.iter().filter(|t| t.enabled);
+        for ((threshold, result), since) in enabled.zip(results).zip(self.failing_since.iter_mut()) {
+            let Some(after) = threshold.abort_after_secs else { continue };
+            if result.passed || result.actual.is_none() {
+                *since = None;
+                continue;
+            }
+            let since = *since.get_or_insert(elapsed);
+            if elapsed.saturating_sub(since) >= Duration::from_secs(u64::from(after)) {
+                self.stopped_by = Some(result.label.clone());
+                return;
+            }
         }
     }
 
@@ -474,7 +522,7 @@ impl Recorder {
         self.close_seconds(run.elapsed.as_secs() as u32);
         let (totals, targets) = self.metrics(run.elapsed);
         let thresholds = self.evaluate(&totals, &targets);
-        let passed = run.error.is_none() && thresholds.iter().all(|t| t.passed);
+        let passed = run.error.is_none() && self.stopped_by.is_none() && thresholds.iter().all(|t| t.passed);
         Summary {
             started_at: run.started_at,
             duration_ms: run.elapsed.as_millis() as u64,
@@ -486,6 +534,8 @@ impl Recorder {
             stopped_early: run.stopped_early,
             error: run.error,
             peak_cpu_percent: run.peak_cpu_percent,
+            warm_up_ms: self.warm_up_us / 1000,
+            stopped_by_threshold: self.stopped_by.clone(),
         }
     }
 
@@ -609,7 +659,7 @@ mod tests {
     }
 
     fn threshold(metric: ThresholdMetric, op: ThresholdOp, value: f64, target: Option<&str>) -> Threshold {
-        Threshold { metric, op, value, target: target.map(str::to_string), enabled: true }
+        Threshold { metric, op, value, target: target.map(str::to_string), enabled: true, abort_after_secs: None }
     }
 
     #[test]
@@ -623,7 +673,7 @@ mod tests {
             threshold(ThresholdMetric::Rps, ThresholdOp::Gte, 1.0, Some("missing.yaml")),
             Threshold { enabled: false, ..threshold(ThresholdMetric::Max, ThresholdOp::Lt, 1.0, None) },
         ];
-        let mut rec = Recorder::new(names, thresholds, profile, false);
+        let mut rec = Recorder::new(names, thresholds, profile, false, Duration::ZERO);
         for i in 0..100 {
             rec.record(&done(0, 100 + i * 10, i + 1, 200));
         }
@@ -723,7 +773,7 @@ mod tests {
             threshold(ThresholdMetric::ErrorRate, ThresholdOp::Lt, 1.0, Some("gone.yaml")),
             threshold(ThresholdMetric::P95, ThresholdOp::Lt, 300.0, Some("gone.yaml")),
         ];
-        let mut rec = Recorder::new(names, thresholds, profile, true);
+        let mut rec = Recorder::new(names, thresholds, profile, true, Duration::ZERO);
         // Half the schedule ran (fast, all 200), half was dropped at the in-flight limit.
         for i in 0..100 {
             rec.record(&done(0, i * 10, 5, 200));
@@ -745,7 +795,7 @@ mod tests {
         let profile =
             Profile::new(&[LoadStage { duration_secs: 0, target: 50 }, LoadStage { duration_secs: 2, target: 50 }]);
         let thresholds = vec![threshold(ThresholdMetric::Rps, ThresholdOp::Gte, 45.0, None)];
-        let mut rec = Recorder::new(vec![("Ok".into(), "ok.yaml".into())], thresholds, profile, true);
+        let mut rec = Recorder::new(vec![("Ok".into(), "ok.yaml".into())], thresholds, profile, true, Duration::ZERO);
         for i in 0..99 {
             rec.record(&done(0, i * 20, 5, 200));
         }
@@ -764,5 +814,103 @@ mod tests {
         // Only the first end counts (a stop while winding down changes nothing).
         rec.end_sending(Duration::from_secs(9));
         assert_eq!(rec.summary(info(Duration::from_secs(10))).totals.rps, 50.0);
+    }
+
+    #[test]
+    fn warm_up_is_charted_but_not_counted() {
+        let profile =
+            Profile::new(&[LoadStage { duration_secs: 0, target: 10 }, LoadStage { duration_secs: 4, target: 10 }]);
+        let thresholds = vec![threshold(ThresholdMetric::P95, ThresholdOp::Lt, 100.0, None)];
+        let names = vec![("Ok".to_string(), "ok.yaml".to_string())];
+        let mut rec = Recorder::new(names, thresholds, profile, false, Duration::from_secs(2));
+        // Slow while warming up (and one failure), fast after.
+        for i in 0..20 {
+            rec.record(&done(0, i * 100, 900, 200));
+        }
+        rec.record(&done(0, 1950, 900, 503));
+        let snap = rec.snapshot(RunPhase::Running, Duration::from_millis(1990), 10, None);
+        assert_eq!((snap.totals.requests, snap.warm_up_ms), (0, 2000));
+        assert!(snap.thresholds[0].actual.is_none(), "no data while warming up");
+        for i in 0..20 {
+            rec.record(&done(0, 2000 + i * 100, 10, 200));
+        }
+        let summary = rec.summary(info(Duration::from_secs(4)));
+        let t = &summary.totals;
+        assert_eq!((t.requests, t.errors, t.status_codes.clone()), (20, 0, vec![(200, 20)]));
+        assert_eq!(t.latency.max, 10.0);
+        // 20 requests over the 2 seconds after the warm-up.
+        assert_eq!(t.rps, 10.0);
+        assert_eq!(summary.targets[0].metrics.requests, 20);
+        // The chart has every second, the warm-up too.
+        assert_eq!(summary.points.iter().map(|p| p.rps).collect::<Vec<_>>(), [10.0, 11.0, 10.0, 10.0]);
+        assert_eq!(summary.warm_up_ms, 2000);
+        assert!(summary.passed);
+    }
+
+    #[test]
+    fn a_threshold_failing_long_enough_stops_the_run() {
+        let profile =
+            Profile::new(&[LoadStage { duration_secs: 0, target: 10 }, LoadStage { duration_secs: 60, target: 10 }]);
+        let watched = Threshold {
+            abort_after_secs: Some(2),
+            ..threshold(ThresholdMetric::ErrorRate, ThresholdOp::Lt, 5.0, None)
+        };
+        let thresholds = vec![
+            // Fails from the start but never stops the run.
+            threshold(ThresholdMetric::P50, ThresholdOp::Lt, 1.0, None),
+            watched,
+        ];
+        let names = vec![("Ok".to_string(), "ok.yaml".to_string())];
+        let mut rec = Recorder::new(names, thresholds, profile, false, Duration::ZERO);
+        let at = |ms: u64| Duration::from_millis(ms);
+        // No data yet: nothing fails.
+        assert!(rec.snapshot(RunPhase::Running, at(250), 10, None).stopped_by_threshold.is_none());
+        // Errors from 1 s on.
+        rec.record(&done(0, 900, 5, 500));
+        assert!(rec.snapshot(RunPhase::Running, at(1000), 10, None).stopped_by_threshold.is_none());
+        // It recovers for a moment: the clock starts again.
+        for i in 0..30 {
+            rec.record(&done(0, 1000 + i, 5, 200));
+        }
+        assert!(rec.snapshot(RunPhase::Running, at(2500), 10, None).thresholds[1].passed);
+        for i in 0..10 {
+            rec.record(&done(0, 2600 + i, 5, 500));
+        }
+        assert!(rec.snapshot(RunPhase::Running, at(2750), 10, None).stopped_by_threshold.is_none());
+        assert!(rec.snapshot(RunPhase::Running, at(4500), 10, None).stopped_by_threshold.is_none());
+        let snap = rec.snapshot(RunPhase::Running, at(4750), 10, None);
+        assert_eq!(snap.stopped_by_threshold.as_deref(), Some("errorRate < 5 %"));
+        // It stays set while the run winds down.
+        let snap = rec.snapshot(RunPhase::Stopping, at(5000), 10, None);
+        assert_eq!(snap.stopped_by_threshold.as_deref(), Some("errorRate < 5 %"));
+        let summary = rec.summary(SummaryInfo { stopped_early: true, ..info(at(5000)) });
+        assert_eq!(summary.stopped_by_threshold.as_deref(), Some("errorRate < 5 %"));
+        assert!(!summary.passed && summary.stopped_early);
+    }
+
+    #[test]
+    fn thresholds_only_stop_a_running_test() {
+        let watched =
+            Threshold { abort_after_secs: Some(0), ..threshold(ThresholdMetric::P95, ThresholdOp::Lt, 1.0, None) };
+        let recorder = || {
+            let profile = Profile::new(&[LoadStage { duration_secs: 2, target: 10 }]);
+            let mut rec = Recorder::new(
+                vec![("Ok".into(), "ok.yaml".into())],
+                vec![watched.clone()],
+                profile,
+                false,
+                Duration::ZERO,
+            );
+            rec.record(&done(0, 100, 50, 200));
+            rec
+        };
+        // Winding down after the planned end: the result decides, not a stop.
+        let mut rec = recorder();
+        assert!(rec.snapshot(RunPhase::Stopping, Duration::from_secs(2), 0, None).stopped_by_threshold.is_none());
+        let summary = rec.summary(info(Duration::from_secs(2)));
+        assert!(summary.stopped_by_threshold.is_none() && !summary.passed);
+        // 0 s: the first failing check stops it.
+        let mut rec = recorder();
+        assert!(rec.snapshot(RunPhase::Running, Duration::from_millis(250), 1, None).stopped_by_threshold.is_some());
     }
 }

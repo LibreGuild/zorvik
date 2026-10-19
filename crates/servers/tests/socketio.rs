@@ -1,7 +1,7 @@
 //! Socket.IO server with Zorvik's Socket.IO client over both transports, and the raw
 //! Engine.IO exchange socket.io-client makes by default (long-polling, then the upgrade to
-//! WebSocket): namespaces, echo, rules, acknowledgements, broadcasts, emits from the UI,
-//! binary arguments and disconnects.
+//! WebSocket): namespaces, echo, rules, acknowledgements, broadcasts, scheduled events,
+//! emits from the UI, binary arguments and disconnects.
 
 mod common;
 
@@ -14,12 +14,12 @@ use zorvik_engine::socketio::{SocketIoConfig, SocketIoTransport};
 use zorvik_engine::{
     Client, Direction, HttpRequest, RequestOptions, SocketConnected, SocketEvent, SocketOutgoing, WsEvent, WsOutgoing,
 };
-use zorvik_formats::{MatchKind, ReplyMode, Server, ServerKind, SocketIoRule};
+use zorvik_formats::{MatchKind, ReplyMode, Server, ServerKind, SocketIoRule, SocketIoScheduled};
 use zorvik_servers::{OutgoingMessage, TrafficDirection, TrafficKind};
 
 async fn connect(url: &str, transport: SocketIoTransport, auth: Option<Value>) -> SocketConnected {
     let request = HttpRequest { method: "GET".into(), url: url.into(), headers: Vec::new(), body: Default::default() };
-    let config = SocketIoConfig { path: "/socket.io/".into(), auth, transport };
+    let config = SocketIoConfig { path: "/socket.io/".into(), auth, transport, auto_ack: None };
     Arc::new(Client::new()).socketio(request, config, &RequestOptions::default(), None).await.expect("connects")
 }
 
@@ -144,6 +144,69 @@ async fn rules_acknowledge_reply_and_broadcast() {
     emit(&a, "dance", "", false);
     let (event, args, _) = next(&mut a).await;
     assert_eq!((event.as_deref(), args), (Some("unknown"), json!(["dance"])));
+}
+
+#[tokio::test]
+async fn json_conditions_and_their_problems() {
+    let mut server = Server::new("IO", ServerKind::SocketIo);
+    server.socketio.mode = ReplyMode::Rules;
+    let rule = |pattern: &str, reply: &str| SocketIoRule {
+        event: "save".into(),
+        matcher: MatchKind::Json,
+        pattern: pattern.into(),
+        reply_event: reply.into(),
+        ..Default::default()
+    };
+    let other = SocketIoRule { event: "save".into(), reply_event: "other".into(), ..Default::default() };
+    server.socketio.rules = vec![rule("$[0]..id", "never"), rule("$[0].id == 7", "seven"), other];
+    let (running, events) = start(server).await;
+    // A condition that doesn't parse is reported like a bad regex, and never matches.
+    let problem = events.wait_kind(TrafficKind::Error).await;
+    assert!(
+        problem.summary.starts_with("Rule 1: ") && problem.summary.contains("not a JSON path"),
+        "{}",
+        problem.summary
+    );
+
+    let mut io = connect(&running.url, SocketIoTransport::Websocket, None).await;
+    joined(&events, 1).await;
+    emit(&io, "save", r#"[{"id": 7}]"#, false);
+    assert_eq!(next(&mut io).await.0.as_deref(), Some("seven"));
+    emit(&io, "save", r#"[{"id": 8}]"#, false);
+    assert_eq!(next(&mut io).await.0.as_deref(), Some("other"));
+    assert_eq!(events.traffic().iter().filter(|e| e.kind == TrafficKind::Error).count(), 1);
+}
+
+#[tokio::test]
+async fn scheduled_events_go_to_their_namespace() {
+    let mut server = Server::new("IO", ServerKind::SocketIo);
+    server.socketio.mode = ReplyMode::Discard;
+    server.socketio.schedule = vec![
+        SocketIoScheduled {
+            event: "price".into(),
+            args: r#"{"n": {{$randomInt(1, 9)}}}"#.into(),
+            namespace: "prices".into(),
+            every_ms: 100,
+            ..Default::default()
+        },
+        SocketIoScheduled { event: "off".into(), every_ms: 50, enabled: false, ..Default::default() },
+        SocketIoScheduled { event: "broken".into(), args: "{not json".into(), every_ms: 50, ..Default::default() },
+    ];
+    let (running, events) = start(server).await;
+    let mut prices = connect(&format!("{}/prices", running.url), SocketIoTransport::Websocket, None).await;
+    let mut root = connect(&running.url, SocketIoTransport::Websocket, None).await;
+    for _ in 0..2 {
+        let (event, args, _) = next(&mut prices).await;
+        assert_eq!(event.as_deref(), Some("price"));
+        assert!((1..=9).contains(&args[0]["n"].as_u64().unwrap()), "{args}");
+    }
+    // Clients of other namespaces get nothing (and switched-off events go nowhere).
+    assert!(tokio::time::timeout(Duration::from_millis(300), next(&mut root)).await.is_err());
+    // Arguments that aren't JSON are reported once, not with every tick.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let errors: Vec<_> = events.traffic().into_iter().filter(|e| e.kind == TrafficKind::Error).collect();
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+    assert!(errors[0].summary.contains("Scheduled event 3"), "{}", errors[0].summary);
 }
 
 #[tokio::test]
@@ -272,7 +335,8 @@ async fn clients_refused_or_on_old_servers_get_clear_errors() {
         headers: Vec::new(),
         body: Default::default(),
     };
-    let config = SocketIoConfig { path: "/elsewhere/".into(), auth: None, transport: SocketIoTransport::Auto };
+    let config =
+        SocketIoConfig { path: "/elsewhere/".into(), auth: None, transport: SocketIoTransport::Auto, auto_ack: None };
     let Err(e) = Arc::new(Client::new()).socketio(request, config, &RequestOptions::default(), None).await else {
         panic!("connected to the wrong path");
     };

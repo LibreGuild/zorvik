@@ -16,6 +16,7 @@ import { openCall, showInvokeResult } from "./grpc";
 import { attachRun } from "./runner";
 import { useSettings } from "./settings";
 import {
+  attachStream,
   activate as activateTab,
   isRequestTab,
   openDraft,
@@ -228,6 +229,9 @@ onEvent((e) => {
       return;
     case "run":
       if (following()) attachRun(openRunner(ev.folder, ev.run.name, { activate: !typing() }), ev.run);
+      return;
+    case "stream":
+      if (following()) void attachStream(ev.path, ev.request, ev.connId, ev.opened, "Connected by an AI agent", !typing());
       return;
     case "workspaceChanged":
       void workspaceChanged();

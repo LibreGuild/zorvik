@@ -1,11 +1,12 @@
 //! Network tools below the request level: TLS inspection, TCP port checks,
 //! ping (ICMP, or TCP connect timing), the local network interfaces and
-//! which process holds a local port.
+//! which process holds a local port; and decoding certificates offline.
 //!
 //! Each tool validates and resolves its target first, so bad input fails
 //! right away, then runs with bounded concurrency and per-step timeouts.
 //! Streaming tools report through a callback and stop on a cancellation token.
 
+pub mod certs;
 pub mod interfaces;
 pub mod ping;
 pub mod port_owner;
@@ -20,6 +21,9 @@ use tokio::net::{TcpSocket, TcpStream};
 
 use crate::error::{EngineError, ErrorKind, Result};
 
+pub use certs::{
+    CertDecodeReport, DecodedCertificate, DecodedItem, DecodedKey, DecodedKind, DecodedRequest, decode_certificates,
+};
 pub use interfaces::{IpFamily, NetAddress, NetInterface, list_interfaces};
 pub use ping::{PingMode, PingOptions, PingReply, PingStarted, PingSummary, Pinger};
 pub use port_owner::{PortOwner, Protocol, port_owner};

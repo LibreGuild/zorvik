@@ -7,10 +7,9 @@ import type { LoadModel } from "../../bindings/LoadModel";
 import type { LoadTarget } from "../../bindings/LoadTarget";
 import type { TreeNode } from "../../bindings/TreeNode";
 import { methodColor, methodLabel } from "../../lib/http";
-import { Button, Checkbox, cx, IconButton } from "../ui";
+import { Button, Checkbox, cx, IconButton, NumberInput } from "../ui";
 import { CapturesEditor } from "./CapturesEditor";
 import { captureProblem, flattenRequests, nameFromPath, type RequestEntry, targetShares } from "./model";
-import { NumberInput } from "./parts";
 
 const MAX_WEIGHT = 1000;
 

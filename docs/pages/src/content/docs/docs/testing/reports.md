@@ -25,7 +25,9 @@ Iteration 1 of 2
 ✓ GET     Profile  https://api.example.com/me  200 41 ms, 1204 B
     ✓ token works
     ✓ not bob
-– WS      Live prices  (skipped: WebSocket connections are live sessions; the runner sends HTTP, GraphQL, SSE and MCP requests)
+✓ WS      Live prices  wss://api.example.com/prices  101 164 ms, 389 B
+    ✓ Wait for a JSON message where $.type == snapshot
+– TCP     Ticker feed  (skipped: TCP connections are live sessions; the runner sends HTTP, GraphQL, SSE, WebSocket, Socket.IO and MCP requests)
 
 Iteration 2 of 2
 ✓ POST    Log in  https://api.example.com/login  200 77 ms, 312 B
@@ -33,15 +35,17 @@ Iteration 2 of 2
 ✗ GET     Profile  https://api.example.com/me  200 39 ms, 1204 B
     ✓ token works
     ✗ not bob — expected 'bob' to not equal 'bob'
-– WS      Live prices  (skipped: WebSocket connections are live sessions; the runner sends HTTP, GraphQL, SSE and MCP requests)
+✓ WS      Live prices  wss://api.example.com/prices  101 158 ms, 389 B
+    ✓ Wait for a JSON message where $.type == snapshot
+– TCP     Ticker feed  (skipped: TCP connections are live sessions; the runner sends HTTP, GraphQL, SSE, WebSocket, Socket.IO and MCP requests)
 
-Requests  3 passed, 1 failed, 2 skipped (6 total)
-Tests     5 passed, 1 failed
+Requests  5 passed, 1 failed, 2 skipped (8 total)
+Tests     7 passed, 1 failed
 Time      0.6 s, 2 iterations
 ```
 
 - `✓` passed, `✗` failed, `–` skipped. Each line has the method, name, the URL as sent, then the status, time and body size, or the error when nothing came back.
-- Tests are listed under their request. Script errors start with `!`, and so does the list of undefined variables (`! undefined variables: token`).
+- Tests are listed under their request; a WebSocket or Socket.IO request's tests are its wait steps ([WebSocket](../../protocols/websocket/#in-collection-runs), [Socket.IO](../../protocols/socketio/#in-collection-runs)). Script errors start with `!`, and so does the list of undefined variables (`! undefined variables: token`).
 - `Iteration N of M` headers appear when the run has more than one iteration.
 - The summary ends with `Stopped (Ctrl+C).` or `Stopped at the first failure (--bail).` when that happened, and the run's error if it had one.
 - Console output from scripts is not printed; it's in the JSON report.
@@ -131,13 +135,13 @@ One entry per request per iteration, in the order they ran.
 | `iteration` | number | Iteration, from 0 |
 | `path` | string | The request file under `requests/` |
 | `name` | string | The request's name |
-| `kind` | string | `http`, `sse`, `websocket`, `tcp`, `udp`, `dns`, `mqtt` or `grpc` |
-| `method` | string | The method sent |
+| `kind` | string | `http`, `sse`, `websocket`, `socketio`, `mcp`, `tcp`, `udp`, `dns`, `mqtt` or `grpc` |
+| `method` | string | The method sent; `WS` for WebSocket, `IO` for Socket.IO and `MCP` for MCP calls |
 | `url` | string | The URL as sent, with secret values shown as `{{name}}`; the saved URL when nothing was sent |
 | `status` | number or null | HTTP status, null when there was no response |
 | `durationMs` | number or null | Time of the request (for "repeat until", from the first send to the end of the last) |
 | `size` | number or null | Response body size in bytes |
-| `tests` | array | `{ name, passed, skipped, error }` for each test, including "Matches the API spec" |
+| `tests` | array | `{ name, passed, skipped, error }` for each test, including "Matches the API spec" and the waits of a WebSocket or Socket.IO request |
 | `console` | array | `{ level, message }` lines from the scripts; `level` is `log`, `info`, `warn`, `error` or `debug` |
 | `error` | string or null | Why there is no usable result: network or resolve error, pre-request script error, "repeat until" timeout, an unreadable request file |
 | `scriptErrors` | string[] | Post-response scripts that failed, for example `Post-response script of request 'Get profile' failed at line 3: …` |
@@ -191,9 +195,9 @@ The JUnit report follows the layout most CI tools read:
       <failure message="HTTP 404" type="AssertionError">HTTP 404</failure>
     </testcase>
   </testsuite>
-  <testsuite name="Live prices" tests="1" failures="0" errors="0" skipped="1" time="0.000">
-    <testcase name="Live prices (iteration 2)" classname="Live prices" time="0.000">
-      <skipped message="WebSocket connections are live sessions; the runner sends HTTP, GraphQL, SSE and MCP requests"/>
+  <testsuite name="Ticker feed" tests="1" failures="0" errors="0" skipped="1" time="0.000">
+    <testcase name="Ticker feed (iteration 2)" classname="Ticker feed" time="0.000">
+      <skipped message="TCP connections are live sessions; the runner sends HTTP, GraphQL, SSE, WebSocket, Socket.IO and MCP requests"/>
     </testcase>
   </testsuite>
 </testsuites>
@@ -219,13 +223,11 @@ A request is **skipped** when it's of a kind the runner doesn't send. It counts 
 
 | Request kind | Skip reason |
 |---|---|
-| WebSocket | `WebSocket connections are live sessions; the runner sends HTTP, GraphQL, SSE and MCP requests` |
-| TCP | `TCP connections are live sessions; the runner sends HTTP, GraphQL, SSE and MCP requests` |
-| UDP | `UDP sockets are live sessions; the runner sends HTTP, GraphQL, SSE and MCP requests` |
-| MQTT | `MQTT clients are live sessions; the runner sends HTTP, GraphQL, SSE and MCP requests` |
-| Socket.IO | `Socket.IO clients are live sessions; the runner sends HTTP, GraphQL, SSE and MCP requests` |
-| gRPC | `gRPC calls don't run in the collection runner; the runner sends HTTP, GraphQL, SSE and MCP requests` |
-| DNS | `DNS queries don't run in the collection runner; the runner sends HTTP, GraphQL, SSE and MCP requests` |
+| TCP | `TCP connections are live sessions; the runner sends HTTP, GraphQL, SSE, WebSocket, Socket.IO and MCP requests` |
+| UDP | `UDP sockets are live sessions; the runner sends HTTP, GraphQL, SSE, WebSocket, Socket.IO and MCP requests` |
+| MQTT | `MQTT clients are live sessions; the runner sends HTTP, GraphQL, SSE, WebSocket, Socket.IO and MCP requests` |
+| gRPC | `gRPC calls don't run in the collection runner; the runner sends HTTP, GraphQL, SSE, WebSocket, Socket.IO and MCP requests` |
+| DNS | `DNS queries don't run in the collection runner; the runner sends HTTP, GraphQL, SSE, WebSocket, Socket.IO and MCP requests` |
 
 A request file that can't be read is **not** skipped: it fails with `The request can't be read: …`.
 

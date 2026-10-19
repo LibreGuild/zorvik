@@ -41,6 +41,8 @@ pub struct SocketIoConfig {
     /// The connection's `auth` payload.
     pub auth: Option<Value>,
     pub transport: SocketIoTransport,
+    /// Answer every event that asks for an acknowledgement with these arguments.
+    pub auto_ack: Option<Vec<Value>>,
 }
 
 /// What the transport delivers.
@@ -178,7 +180,7 @@ impl Client {
             let _ = ev_tx.send(SocketEvent::info(note));
         }
         let alive = Duration::from_millis(handshake.ping_interval + handshake.ping_timeout);
-        tokio::spawn(relay(namespace, tx, rx, out_rx, ev_tx, alive));
+        tokio::spawn(relay(namespace, tx, rx, out_rx, ev_tx, alive, config.auto_ack.clone()));
         let opened = SocketOpened {
             protocol: format!("Socket.IO over {label}"),
             remote_addr: meta.remote_addr.clone(),
@@ -391,7 +393,7 @@ fn ws_frames(
                             let bytes = base64::engine::general_purpose::STANDARD.decode(base64.unwrap_or_default()).unwrap_or_default();
                             Incoming::Frame(Frame::Binary(bytes))
                         }
-                        Some(WsEvent::Message { .. }) => continue,
+                        Some(WsEvent::Message { .. } | WsEvent::Info { .. }) => continue,
                         Some(WsEvent::Error { message }) => Incoming::Error(message),
                         Some(WsEvent::Closed { code, reason, .. }) => {
                             let words = match (code, reason.is_empty()) {
@@ -506,6 +508,9 @@ async fn post(
     }
 }
 
+/// How an acknowledgement's log message starts (`acknowledgement of #3`).
+pub(crate) const ACK_OF: &str = "acknowledgement of #";
+
 /// A received event, acknowledgement or binary one, as a message for the log.
 fn received(packet: &Packet) -> Option<SocketEvent> {
     let (topic, args, detail) = match packet.kind {
@@ -516,7 +521,7 @@ fn received(packet: &Packet) -> Option<SocketEvent> {
         }
         Kind::Ack | Kind::BinaryAck => {
             let id = packet.id.unwrap_or_default();
-            (None, packet.data.clone().unwrap_or(Value::Null), Some(format!("acknowledgement of #{id}")))
+            (None, packet.data.clone().unwrap_or(Value::Null), Some(format!("{ACK_OF}{id}")))
         }
         _ => return None,
     };
@@ -537,7 +542,23 @@ async fn relay(
     mut outgoing: mpsc::UnboundedReceiver<SocketOutgoing>,
     events: mpsc::UnboundedSender<SocketEvent>,
     alive: Duration,
+    auto_ack: Option<Vec<Value>>,
 ) {
+    // An event that asks for an acknowledgement gets one, when the user set its arguments.
+    let answer = |packet: &Packet| {
+        let (Some(args), Some(id), Kind::Event | Kind::BinaryEvent) = (&auto_ack, packet.id, packet.kind) else {
+            return;
+        };
+        let ack = Packet { id: Some(id), ..Packet::new(Kind::Ack, &namespace, Some(Value::Array(args.clone()))) };
+        for frame in ack.frames() {
+            let _ = tx.send(frame);
+        }
+        let mut sent = SocketEvent::message(Direction::Sent, Value::Array(args.clone()).to_string().as_bytes());
+        if let SocketEvent::Message { detail, .. } = &mut sent {
+            *detail = Some(format!("{ACK_OF}{id}"));
+        }
+        let _ = events.send(sent);
+    };
     let closed = |reason: String, by_client: bool| SocketEvent::Closed { reason, by_client };
     let mut last_id = 0u64;
     // A binary event and the attachments received for it so far.
@@ -621,6 +642,7 @@ async fn relay(
                                 _ => {
                                     if let Some(event) = received(&packet) {
                                         let _ = events.send(event);
+                                        answer(&packet);
                                     }
                                 }
                             }
@@ -649,6 +671,7 @@ async fn relay(
                             }
                             if let Some(event) = received(&packet) {
                                 let _ = events.send(event);
+                                answer(&packet);
                             }
                         }
                     }

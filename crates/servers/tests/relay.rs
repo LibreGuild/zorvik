@@ -1,11 +1,11 @@
 //! TCP relay: both directions, half-close, injected sends, disconnect,
-//! unreachable and TLS targets, bad targets.
+//! unreachable and TLS targets, bad targets, faults.
 
 mod common;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::{Events, start};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -17,7 +17,7 @@ use zorvik_servers::{OutgoingMessage, Reporter, RunningServer, StartOptions, Tra
 fn relay(target: &str, upstream_tls: bool) -> Server {
     let mut server = Server::new("Relay", ServerKind::TcpProxy);
     server.port = 0;
-    server.proxy = TcpProxyConfig { target: target.into(), upstream_tls };
+    server.proxy = TcpProxyConfig { target: target.into(), upstream_tls, ..Default::default() };
     server
 }
 
@@ -81,6 +81,97 @@ async fn relays_both_ways_with_half_close() {
     assert_eq!(to.iter().map(|e| e.text.clone().unwrap()).collect::<String>(), "hello");
     assert_eq!(from.iter().map(|e| e.text.clone().unwrap()).collect::<String>(), "hellobye");
     assert!(traffic.iter().any(|e| e.kind == TrafficKind::Info && e.summary.contains(&target.to_string())));
+}
+
+/// A target that sends `size` bytes right away, then keeps the connection open.
+async fn talker_target(size: usize) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let _ = sock.write_all(&vec![b'x'; size]).await;
+                let mut buf = [0u8; 64];
+                while matches!(sock.read(&mut buf).await, Ok(n) if n > 0) {}
+            });
+        }
+    });
+    addr
+}
+
+#[tokio::test]
+async fn faults_delay_limit_and_drop() {
+    // Delay per chunk.
+    let target = echo_target().await;
+    let mut server = relay(&target.to_string(), false);
+    server.proxy.delay_ms = 150;
+    let (running, _events) = start(server).await;
+    let mut client = TcpStream::connect(running.addr).await.unwrap();
+    let started = Instant::now();
+    client.write_all(b"ping").await.unwrap();
+    assert_eq!(read_some(&mut client).await, b"ping");
+    // Once on the way there, once on the way back.
+    assert!(started.elapsed() >= Duration::from_millis(300), "{:?}", started.elapsed());
+    drop(running);
+
+    // A bandwidth limit: 2000 bytes at 4000 bytes a second take about half a second.
+    let mut server = relay(&talker_target(2000).await.to_string(), false);
+    server.proxy.bytes_per_second = 4000;
+    let (running, _events) = start(server).await;
+    let mut client = TcpStream::connect(running.addr).await.unwrap();
+    let started = Instant::now();
+    let mut got = vec![0u8; 2000];
+    tokio::time::timeout(Duration::from_secs(5), client.read_exact(&mut got)).await.unwrap().unwrap();
+    let took = started.elapsed();
+    assert!(took >= Duration::from_millis(400) && took < Duration::from_secs(3), "{took:?}");
+    drop(running);
+
+    // Dropped after a number of bytes: exactly that many arrive, then the connection ends.
+    let mut server = relay(&talker_target(5000).await.to_string(), false);
+    server.proxy.drop_after_bytes = 1234;
+    let (running, events) = start(server).await;
+    let mut client = TcpStream::connect(running.addr).await.unwrap();
+    let mut all = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(5), client.read_to_end(&mut all)).await.expect("ends in time");
+    assert_eq!(all.len(), 1234);
+    let close = events.wait_kind(TrafficKind::Close).await;
+    assert!(close.summary.contains("dropped by the relay after 1234 bytes"), "{}", close.summary);
+    drop(running);
+
+    // Both directions share the limit, also while one waits for the bandwidth limit: not a
+    // byte more passes, whichever side sends.
+    let target = talker_target(2000).await;
+    let mut server = relay(&target.to_string(), false);
+    server.proxy.drop_after_bytes = 2500;
+    server.proxy.bytes_per_second = 20_000;
+    let (running, events) = start(server).await;
+    let mut client = TcpStream::connect(running.addr).await.unwrap();
+    client.write_all(&[b'y'; 2000]).await.unwrap();
+    let mut sink = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(5), client.read_to_end(&mut sink)).await.expect("ends in time");
+    let close = events.wait_kind(TrafficKind::Close).await;
+    assert!(close.summary.contains("dropped by the relay after 2500 bytes"), "{}", close.summary);
+    let passed: u64 = events
+        .traffic()
+        .iter()
+        .filter(|e| matches!(e.direction, Some(TrafficDirection::ToTarget | TrafficDirection::FromTarget)))
+        .map(|e| e.size)
+        .sum();
+    assert_eq!(passed, 2500);
+    drop(running);
+
+    // Dropped after a time, though both sides are still there.
+    let mut server = relay(&echo_target().await.to_string(), false);
+    server.proxy.drop_after_ms = 200;
+    let (running, events) = start(server).await;
+    let mut client = TcpStream::connect(running.addr).await.unwrap();
+    client.write_all(b"hi").await.unwrap();
+    assert_eq!(read_some(&mut client).await, b"hi");
+    let started = Instant::now();
+    let _ = read_to_end(&mut client).await;
+    assert!(started.elapsed() < Duration::from_secs(2));
+    let close = events.wait_kind(TrafficKind::Close).await;
+    assert!(close.summary.contains("dropped by the relay after 200 ms"), "{}", close.summary);
 }
 
 #[tokio::test]

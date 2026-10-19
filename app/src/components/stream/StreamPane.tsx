@@ -1,15 +1,16 @@
 // Live message log of WebSocket / SSE / TCP / UDP / MQTT / Socket.IO connections and GraphQL
 // subscriptions, with a composer.
-import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownLeft, ArrowUpRight, Ban, ChevronRight, CircleAlert, Copy, Info, Search, Send, Trash2 } from "lucide-react";
-import { formatBytes, formatClock } from "../../lib/format";
-import { copyText, modKey } from "../../lib/platform";
-import { clearMessages, type StreamMessage, type Tab, updateDraft, wsSend } from "../../store/tabs";
-import { useVariableNames } from "../../store/workspace";
-import { CodeEditor } from "../CodeEditor";
-import { beautifyJson } from "../request/jsonFormat";
-import { COMPOSER_EXTRAS } from "../request/kinds";
-import { Button, cx, EmptyState, IconButton, Segmented } from "../ui";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { Download, Search, SlidersHorizontal, Trash2 } from "lucide-react";
+import { logFilter, pairAcks, pairReplies, parseJson, type ReplyPair, reusePairs } from "../../lib/messageMatch";
+import { modKey, pickSavePath } from "../../lib/platform";
+import { api, errorMessage } from "../../lib/rpc";
+import { loadIntoComposer } from "../../store/composer";
+import { clearMessages, type StreamMessage, type Tab } from "../../store/tabs";
+import { toast } from "../../store/toasts";
+import { cx, IconButton, Menu } from "../ui";
+import { Composer } from "./Composer";
+import { decodeBase64, MessageLog, type TimeMode } from "./MessageLog";
 
 function statusDot(status: Tab["stream"]["status"]) {
   const map = {
@@ -24,22 +25,146 @@ function statusDot(status: Tab["stream"]["status"]) {
 /** Kinds whose messages are typed in the composer (SSE and subscriptions only receive). */
 const COMPOSER_KINDS = ["websocket", "tcp", "udp", "mqtt", "socketio"];
 
+type Show = "all" | "sent" | "received";
+
+const TIME_KEY = "zorvik.log.time";
+
+function rememberedTime(): TimeMode {
+  try {
+    const t = localStorage.getItem(TIME_KEY);
+    return t === "delta" || t === "elapsed" ? t : "clock";
+  } catch {
+    return "clock";
+  }
+}
+
+// Parsed once per message (messages never change): the filter and reply pairing read them often.
+const parsed = new WeakMap<StreamMessage, unknown>();
+function jsonOf(m: StreamMessage): unknown {
+  if (!parsed.has(m)) parsed.set(m, parseJson(m.text));
+  return parsed.get(m);
+}
+
+// What the word filter looks in: the text, or the first bytes of binary as hex (decoded once).
+const bodies = new WeakMap<StreamMessage, string | null>();
+function bodyOf(m: StreamMessage): string | null {
+  if (m.text != null) return m.text;
+  let body = bodies.get(m);
+  if (body === undefined) {
+    body = m.base64 ? decodeBase64(m.base64.slice(0, 4000)) : null;
+    bodies.set(m, body);
+  }
+  return body;
+}
+
+async function exportLog(tab: Tab) {
+  const path = await pickSavePath("Export the message log", `${tab.draft.name || "messages"}.jsonl`, [{ name: "JSON Lines", extensions: ["jsonl"] }]);
+  if (!path) return;
+  const lines = tab.stream.messages.map((m) =>
+    JSON.stringify({
+      time: new Date(m.timestamp).toISOString(),
+      direction: m.direction,
+      kind: m.kind,
+      ...(m.text != null ? { text: m.text } : {}),
+      ...(m.base64 ? { base64: m.base64 } : {}),
+      size: m.size,
+      ...(m.topic ? { topic: m.topic } : {}),
+      ...(m.peer ? { peer: m.peer } : {}),
+      ...(m.detail ? { detail: m.detail } : {}),
+      ...(m.eventId ? { id: m.eventId } : {}),
+    }),
+  );
+  try {
+    await api.saveFile(path, { text: lines.join("\n") + "\n" });
+    toast("success", `Exported ${lines.length} ${lines.length === 1 ? "message" : "messages"}`, path);
+  } catch (e) {
+    toast("error", "Could not export the log", errorMessage(e));
+  }
+}
+
 export function StreamPane({ tab }: { tab: Tab }) {
   const kind = tab.draft.kind ?? "http";
   const isWs = COMPOSER_KINDS.includes(kind);
   const { status, messages } = tab.stream;
   const [filter, setFilter] = useState("");
+  const [show, setShow] = useState<Show>("all");
+  const [time, setTimeMode] = useState<TimeMode>(rememberedTime);
   const [dot, label] = statusDot(status);
   const sent = messages.filter((m) => m.direction === "sent").length;
   const received = messages.filter((m) => m.direction === "received").length;
+  const replyKey = tab.draft.websocket?.replyKey ?? "";
 
-  const visible = useMemo(() => {
-    const q = filter.trim().toLowerCase();
-    if (!q) return messages;
-    return messages.filter(
-      (m) => (m.text ?? "").toLowerCase().includes(q) || m.kind.toLowerCase().includes(q) || (m.topic ?? "").toLowerCase().includes(q) || (m.peer ?? "").includes(q),
-    );
-  }, [messages, filter]);
+  // Socket.IO events and MQTT topics: one at a time, or some hidden.
+  const [only, setOnly] = useState<string | null>(null);
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
+  const topics = useMemo(() => {
+    if (kind !== "socketio" && kind !== "mqtt") return [];
+    const counts = new Map<string, number>();
+    for (const m of messages) if (m.topic) counts.set(m.topic, (counts.get(m.topic) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  }, [messages, kind]);
+
+  // The filter's answer for each message, kept while the filter text stays (messages never
+  // change): a flush tests only the new messages.
+  const matches = useMemo(() => {
+    const test = logFilter(filter);
+    if (!test) return null;
+    const words = !filter.trim().startsWith("$");
+    const answers = new WeakMap<StreamMessage, boolean>();
+    return (m: StreamMessage) => {
+      let yes = answers.get(m);
+      if (yes === undefined) {
+        const meta = [m.kind, m.topic ?? "", m.peer ?? ""].join(" ");
+        yes = test(bodyOf(m), () => jsonOf(m)) || (words && test(meta, () => undefined));
+        answers.set(m, yes);
+      }
+      return yes;
+    };
+  }, [filter]);
+
+  const visible = useMemo(
+    () =>
+      messages.filter((m) => {
+        if (show !== "all" && m.direction !== show) return false;
+        if (only !== null && m.topic !== only) return false;
+        if (m.topic && hidden.has(m.topic)) return false;
+        return !matches || matches(m);
+      }),
+    [messages, matches, show, only, hidden],
+  );
+
+  // Replies paired with the messages they answer (same value at the reply key). Pairs that did
+  // not change keep their object, so the log's rows don't re-render on every flush.
+  const lastReplies = useRef(new Map<number, ReplyPair>());
+  const replies = useMemo(() => {
+    let next = new Map<number, ReplyPair>();
+    if (kind === "socketio") next = pairAcks(messages);
+    else if (kind === "websocket") {
+      const byId = new Map(messages.map((m) => [m.id, m]));
+      next = pairReplies(messages, (id) => jsonOf(byId.get(id)!), replyKey);
+    }
+    lastReplies.current = reusePairs(lastReplies.current, next);
+    return next;
+  }, [messages, kind, replyKey]);
+
+  const setTime = (t: TimeMode) => {
+    setTimeMode(t);
+    try {
+      localStorage.setItem(TIME_KEY, t);
+    } catch {
+      // Not remembered.
+    }
+  };
+  // Stable, so the log and its rows (memoized) don't re-render on every keystroke in the composer.
+  const edit = useCallback(
+    (m: StreamMessage) => {
+      const binary = m.text == null;
+      const json = !binary && jsonOf(m) !== undefined;
+      loadIntoComposer(tab.id, { name: "", format: binary ? "binary" : json ? "json" : "text", text: binary ? decodeBase64(m.base64 ?? "") : (m.text ?? "") });
+    },
+    [tab.id],
+  );
+  const filtered = filter.trim() !== "" || show !== "all" || only !== null || hidden.size > 0;
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="stream-pane">
@@ -50,200 +175,100 @@ export function StreamPane({ tab }: { tab: Tab }) {
         </span>
         <span className="truncate whitespace-nowrap text-[12px] text-muted">
           {isWs ? `${sent} sent · ${received} received` : `${received} ${kind === "http" ? "results" : "events"}`}
+          {filtered && messages.length > 0 && ` · ${visible.length} shown`}
         </span>
         <div className="flex-1" />
-        <div className="flex h-7 w-52 items-center gap-1.5 rounded-lg border border-transparent bg-panel-2 px-2 focus-within:border-accent">
+        <div className="flex h-7 w-56 items-center gap-1.5 rounded-lg border border-transparent bg-panel-2 px-2 focus-within:border-accent">
           <Search size={12} className="text-faint" />
           <input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            placeholder="Filter messages"
+            placeholder="Filter, or $.type == trade"
+            aria-label="Filter messages"
             className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-faint"
           />
         </div>
+        <Menu
+          align="end"
+          trigger={
+            <IconButton label="View" active={show !== "all"}>
+              <SlidersHorizontal size={14} />
+            </IconButton>
+          }
+          entries={[
+            ...(isWs
+              ? ([
+                  { label: "All messages", checked: show === "all", onSelect: () => setShow("all") },
+                  { label: "Sent only", checked: show === "sent", onSelect: () => setShow("sent") },
+                  { label: "Received only", checked: show === "received", onSelect: () => setShow("received") },
+                  { separator: true },
+                ] as const)
+              : []),
+            { label: "Time of day", checked: time === "clock", onSelect: () => setTime("clock") },
+            { label: "Time since the previous message", checked: time === "delta", onSelect: () => setTime("delta") },
+            { label: "Time since the first message", checked: time === "elapsed", onSelect: () => setTime("elapsed") },
+            { separator: true },
+            { label: "Export the log…", icon: <Download size={13} />, disabled: messages.length === 0, onSelect: () => void exportLog(tab) },
+          ]}
+        />
         <IconButton label="Clear messages" onClick={() => clearMessages(tab.id)}>
           <Trash2 size={14} />
         </IconButton>
       </div>
-      <MessageLog messages={visible} empty={messages.length === 0} isWs={isWs} kind={kind} />
-      {isWs && <Composer tab={tab} />}
-    </div>
-  );
-}
-
-// Memoized: the tab (and so StreamPane) re-renders on every keystroke in the composer; the log
-// only needs to when its messages change.
-const EMPTY_HINT: Record<string, string> = {
-  websocket: "Connect, then send messages below. Incoming messages appear here.",
-  tcp: "Connect, then send messages below. Bytes from the server appear here.",
-  udp: "Send a datagram below. Replies from the host appear here.",
-  mqtt: "Connect to receive messages on your subscriptions, and publish below.",
-  socketio: "Connect, then emit events below. Events from the server appear here.",
-  http: "Subscribe to receive the subscription's results here.",
-};
-
-const MessageLog = memo(function MessageLog({ messages, empty, isWs, kind }: { messages: StreamMessage[]; empty: boolean; isWs: boolean; kind: string }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const stick = useRef(true);
-  useEffect(() => {
-    const el = ref.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
-  }, [messages]);
-  if (empty) {
-    return (
-      <div className="min-h-0 flex-1">
-        <EmptyState icon={<Ban size={26} strokeWidth={1.5} />} title="No messages yet">
-          {EMPTY_HINT[kind] ?? "Connect to start receiving events."}
-        </EmptyState>
-      </div>
-    );
-  }
-  return (
-    <div
-      ref={ref}
-      onScroll={(e) => {
-        const el = e.currentTarget;
-        stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-      }}
-      className="mx-3 min-h-0 flex-1 overflow-auto rounded-lg border border-line font-mono text-[12px]"
-      data-testid="message-log"
-    >
-      {messages.map((m) => (
-        <MessageRow key={m.id} m={m} isWs={isWs} sse={kind === "sse"} />
-      ))}
-    </div>
-  );
-});
-
-function decodeBase64(b64: string): string {
-  try {
-    const bin = atob(b64);
-    return [...bin].map((c) => c.charCodeAt(0).toString(16).padStart(2, "0")).join(" ");
-  } catch {
-    return b64;
-  }
-}
-
-/** A Socket.IO acknowledgement note in a few words: "ack #3" or "wants ack #3". */
-function ackChip(detail: string | null | undefined): string | null {
-  const id = detail?.match(/#(\d+)/)?.[1];
-  if (!id) return null;
-  if (detail?.startsWith("acknowledgement")) return `ack #${id}`;
-  if (detail?.startsWith("asks for")) return `wants ack #${id}`;
-  return null;
-}
-
-const MessageRow = memo(function MessageRow({ m, isWs, sse }: { m: StreamMessage; isWs: boolean; sse: boolean }) {
-  const [open, setOpen] = useState(false);
-  // The one-line row shows the start: a TCP message can be megabytes (400 base64 characters are 300 bytes).
-  const line = m.text != null ? m.text.slice(0, 300) : m.base64 ? decodeBase64(m.base64.slice(0, 400)) : "";
-  const content = useMemo(() => (open ? (m.text ?? (m.base64 ? decodeBase64(m.base64) : "")) : ""), [open, m.text, m.base64]);
-  // Token-based, so large integer ids aren't rounded the way JSON.parse would.
-  const pretty = useMemo(() => (open && m.text ? beautifyJson(m.text) : null), [open, m.text]);
-  const icon =
-    m.direction === "sent" ? (
-      <ArrowUpRight size={13} className="text-success" />
-    ) : m.direction === "received" ? (
-      <ArrowDownLeft size={13} className="text-info" />
-    ) : m.direction === "error" ? (
-      <CircleAlert size={13} className="text-danger" />
-    ) : (
-      <Info size={13} className="text-faint" />
-    );
-  const meta = m.direction === "info" || m.direction === "error";
-  return (
-    <div className={cx("border-b border-line/60 last:border-b-0", m.direction === "error" && "bg-danger/5")} style={{ contentVisibility: "auto", containIntrinsicSize: "auto 30px" }}>
-      <button
-        onClick={() => !meta && setOpen(!open)}
-        className={cx("flex w-full items-center gap-2 px-3 py-1.5 text-left", !meta && "hover:bg-hover/40")}
-      >
-        {!meta ? <ChevronRight size={11} className={cx("shrink-0 text-faint transition-transform", open && "rotate-90")} /> : <span className="w-[11px]" />}
-        {icon}
-        <span className="shrink-0 text-[11px] tabular-nums text-faint">{formatClock(m.timestamp)}</span>
-        {sse && m.direction === "received" && (
-          <span className="shrink-0 rounded bg-accent-soft px-1.5 text-[10.5px] font-semibold text-accent">{m.kind}</span>
-        )}
-        {isWs && (m.kind === "binary" || m.kind === "ping" || m.kind === "pong") && (
-          <span className="shrink-0 rounded bg-hover px-1.5 text-[10.5px] font-semibold uppercase text-muted">{m.kind}</span>
-        )}
-        {m.topic && <span className="max-w-[40%] shrink-0 truncate rounded bg-accent-soft px-1.5 text-[10.5px] font-semibold text-accent" title={m.topic}>{m.topic}</span>}
-        {ackChip(m.detail) && <span className="shrink-0 rounded bg-hover px-1.5 text-[10.5px] font-semibold text-muted">{ackChip(m.detail)}</span>}
-        {m.peer && <span className="shrink-0 text-[11px] text-faint">{m.peer}</span>}
-        <span className={cx("min-w-0 flex-1 truncate", meta ? "font-sans text-muted" : "text-fg")}>{line || <i className="text-faint">empty</i>}</span>
-        {!meta && <span className="shrink-0 text-[11px] text-faint">{formatBytes(m.size)}</span>}
-      </button>
-      {open && (
-        <div className="group relative bg-panel-2/60 px-8 py-2">
-          {m.eventId && <div className="mb-1 font-sans text-[11px] text-faint">id: {m.eventId}</div>}
-          {m.detail && <div className="mb-1 font-sans text-[11px] text-faint">{m.detail}</div>}
-          <pre className="selectable max-h-80 overflow-auto whitespace-pre-wrap break-all text-fg">{pretty ?? content}</pre>
-          <button
-            aria-label="Copy message"
-            onClick={() => void copyText(content)}
-            className="absolute right-2 top-2 rounded p-1 text-faint opacity-0 hover:bg-hover hover:text-fg group-hover:opacity-100"
-          >
-            <Copy size={12} />
-          </button>
+      {topics.length > 0 && (
+        <div className="mx-3 mb-1.5 flex shrink-0 items-center gap-1 overflow-x-auto pb-0.5" data-testid="event-chips" aria-label={kind === "mqtt" ? "Topics" : "Events"}>
+          {topics.slice(0, 30).map(([name, count]) => {
+            const off = hidden.has(name);
+            return (
+              <button
+                key={name}
+                aria-pressed={only === name}
+                title={`${only === name ? "Show every" : "Show only this"} ${kind === "mqtt" ? "topic" : "event"} · ${modKey}-click: ${off ? "show" : "hide"} it`}
+                onClick={(e) => {
+                  if (e.metaKey || e.ctrlKey) {
+                    setHidden((h) => {
+                      const next = new Set(h);
+                      if (next.has(name)) next.delete(name);
+                      else next.add(name);
+                      return next;
+                    });
+                    if (only === name) setOnly(null);
+                  } else setOnly(only === name ? null : name);
+                }}
+                className={cx(
+                  "flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[11px] transition-colors",
+                  only === name ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:bg-hover hover:text-fg",
+                  off && "line-through opacity-60",
+                )}
+              >
+                {name}
+                <span className="tabular-nums text-faint">{count}</span>
+              </button>
+            );
+          })}
+          {(only !== null || hidden.size > 0) && (
+            <button
+              className="shrink-0 px-1.5 text-[11px] text-accent hover:underline"
+              onClick={() => {
+                setOnly(null);
+                setHidden(new Set());
+              }}
+            >
+              Show all
+            </button>
+          )}
         </div>
       )}
-    </div>
-  );
-});
-
-function Composer({ tab }: { tab: Tab }) {
-  const { names } = useVariableNames();
-  const Extra = COMPOSER_EXTRAS[tab.draft.kind ?? "http"];
-  const [mode, setMode] = useState<"text" | "json" | "binary">(() => (tab.draft.body?.type === "json" ? "json" : "text"));
-  const text = tab.draft.body?.text ?? "";
-  const open = tab.stream.status === "open";
-  // A Socket.IO event may have no arguments.
-  const ready = open && (text.length > 0 || tab.draft.kind === "socketio");
-  const submit = () => {
-    if (ready) void wsSend(tab.id, text, mode === "binary");
-  };
-  return (
-    <div className="m-3 flex h-48 shrink-0 flex-col overflow-hidden rounded-xl border border-line bg-input">
-      <div className="flex min-h-9 flex-wrap items-center gap-x-2 gap-y-1 px-3 py-1">
-        {Extra && <Extra tab={tab} />}
-        <Segmented
-          items={[
-            { id: "text", label: "Text" },
-            { id: "json", label: "JSON" },
-            { id: "binary", label: "Binary (hex)" },
-          ]}
-          value={mode}
-          onChange={(m) => {
-            setMode(m);
-            updateDraft(tab.id, (r) => ({ ...r, body: { ...(r.body ?? { type: "text" }), type: m === "json" ? "json" : "text" } }));
-          }}
-        />
-        <div className="flex-1" />
-        <span className="text-[11px] text-faint">
-          {modKey}+Enter
-        </span>
-        <Button size="sm" variant="primary" icon={<Send size={13} />} disabled={!ready} onClick={submit}>
-          {tab.draft.kind === "socketio" ? "Emit" : "Send"}
-        </Button>
-      </div>
-      <div className="min-h-0 flex-1">
-        <CodeEditor
-          value={text}
-          onChange={(v) => updateDraft(tab.id, (r) => ({ ...r, body: { ...(r.body ?? { type: "text" }), text: v } }))}
-          language={mode === "json" ? "json" : "text"}
-          variables={names}
-          onSubmit={submit}
-          lineNumbers={false}
-          placeholder={
-            mode === "binary"
-              ? "48 65 6c 6c 6f"
-              : tab.draft.kind === "socketio"
-                ? mode === "json"
-                  ? 'Arguments as JSON, e.g. ["hi", {"n": 1}]'
-                  : "Text, sent as one argument"
-                : "Message to send"
-          }
-        />
-      </div>
+      <MessageLog
+        messages={visible}
+        empty={messages.length === 0}
+        isWs={isWs}
+        kind={kind}
+        time={time}
+        replies={replies}
+        onEdit={kind === "websocket" ? edit : undefined}
+      />
+      {isWs && <Composer tab={tab} />}
     </div>
   );
 }

@@ -1,11 +1,11 @@
 ---
 title: Models and stages
-description: Virtual users or a fixed request rate, stages that ramp the load over time, think time, request weights and the connection options.
+description: Virtual users or a fixed request rate, stages that ramp the load over time, think time (fixed or random), a warm-up, request weights and the connection options.
 sidebar:
   order: 2
 ---
 
-A load test's shape is set by two things: the **load model** (how load is generated) and the **stages** (how much load, over time). This page also covers think time, weights and the connection options.
+A load test's shape is set by two things: the **load model** (how load is generated) and the **stages** (how much load, over time). This page also covers think time, the warm-up, weights and the connection options.
 
 ## The two models
 
@@ -116,7 +116,37 @@ When the stages match a preset, its button is highlighted; otherwise the editor 
 
 `thinkTimeMs` (virtual users only) is the pause each user takes after an answer, before its next request. 0 (the default) sends the next request at once. Real users read and click; adding think time makes a given number of users send fewer requests, closer to what the same number of real clients would do.
 
+### A random think time
+
+With a fixed pause, users that start together stay in step: they send at the same moments, then all wait, which gives the server bursts that real traffic doesn't have. Set **Random up to (ms)** (`thinkTimeMaxMs`) to make each pause random between **Think time** and that value, evenly spread:
+
+```yaml
+thinkTimeMs: 1000      # each pause is between 1 and 3 seconds,
+thinkTimeMaxMs: 3000   # 2 seconds on average
+```
+
+- Each user draws its own pauses, so users drift apart after a few requests.
+- Leave **Random up to** empty (or set it to the same value as **Think time**) for a fixed pause.
+- It can't be shorter than **Think time**: the field is marked, and the test won't start ("The longest think time is shorter than the shortest").
+- For throughput, count with the average pause: 10 users with 1–3 s of think time send about 10 ÷ (2 s + latency) requests per second.
+
 The request-rate model has no think time: its rate already says when requests start.
+
+## Warm-up
+
+The first seconds of a run are rarely typical: connection pools fill, caches are cold, a JIT compiler hasn't optimized the hot paths yet. Their slow requests pull the percentiles up for the whole run. **Warm-up (s)** (`warmUpSecs`) leaves them out:
+
+```yaml
+warmUpSecs: 15   # the first 15 s are charted, not counted
+```
+
+- Requests that **finish** in the first *n* seconds are left out of every number: requests, errors, latency, status codes, the per-request table and the thresholds. Throughput counts from the end of the warm-up.
+- They are still **charted**: the charts shade the warm-up, so you can see what it hid.
+- During the warm-up the live numbers stay empty ("Warming up: requests in the first 15 s are charted but not counted") and thresholds show "no data yet", so none can [stop the run early](../thresholds/#stopping-a-run-early).
+- The warm-up must end before the stages do ("The warm-up must end before the run does"); a run stopped during its warm-up has nothing counted.
+- It works with both models. A common choice is the length of the ramp-up stage, so the numbers describe the load you held.
+
+Reports and the history keep the warm-up (`warmUpMs` in the JSON), and the verdict card says how much was left out.
 
 ## Requests and weights
 
@@ -146,6 +176,8 @@ Request paths are relative to the workspace's `requests/` folder. When you renam
 | Option (app) | YAML | Default | What it does |
 |---|---|---|---|
 | Think time (ms) | `thinkTimeMs` | 0 | Virtual users: pause after each answer, per user. |
+| Random up to (ms) | `thinkTimeMaxMs` | empty (a fixed pause) | Virtual users: each pause is random between **Think time** and this. See [A random think time](#a-random-think-time). |
+| Warm-up (s) | `warmUpSecs` | 0 (none) | Requests that finish this early are charted but left out of the numbers and thresholds. See [Warm-up](#warm-up). |
 | Max in flight | `maxInFlight` | 1000 | Request rate: most requests running at once; more are dropped. 1 to 100,000. |
 | Timeout (ms) | `timeoutMs` | the app's request timeout (60,000 ms unless changed) | Per request. 0 means no limit. A timed-out request is a `timeout` error, with the time waited as its latency. |
 | HTTP version | `httpVersion` | the app setting | `auto` (HTTP/2 when the server offers it over TLS, else HTTP/1.1), `http1` or `http2` (HTTP/2 only). HTTP/3 is not supported. |
@@ -162,7 +194,8 @@ TLS verification, proxy, extra CA and client certificates come from the app sett
 - Start small: a short constant run at a low target shows whether the requests work at all (look at the status codes and errors) before you push.
 - Ramp up rather than jump when you look for a limit: the charts show at which load latency starts to climb.
 - Keep an eye on **Generator CPU**. Above 85 % of the computer, Zorvik warns that the laptop may be the bottleneck.
-- A threshold on `rps` or latency is checked over the whole run, ramps included (see [Thresholds](../thresholds/)).
+- A threshold on `rps` or latency is checked over the whole run, ramps included, unless you set a [warm-up](#warm-up) (see [Thresholds](../thresholds/)).
+- Give virtual users a [random think time](#a-random-think-time) when you model people, so they don't all send at the same moment.
 
 ## Limits
 
@@ -172,5 +205,6 @@ TLS verification, proxy, extra CA and client certificates come from the app sett
 | Requests per second (stage target) | 50,000 |
 | `maxInFlight` | 1 to 100,000 |
 | Stage duration in the app's editor | 86,400 s per stage |
-| Think time and timeout in the app's editor | 3,600,000 ms |
+| Think time (both fields) and timeout in the app's editor | 3,600,000 ms |
+| Warm-up in the app's editor | 86,400 s (and shorter than the stages) |
 | Weight in the app's editor | 0 to 1,000 |

@@ -622,7 +622,7 @@ fn classify_probe_error(err: &io::Error) -> ProbeOutcome {
 
 // ---- certificates -------------------------------------------------------------
 
-fn describe(der: &CertificateDer<'_>, now: OffsetDateTime) -> TlsCertificate {
+pub(super) fn describe(der: &CertificateDer<'_>, now: OffsetDateTime) -> TlsCertificate {
     use x509_parser::prelude::*;
     let sha256 = colon_hex(&Sha256::digest(der.as_ref()));
     let cert = match X509Certificate::from_der(der.as_ref()) {
@@ -702,7 +702,7 @@ fn is_self_signed(cert: &x509_parser::certificate::X509Certificate<'_>) -> bool 
     }
 }
 
-fn key_info(spki: &x509_parser::x509::SubjectPublicKeyInfo<'_>) -> (String, Option<u32>, Option<String>) {
+pub(super) fn key_info(spki: &x509_parser::x509::SubjectPublicKeyInfo<'_>) -> (String, Option<u32>, Option<String>) {
     use x509_parser::public_key::PublicKey;
     let algorithm = spki.algorithm.algorithm.to_id_string();
     match spki.parsed() {
@@ -750,7 +750,7 @@ fn curve_name(oid: &str) -> String {
     }
 }
 
-fn signature_name(oid: &str) -> String {
+pub(super) fn signature_name(oid: &str) -> String {
     match oid {
         "1.2.840.113549.1.1.4" => "MD5 with RSA",
         "1.2.840.113549.1.1.5" => "SHA-1 with RSA",

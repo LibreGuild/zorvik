@@ -186,6 +186,48 @@ fn yaml_is_readable_and_round_trips() {
 }
 
 #[test]
+fn websocket_options_are_short_yaml() {
+    use zorvik_formats::{ConnectStep, MatchKind, MessageFormat, RepeatStep, SavedMessage, WaitStep};
+    let dir = tempfile::tempdir().unwrap();
+    let ws = Workspace::create(dir.path(), "Demo").unwrap();
+    let mut r = req("Chat");
+    r.kind = zorvik_formats::RequestKind::Websocket;
+    r.websocket.subprotocols = vec!["chat.v1".into()];
+    r.websocket.messages = vec![
+        SavedMessage {
+            name: "Login".into(),
+            format: MessageFormat::Json,
+            text: "{\"token\": \"{{token}}\"}".into(),
+            ..Default::default()
+        },
+        SavedMessage { name: "Ping".into(), format: MessageFormat::Text, text: "ping".into(), ..Default::default() },
+    ];
+    r.websocket.on_connect = vec![
+        ConnectStep::Send { message: "Login".into() },
+        ConnectStep::Wait(WaitStep {
+            matcher: MatchKind::Json,
+            pattern: "$.type == welcome".into(),
+            ..Default::default()
+        }),
+        ConnectStep::Repeat(RepeatStep { message: "Ping".into(), every_ms: 30000 }),
+    ];
+    let path = ws.create_request("", r.clone()).unwrap();
+    let text = std::fs::read_to_string(dir.path().join("requests").join(&path)).unwrap();
+    for line in [
+        "  - type: send\n    message: Login",
+        "    match: json",
+        "    pattern: $.type == welcome",
+        "    everyMs: 30000",
+        "  onConnect:",
+    ] {
+        assert!(text.contains(line), "{line} in:\n{text}");
+    }
+    // Defaults stay out: the text format and the 5 s wait.
+    assert!(!text.contains("format: text") && !text.contains("timeoutMs"), "{text}");
+    assert_eq!(ws.read_request(&path).unwrap().websocket, r.websocket);
+}
+
+#[test]
 fn delete_moves_to_trash() {
     // Opt-in: this really moves a file to the OS trash (CI sets it).
     if std::env::var("ZORVIK_TEST_TRASH").map_or(true, |v| v.is_empty()) {

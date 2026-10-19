@@ -287,3 +287,63 @@ async fn data_file_rows_and_captures_reach_the_requests() {
     let err = api.call("load.start", json!({ "id": "Rows", "test": test })).await.unwrap_err();
     assert!(err.message.contains("outside the workspace folder"), "{}", err.message);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failing_threshold_stops_the_run_and_results_export_as_csv() {
+    let server = zorvik_testkit::TestServer::start().await;
+    let (api, _data, ws) = api().await;
+    let path: String = serde_json::from_value(
+        ok(
+            &api,
+            "request.create",
+            json!({ "parent": "", "request": { "name": "Down", "method": "GET", "url": server.url("/status/503") } }),
+        )
+        .await,
+    )
+    .unwrap();
+    let mut test = test_json(&[&path]);
+    test["stages"] = json!([{ "durationSecs": 0, "target": 2 }, { "durationSecs": 60, "target": 2 }]);
+    test["thinkTimeMs"] = json!(10);
+    test["thinkTimeMaxMs"] = json!(30);
+    test["warmUpSecs"] = json!(1);
+    test["thresholds"] = json!([{ "metric": "errorRate", "op": "<", "value": 1, "abortAfterSecs": 1 }]);
+    let id: String = serde_json::from_value(ok(&api, "load.create", json!({ "test": test })).await).unwrap();
+    let yaml = std::fs::read_to_string(ws.path().join(format!("loadtests/{id}.yaml"))).unwrap();
+    assert!(
+        yaml.contains("thinkTimeMaxMs: 30") && yaml.contains("warmUpSecs: 1") && yaml.contains("abortAfterSecs: 1")
+    );
+
+    let started = std::time::Instant::now();
+    let summary = run_to_end(&api, &id, &test).await;
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+    assert_eq!(summary["stoppedByThreshold"], json!("errorRate < 1 %"));
+    assert_eq!((summary["stoppedEarly"].as_bool(), summary["passed"].as_bool()), (Some(true), Some(false)));
+    assert_eq!(summary["warmUpMs"], json!(1000));
+    let runs = ok(&api, "load.runs", json!({ "id": id })).await;
+    assert_eq!(runs[0]["passed"], json!(false));
+
+    let run_id = runs[0]["runId"].as_str().unwrap().to_string();
+    let dir = tempfile::tempdir().unwrap();
+    for (format, header) in [("secondsCsv", "second,requests,errors,"), ("requestsCsv", "request,path,requests,")] {
+        let file = dir.path().join(format!("{format}.csv"));
+        ok(&api, "load.export", json!({ "id": id, "runId": run_id, "path": file, "format": format })).await;
+        let csv = std::fs::read_to_string(&file).unwrap();
+        assert!(csv.starts_with(header), "{csv}");
+    }
+    let requests = std::fs::read_to_string(dir.path().join("requestsCsv.csv")).unwrap();
+    assert!(requests.contains("\nAll requests,,") && requests.contains("503:"), "{requests}");
+    let err = api
+        .call("load.export", json!({ "id": id, "runId": run_id, "path": dir.path().join("x"), "format": "xlsx" }))
+        .await
+        .unwrap_err();
+    assert!(err.message.contains("Unknown report format 'xlsx'"), "{}", err.message);
+
+    // A think time range that ends below its start is refused before anything is sent.
+    test["thinkTimeMaxMs"] = json!(5);
+    let err = api.call("load.start", json!({ "id": id, "test": test })).await.unwrap_err();
+    assert!(
+        err.message.contains("The longest think time (5 ms) is shorter than the shortest (10 ms)"),
+        "{}",
+        err.message
+    );
+}

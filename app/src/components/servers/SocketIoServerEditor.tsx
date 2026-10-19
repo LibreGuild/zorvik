@@ -1,12 +1,14 @@
 // Socket.IO server settings: how events are answered (echo or rules with acknowledgements,
-// replies and broadcasts), a greeting event, the path and CORS.
+// replies and broadcasts), a greeting event, events on a timer, the path and CORS.
 import { Plus, Trash2 } from "lucide-react";
 import type { MatchKind } from "../../bindings/MatchKind";
 import type { SocketIoRule } from "../../bindings/SocketIoRule";
+import type { SocketIoScheduled } from "../../bindings/SocketIoScheduled";
 import type { SocketIoServerConfig } from "../../bindings/SocketIoServerConfig";
-import { Button, Checkbox, cx, Field, Input, Segmented, Select, Switch } from "../ui";
+import { Button, Checkbox, cx, Field, Input, NumberInput, Segmented, Select, Switch } from "../ui";
 import type { ServerEditorProps } from "./kinds";
 import { EditorSection } from "./ServerView";
+import { PatternProblem } from "./ReplyRulesEditor";
 import { REPLY_MODES } from "./SocketServerEditor";
 
 const HINTS: Record<string, string> = {
@@ -21,6 +23,7 @@ const MATCHERS: { id: MatchKind; label: string }[] = [
   { id: "contains", label: "arguments contain" },
   { id: "exact", label: "arguments are exactly" },
   { id: "regex", label: "arguments match regex" },
+  { id: "json", label: "arguments (JSON) where" },
 ];
 
 const mono = "font-mono text-[12px]";
@@ -56,6 +59,10 @@ export function SocketIoServerEditor({ server, onChange, running }: ServerEditor
             />
           </Field>
         </div>
+      </EditorSection>
+
+      <EditorSection title="Scheduled events">
+        <ScheduleEditor schedule={io.schedule ?? []} onChange={(schedule) => set({ schedule: schedule.length ? schedule : undefined })} />
       </EditorSection>
 
       <EditorSection title="Clients">
@@ -107,7 +114,7 @@ function RulesEditor({ rules, onChange }: { rules: SocketIoRule[]; onChange: (ru
                   aria-label="Pattern"
                   className={cx(mono, "min-w-32 flex-1")}
                   value={rule.pattern ?? ""}
-                  placeholder={match === "regex" ? '"id":\\d+' : match === "exact" ? "hello" : "hello"}
+                  placeholder={match === "regex" ? '"id":\\d+' : match === "json" ? "$[0].type == join" : "hello"}
                   onChange={(e) => update(i, { pattern: e.target.value })}
                 />
               )}
@@ -116,6 +123,7 @@ function RulesEditor({ rules, onChange }: { rules: SocketIoRule[]; onChange: (ru
                 <Trash2 size={13} />
               </button>
             </div>
+            <PatternProblem match={match} pattern={rule.pattern ?? ""} className="pl-6" />
             <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5 pl-6">
               <span className="text-muted">Acknowledge with</span>
               <Input
@@ -143,14 +151,7 @@ function RulesEditor({ rules, onChange }: { rules: SocketIoRule[]; onChange: (ru
                 </label>
                 <label className="flex items-center gap-1.5 text-muted">
                   after
-                  <Input
-                    aria-label="Delay in milliseconds"
-                    type="number"
-                    min={0}
-                    className={cx(mono, "w-20")}
-                    value={rule.delayMs ?? 0}
-                    onChange={(e) => update(i, { delayMs: Math.max(0, Math.trunc(Number(e.target.value)) || 0) })}
-                  />
+                  <NumberInput aria-label="Delay in milliseconds" className="w-20 text-[12px]" value={rule.delayMs ?? 0} onChange={(delayMs) => update(i, { delayMs })} />
                   ms
                 </label>
               </div>
@@ -165,6 +166,68 @@ function RulesEditor({ rules, onChange }: { rules: SocketIoRule[]; onChange: (ru
         <span className="text-[11.5px] text-faint">
           Arguments are JSON. Answers can use <code className="font-mono">{"{{event.args}}"}</code>, <code className="font-mono">{"{{event.arg0}}"}</code>,{" "}
           <code className="font-mono">{"{{event.name}}"}</code> (as JSON), <code className="font-mono">{"{{$uuid}}"}</code> and environment variables.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+const cell = "h-8 w-full min-w-0 bg-transparent px-2 font-mono text-[12px] text-fg outline-none placeholder:text-faint";
+
+/** Events every client of a namespace gets on a timer: tickers, notifications, presence. */
+function ScheduleEditor({ schedule, onChange }: { schedule: SocketIoScheduled[]; onChange: (s: SocketIoScheduled[]) => void }) {
+  const update = (i: number, patch: Partial<SocketIoScheduled>) => onChange(schedule.map((m, j) => (j === i ? { ...m, ...patch } : m)));
+  return (
+    <div className="flex flex-col gap-2" data-testid="socketio-schedule">
+      {schedule.length > 0 && (
+        <div className="overflow-hidden rounded-lg border border-line text-[12.5px]" role="table" aria-label="Scheduled events">
+          {schedule.map((m, i) => (
+            <div key={i} role="row" className={cx("grid grid-cols-[28px_110px_minmax(0,1fr)_76px_104px_32px] items-center border-b border-line/70 last:border-b-0", m.enabled === false && "opacity-50")}>
+              <span role="cell" className="flex justify-center">
+                <Checkbox checked={m.enabled !== false} onChange={(v) => update(i, { enabled: v ? undefined : false })} title="Emit this event" />
+              </span>
+              <span role="cell" className="border-l border-line/70">
+                <input aria-label="Scheduled event" className={cell} value={m.event} placeholder="price" onChange={(e) => update(i, { event: e.target.value })} />
+              </span>
+              <span role="cell" className="border-l border-line/70">
+                <input
+                  aria-label="Scheduled event arguments"
+                  className={cell}
+                  value={m.args ?? ""}
+                  placeholder='{"price": {{$randomPrice(5, 50)}}}'
+                  onChange={(e) => update(i, { args: e.target.value })}
+                />
+              </span>
+              <span role="cell" className="border-l border-line/70">
+                <input
+                  aria-label="Scheduled event namespace"
+                  title="Namespace"
+                  className={cell}
+                  value={m.namespace ?? "/"}
+                  placeholder="/"
+                  onChange={(e) => update(i, { namespace: e.target.value.trim() === "/" ? undefined : e.target.value })}
+                />
+              </span>
+              <span role="cell" className="flex items-center border-l border-line/70 pr-2 text-[11.5px] text-faint">
+                <NumberInput bare aria-label="Every (ms)" min={10} className={cell} value={m.everyMs} onChange={(everyMs) => update(i, { everyMs: everyMs ?? 10 })} />
+                ms
+              </span>
+              <span role="cell" className="flex justify-center border-l border-line/70">
+                <button aria-label="Remove scheduled event" onClick={() => onChange(schedule.filter((_, j) => j !== i))} className="rounded p-1 text-faint hover:bg-hover hover:text-danger">
+                  <Trash2 size={13} />
+                </button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center gap-3">
+        <Button size="sm" icon={<Plus size={13} />} onClick={() => onChange([...schedule, { event: "", everyMs: 1000 }])}>
+          Add scheduled event
+        </Button>
+        <span className="text-[11.5px] text-faint">
+          Emitted to every client of the namespace every so many milliseconds, in any answer mode. Arguments are JSON; variables like{" "}
+          <code className="font-mono">{"{{$isoTimestamp}}"}</code> are filled in each time.
         </span>
       </div>
     </div>

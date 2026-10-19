@@ -13,4 +13,13 @@ intervalMs?: number,
 /**
  * Start over after the last event.
  */
-repeat?: boolean, };
+repeat?: boolean, 
+/**
+ * Sent first as `retry:`: how long a client waits before reconnecting (0: not sent).
+ */
+retryMs?: number, 
+/**
+ * Close the stream after the last event (without `repeat`), so clients reconnect;
+ * a client that sends `Last-Event-ID` continues after that event.
+ */
+closeAfterLast?: boolean, };

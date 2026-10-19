@@ -56,7 +56,7 @@ export default defineConfig({
         group("Runner & contract tests", "testing"),
         group("Mock servers & servers", "servers"),
         group("Load testing", "load-testing"),
-        group("Network tools", "tools"),
+        group("Tools", "tools"),
         group("Command line", "cli"),
         group("AI agents", "agents"),
         group("Training Bootcamp", "bootcamp"),

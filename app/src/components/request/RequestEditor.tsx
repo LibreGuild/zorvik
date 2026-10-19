@@ -7,12 +7,13 @@ import { COMMON_HEADERS } from "../../lib/http";
 import { applyParamRows, paramRows, syncPathParams } from "../../lib/url";
 import { isSubscription } from "../../store/graphql";
 import { send, type Tab, updateDraft, updateTab } from "../../store/tabs";
-import { CodeEditor } from "../CodeEditor";
+import { DocsEditor } from "../DocsEditor";
 import { KeyValueEditor } from "../KeyValueEditor";
 import { Button, cx, Input, Select, Switch, Tabs } from "../ui";
 import { AuthEditor } from "./AuthEditor";
 import { BodyEditor } from "./BodyEditor";
 import { ExamplesTab } from "./ExamplesTab";
+import { WebSocketSettings } from "./ConnectionEditors";
 import { KIND_EDITOR_TABS, WITH_HTTP_TABS } from "./kinds";
 import { ScriptsEditor, ScriptsTabLabel } from "./ScriptsEditor";
 
@@ -73,7 +74,7 @@ export function RequestEditor({ tab, toolbar }: { tab: Tab; toolbar?: React.Reac
         { id: "docs", label: "Docs" },
       ]
     : [
-        ...(kindTabs ?? []).map((t) => ({ id: t.id, label: t.label })),
+        ...(kindTabs ?? []).map((t) => ({ id: t.id, label: t.label, badge: t.badge?.(tab) })),
         { id: "params", label: "Params", badge: count(params) + pathParams.length },
         { id: "headers", label: "Headers", badge: count(req.headers) },
         ...(kind === "http" ? [{ id: "body", label: "Body", badge: req.body && req.body.type !== "none" ? BODY_LABEL[req.body.type] : undefined }] : []),
@@ -132,16 +133,19 @@ export function RequestEditor({ tab, toolbar }: { tab: Tab; toolbar?: React.Reac
             subscription={isSubscription(req)}
           />
         )}
+        {current === "settings" && kind === "websocket" && <WebSocketSettings tab={tab} />}
         {current === "scripts" && (kind === "http" || kind === "mcp") && (
           <ScriptsEditor where="request" scripts={req.scripts ?? {}} onChange={(scripts) => update((r) => ({ ...r, scripts }))} />
         )}
         {current === "examples" && kind === "http" && <ExamplesTab tab={tab} />}
         {current === "docs" && (
-          <CodeEditor
+          <DocsEditor
+            key={tab.id}
             value={req.docs ?? ""}
             onChange={(docs) => update((r) => ({ ...r, docs }))}
-            placeholder="Notes about this request (Markdown). Saved with the request."
-            lineNumbers={false}
+            placeholder="Notes about this request, in Markdown. Saved with the request."
+            emptyText="No docs for this request yet."
+            autoFocus
           />
         )}
       </div>

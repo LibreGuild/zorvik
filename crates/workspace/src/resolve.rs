@@ -45,6 +45,8 @@ pub struct Resolved {
     pub subscription: Option<Subscription>,
     /// Socket.IO: the connection's `auth` payload.
     pub socketio_auth: Option<serde_json::Value>,
+    /// Socket.IO: the arguments that answer the server's acknowledgement requests, when set.
+    pub socketio_auto_ack: Option<Vec<serde_json::Value>>,
     /// MCP: how to reach the server (`request.url` is its URL or command line) and the call.
     pub mcp: Option<ResolvedMcp>,
     /// Variables referenced but not defined.
@@ -131,6 +133,19 @@ pub fn resolve(request: &Request, inherit: &Inheritance<'_>, vars: &VarContext) 
     {
         headers.push(Header::new("Content-Type", ct));
     }
+    // A Sec-WebSocket-Protocol header of your own wins over the subprotocols list.
+    if request.kind == RequestKind::Websocket && !has_header(&headers, "sec-websocket-protocol") {
+        let protocols: Vec<String> = request
+            .websocket
+            .subprotocols
+            .iter()
+            .map(|p| render(p).trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect();
+        if !protocols.is_empty() {
+            headers.push(Header::new("Sec-WebSocket-Protocol", protocols.join(", ")));
+        }
+    }
 
     let mut oauth2 = None;
     let mut challenge: Option<Challenge> = None;
@@ -197,6 +212,16 @@ pub fn resolve(request: &Request, inherit: &Inheritance<'_>, vars: &VarContext) 
         RequestKind::SocketIo => json_payload(&render(&request.socketio.auth), "The auth payload is")?,
         _ => None,
     };
+    let socketio_auto_ack = match request.kind {
+        RequestKind::SocketIo if !request.socketio.auto_ack.trim().is_empty() => {
+            match json_payload(&render(&request.socketio.auto_ack), "The acknowledgement arguments are")? {
+                Some(serde_json::Value::Array(args)) => Some(args),
+                Some(one) => Some(vec![one]),
+                None => Some(Vec::new()),
+            }
+        }
+        _ => None,
+    };
     let mcp = match request.kind {
         RequestKind::Mcp => {
             let options = &request.mcp;
@@ -234,6 +259,7 @@ pub fn resolve(request: &Request, inherit: &Inheritance<'_>, vars: &VarContext) 
         challenge,
         subscription,
         socketio_auth,
+        socketio_auto_ack,
         mcp,
         unresolved: missing.into_iter().chain(empty_path_params).collect(),
     })
@@ -745,6 +771,29 @@ mod tests {
         // Only HTTP requests carry a body.
         req.kind = RequestKind::Websocket;
         assert!(resolve(&req, &inherit, &vars).unwrap().request.body.is_empty());
+    }
+
+    #[test]
+    fn websocket_subprotocols_become_a_header() {
+        let m = meta();
+        let inherit = Inheritance { workspace: &m, folders: &[], base_dir: Path::new("."), outside_files: false };
+        let mut vars = VarContext::new();
+        vars.push_layer(&[Variable { key: "v".into(), value: "2".into(), enabled: true, secret: false }]);
+        let mut req = Request::new("r", RequestKind::Websocket);
+        req.url = "ws://h".into();
+        req.websocket.subprotocols = vec!["chat.v{{v}}".into(), " ".into(), "chat.v1".into()];
+        let protocol = |req: &Request| {
+            let r = resolve(req, &inherit, &vars).unwrap();
+            r.request
+                .headers
+                .iter()
+                .filter(|h| h.name.eq_ignore_ascii_case("sec-websocket-protocol"))
+                .map(|h| h.value.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(protocol(&req), ["chat.v2, chat.v1"]);
+        req.headers.push(KeyValue::new("Sec-WebSocket-Protocol", "mine"));
+        assert_eq!(protocol(&req), ["mine"]);
     }
 
     #[test]

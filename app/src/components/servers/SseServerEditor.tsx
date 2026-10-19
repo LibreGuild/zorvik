@@ -1,10 +1,10 @@
 // Event stream (SSE) server settings: the events each client gets, their pace,
-// and whether they repeat.
+// whether they repeat, and how streams end and clients reconnect.
 import { useState } from "react";
 import { ArrowDown, ArrowUp, GripVertical, Plus, Radio, Trash2 } from "lucide-react";
 import type { SseEventTemplate } from "../../bindings/SseEventTemplate";
 import type { SseServerConfig } from "../../bindings/SseServerConfig";
-import { Button, cx, Field, Input, Switch } from "../ui";
+import { Button, cx, Field, NumberInput, Switch } from "../ui";
 import type { ServerEditorProps } from "./kinds";
 import { moveItem } from "./MockRoutes";
 import { EditorSection } from "./ServerView";
@@ -103,18 +103,25 @@ export function SseServerEditor({ server, onChange, running }: ServerEditorProps
       <EditorSection title="Pace">
         <div className="grid grid-cols-2 items-start gap-3">
           <Field label="Interval (ms)" hint="Pause between events; 0 sends them all at once.">
-            <Input
-              type="number"
-              min={0}
-              className="font-mono"
-              aria-label="Interval in milliseconds"
-              value={interval}
-              onChange={(ev) => set({ intervalMs: Math.max(0, Math.trunc(Number(ev.target.value)) || 0) })}
-            />
+            <NumberInput aria-label="Interval in milliseconds" value={interval} onChange={(intervalMs) => set({ intervalMs })} />
           </Field>
           <div className="flex flex-col gap-1.5 pt-6">
             <Switch checked={sse.repeat ?? false} onChange={(repeat) => set({ repeat })} label="Repeat" />
             <span className="text-[11.5px] text-faint">{interval > 0 ? "Start over after the last event." : "Start over after the last event, one round a second."}</span>
+          </div>
+        </div>
+      </EditorSection>
+
+      <EditorSection title="Reconnects">
+        <div className="grid grid-cols-2 items-start gap-3">
+          <Field label="Retry (ms)" hint="Sent first as retry: how long clients wait before reconnecting. 0 sends nothing.">
+            <NumberInput aria-label="Retry in milliseconds" value={sse.retryMs ?? 0} onChange={(retryMs) => set({ retryMs: retryMs || undefined })} />
+          </Field>
+          <div className="flex flex-col gap-1.5 pt-6">
+            <Switch checked={sse.closeAfterLast ?? false} disabled={sse.repeat ?? false} onChange={(closeAfterLast) => set({ closeAfterLast: closeAfterLast || undefined })} label="End after the last event" />
+            <span className="text-[11.5px] text-faint">
+              {sse.repeat ? "Not with Repeat on." : "Clients reconnect and continue after their Last-Event-ID; one that has every event gets 204, which tells it to stop."}
+            </span>
           </div>
         </div>
       </EditorSection>

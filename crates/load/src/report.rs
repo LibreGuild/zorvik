@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use zorvik_formats::{ThresholdMetric, ThresholdOp};
 
+fn is_zero(v: &u64) -> bool {
+    *v == 0
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -175,6 +179,15 @@ pub struct Snapshot {
     pub thresholds: Vec<ThresholdResult>,
     /// CPU used by this app (percent of one core × cores, 0–100 per core summed), when known.
     pub cpu_percent: Option<f32>,
+    /// Requests that finish in this first part of the run are charted but left
+    /// out of the numbers and thresholds.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    #[ts(optional, as = "Option<u32>")]
+    pub warm_up_ms: u64,
+    /// The threshold (its label) that is stopping the run: it failed for its `abortAfterSecs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub stopped_by_threshold: Option<String>,
 }
 
 /// The result of a run.
@@ -190,7 +203,7 @@ pub struct Summary {
     pub targets: Vec<TargetSummary>,
     pub points: Vec<TimePoint>,
     pub thresholds: Vec<ThresholdResult>,
-    /// Every threshold passed (and the run was not aborted by an error).
+    /// Every threshold passed (and neither an error nor a threshold stopped the run).
     pub passed: bool,
     /// Stopped before the planned end.
     pub stopped_early: bool,
@@ -198,6 +211,16 @@ pub struct Summary {
     pub error: Option<String>,
     /// Highest CPU seen, when known.
     pub peak_cpu_percent: Option<f32>,
+    /// Requests that finished in this first part of the run (warm-up) are in
+    /// the charts but not in the numbers and thresholds.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    #[ts(optional, as = "Option<u32>")]
+    pub warm_up_ms: u64,
+    /// The threshold (its label) that stopped the run early: it failed for its
+    /// `abortAfterSecs`. The run then fails.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub stopped_by_threshold: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

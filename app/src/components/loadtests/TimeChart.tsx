@@ -30,9 +30,11 @@ interface Props {
   hover: number | null;
   onHover: (second: number | null) => void;
   label: string;
+  /** Shade the first seconds (the warm-up, left out of the numbers). */
+  shadeUntil?: number;
 }
 
-export const TimeChart = memo(function TimeChart({ xs, series, xMax, height = 150, format, hover, onHover, label }: Props) {
+export const TimeChart = memo(function TimeChart({ xs, series, xMax, height = 150, format, hover, onHover, label, shadeUntil = 0 }: Props) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
   const plotW = Math.max(10, width - PAD.left - PAD.right);
   const plotH = Math.max(10, height - PAD.top - PAD.bottom);
@@ -82,11 +84,22 @@ export const TimeChart = memo(function TimeChart({ xs, series, xMax, height = 15
     return Math.abs(xs[lo] - hover) <= Math.max(2, domainX / 100) ? lo : -1;
   }, [hover, xs, domainX]);
   const hx = hoverIndex >= 0 ? PAD.left + (xs[hoverIndex] / domainX) * plotW : 0;
+  const shadeW = shadeUntil > 0 ? (Math.min(shadeUntil, domainX) / domainX) * plotW : 0;
 
   return (
     <div ref={ref} className="relative w-full select-none" style={{ height }}>
       {width > 0 && (
         <svg width={width} height={height} className="block" role="img" aria-label={label}>
+          {shadeW > 0 && (
+            <g data-testid="chart-warm-up">
+              <rect x={PAD.left} y={PAD.top} width={shadeW} height={plotH} fill="var(--faint)" opacity={0.1} />
+              {shadeW >= 48 && (
+                <text x={PAD.left + 4} y={PAD.top + 10} className="fill-[var(--faint)] text-[10px]">
+                  warm-up
+                </text>
+              )}
+            </g>
+          )}
           {ticksY.map((t) => {
             const y = PAD.top + plotH - (t / yMax) * plotH;
             return (

@@ -46,11 +46,15 @@ The composer has three modes:
 |---|---|---|---|
 | **Text** | The text as UTF-8 | Replaced | Yes (if set) |
 | **JSON** | The text as UTF-8, with JSON highlighting | Replaced | Yes (if set) |
-| **Binary (hex)** | The bytes you type in hex | Not replaced | Never |
+| **Binary** | Bytes: typed in **Hex**, streamed from a **File**, or recorded from the **Microphone** | Not replaced | Never |
 
 Hex bytes may be written as `48 65 6c 6c 6f`, `48656c6c6f`, `48:65:6c` or `0x48,0x65`. Press **Send** or <kbd>Mod</kbd>+<kbd>Enter</kbd>.
 
-Received messages are shown as text when they are valid UTF-8, otherwise as hex. Click a row to see the whole message.
+The arrow next to **Send** (**More ways to send**) sends the composer's message again and again: **Send every second**, **Send every 5 seconds**, **Send every 30 seconds**, or **Send every…** at a pace you type in milliseconds (10 or more). While it repeats, the composer shows **Sending every 5 s** and a **Stop** button. `{{variables}}` in text are filled in fresh for each send, so `temp={{$randomInt(10, 30)}}` sends a new reading every time. Repeating runs in Zorvik itself, so it keeps its pace when the window is in the background; it stops when you press **Stop** or the connection closes.
+
+**File** and **Microphone** work as for [WebSocket](../websocket/#binary-stream-a-file): each piece is one message (one datagram on UDP, which carries at most 65,507 bytes). With length-prefix framing, each piece gets its own prefix, so it must fit the prefix size.
+
+Received messages are shown as text when they are valid UTF-8, otherwise as hex. Click a row to see the whole message. The log's filter, **View** menu and **Export the log…** work as for [WebSocket](../websocket/#the-message-log); **Save to a file** saves a binary message.
 
 ## Options
 
@@ -79,6 +83,10 @@ TCP is a stream of bytes; it doesn't keep message boundaries. **Message framing*
 The line ending is added before the prefix, so the prefix counts it.
 
 UDP has no framing: one datagram is always one message.
+
+## AI agents
+
+Coding agents connected through `zorvik mcp` can open TCP and UDP connections with `open_connection`, then send with `send_message` (text, JSON or hex), wait for a reply with `wait_for_message` and read the log with `read_messages`. See [Tools](../../agents/tools/#live-connections).
 
 ## Saved format
 

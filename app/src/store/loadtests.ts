@@ -128,6 +128,13 @@ export function finishedMessage(name: string, summary: Summary): { tone: "succes
     `${formatPercent(t.errorRate)} errors`,
   ].join(" · ");
   if (summary.error) return { tone: "error", title: `“${name}” could not finish`, detail: summary.error };
+  if (summary.stoppedByThreshold) {
+    return {
+      tone: "error",
+      title: `“${name}” was stopped by a threshold`,
+      detail: `${summary.stoppedByThreshold} failed for longer than it allows · stopped after ${formatDuration(summary.durationMs / 1000)} · ${numbers}`,
+    };
+  }
   const failed = summary.thresholds.filter((x) => !x.passed);
   const early = summary.stoppedEarly ? `Stopped after ${formatDuration(summary.durationMs / 1000)} · ` : "";
   if (failed.length) {

@@ -32,7 +32,7 @@ Only **HTTP** requests can be load tested (GraphQL requests are HTTP requests, s
 The tab has a header, a settings side and a results side. Below 780 px wide the two sides become **Settings** and **Results** panes you switch between.
 
 - **Header**: the model badge (`VU` for virtual users, `RPS` for request rate), the name, a status line (what the test will do, why it can't start, or "Running · 32 s of 1m"), **Start / Stop** (<kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>Enter</kbd>) and **Save** (<kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>S</kbd>). A thin progress bar shows the planned time while it runs.
-- **Settings**: *Requests* (targets, weights and [captures](../data-and-captures/#captures)), *Data file*, *Load model*, *Stages*, *Options* and *Thresholds*. See [Models and stages](../models-and-stages/) and [Thresholds](../thresholds/).
+- **Settings**: *Requests* (targets, weights and [captures](../data-and-captures/#captures)), *Data file*, *Load model*, *Stages*, *Options*, *Thresholds* and *Docs* (notes about the test, in [Markdown](../../requests/http/#docs)). See [Models and stages](../models-and-stages/) and [Thresholds](../thresholds/).
 - **Results**: the live run, or the latest finished run, with the run history, **Compare**, **Export** and delete.
 
 **Start** runs the settings as they are on screen, even unsaved ones. Edits made while a test runs apply to the next run ("This test is running with the settings it started with").
@@ -154,19 +154,22 @@ When the generator uses more than 85 % of the computer's CPU, a warning says the
 **Panels**
 
 - **Thresholds**: each threshold with its live value. Without data yet it shows "no data yet" and a dashed circle. The verdict is final only at the end (see [Thresholds](../thresholds/#when-thresholds-are-checked)).
-- **Throughput**: completed requests per second, errors per second and, for the request-rate model, the target rate as a dashed line.
+- **Throughput**: completed requests per second, errors per second and, for the request-rate model, the target rate as a dashed line. A [warm-up](../models-and-stages/#warm-up) is shaded in every chart.
 - **Latency (ms)**: p50, p95 and p99 of each second.
 - **Users** or **In flight**: active users against the target (virtual users), or requests in flight (request rate).
 - **Timing**: connect, time to first byte, transfer and server-reported time. See [Results and reports](../results-and-reports/#timing-phases).
 - **Per request**: requests, error rate, req/s, p50, p95, p99 and max for each target, plus "1st byte p95" and "Missed" (capture misses) when there is data for them.
-- **Status codes**: the eight most frequent, then "Other".
-- **Errors**: HTTP errors (status ≥ 400), network errors by kind, dropped requests and capture misses.
+- **Status codes**: the eight most frequent, then "Other", with the share of each class (2xx, 4xx, 5xx…) in the panel's header when there is more than one.
+- **Errors**: HTTP errors (status ≥ 400), network errors by kind (for example "Timed out", "Could not connect", "Connection broke"), dropped requests and capture misses.
+- With more than one request, **Status codes and errors of** above these two panels picks **All requests** or one request, to see which request returns the 503s or times out.
 
 The charts start after the first full second. The stage preview in the settings shows a marker at the current second.
 
 ### Stopping a run
 
 **Stop** (or <kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>Enter</kbd>, or the square in the title bar) starts no new requests. Requests in flight get a grace period of up to 5 seconds (less when the request timeout is shorter); whatever is still running then is cut off and counted as a `cancelled` error with the time it waited. The same grace applies at the planned end of a run. A stopped run is still saved to the history, marked **Stopped early**, and its thresholds are checked against what was measured.
+
+A threshold can also stop the run when it keeps failing: see [Stopping a run early](../thresholds/#stopping-a-run-early).
 
 Quitting Zorvik while a test runs asks first. If you quit anyway, the test is stopped and the app waits up to 7 seconds so its result is saved.
 

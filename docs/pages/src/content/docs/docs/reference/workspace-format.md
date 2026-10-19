@@ -130,7 +130,8 @@ docs: Handler in `src/users/create.ts`.
 | `dns` | [dns](#dns-dns) | | DNS options. |
 | `mqtt` | [mqtt](#mqtt-mqtt) | | MQTT options. |
 | `grpc` | [grpc](#grpc-grpc) | | gRPC options. |
-| `socketio` | [socketio](#socketio-socketio) | | Socket.IO options. |
+| `socketio` | [socketio](#socketio-socketio) | | Socket.IO options: path, transport, auth payload, saved emits, on-connect steps, acknowledgement answers. |
+| `websocket` | [websocket](#websocket-websocket) | | WebSocket options: subprotocols, saved messages, on-connect steps. |
 | `docs` | string | | Markdown notes. |
 | `openapi` | object | | Set by an OpenAPI import: `operation` (`"GET /pets/{petId}"`) and `removed: true` when the operation is no longer in the document. |
 
@@ -265,13 +266,43 @@ Workspace scripts run first, then the folders' (outer to inner), then the reques
 
 #### Socket.IO (`socketio`)
 
-`url` is the server and the namespace (`http://localhost:3000/chat`); `body.text` holds the arguments the composer emits.
+`url` is the server and the namespace (`http://localhost:3000/chat`); `body.text` holds the arguments the composer emits. See [Socket.IO](../../protocols/socketio/).
+
+```yaml title="requests/Chat.yaml"
+name: Chat
+kind: socketio
+url: http://localhost:3000/chat
+socketio:
+  autoAck: '["ok"]'
+  messages:
+    - name: Join
+      event: join
+      text: lobby
+      ack: true
+    - name: Typing
+      event: typing
+      format: json
+      text: '[{"user": "{{user}}"}]'
+  onConnect:
+    - type: send
+      message: Join
+    - type: wait
+      event: joined
+      match: json
+      pattern: $[0].room == lobby
+    - type: repeat
+      message: Typing
+      everyMs: 5000
+```
 
 | Field | Default | Meaning |
 |---|---|---|
 | `path` | `/socket.io/` | The server's Socket.IO path. |
 | `transport` | `auto` | `auto` (WebSocket, else long-polling), `websocket` or `polling`. |
 | `auth` | `""` | The connection's auth payload as JSON text (may contain `{{variables}}`). |
+| `autoAck` | none | Arguments that answer every event from the server that asks for an acknowledgement, as JSON text (an array for several; may contain `{{variables}}`). Left out: no answer. |
+| `messages` | `[]` | Saved emits: `name`, `event` (the event to emit), `ack` (ask for an acknowledgement, default `false`), `format` (`text` (default): `text` is one string argument; `json`: `text` is the arguments, an array for several; `binary`: hex bytes for one binary argument) and `text` (`{{variables}}` allowed, not in hex). |
+| `onConnect` | `[]` | Steps run after every connect, in order, as for WebSocket. `type: wait` also takes `event`: only that event counts, and `pattern` is matched against its arguments as a JSON array (`$[0].room == lobby`); without `event`, any received event or acknowledgement. In collection runs each wait is a test. |
 | `event` | `""` | The event the composer emits. |
 | `ack` | `false` | The composer asks for an acknowledgement. |
 
@@ -290,9 +321,49 @@ Workspace scripts run first, then the folders' (outer to inner), then the reques
 
 A workspace can only start a program once you allowed that exact command, folder and environment on your computer; `zorvik run` needs `--allow-programs`.
 
-#### WebSocket and SSE
+#### WebSocket (`websocket`)
 
-WebSocket requests use `ws://` or `wss://` URLs and keep the message draft in `body.text`. SSE requests use `http://` or `https://` URLs; `settings.stream` says when runs stop reading.
+`url` is `ws://` or `wss://`; `body.text` is the composer's draft and `body.type` its mode (`text` or `json`). See [WebSocket](../../protocols/websocket/).
+
+```yaml title="requests/Chat.yaml"
+name: Chat
+kind: websocket
+url: wss://chat.example.com/socket
+websocket:
+  subprotocols:
+    - chat.v1
+  messages:
+    - name: Login
+      format: json
+      text: '{"op": "login", "token": "{{token}}"}'
+    - name: Ping
+      text: ping
+  onConnect:
+    - type: send
+      message: Login
+    - type: wait
+      match: json
+      pattern: $.type == welcome
+      timeoutMs: 10000
+    - type: repeat
+      message: Ping
+      everyMs: 30000
+  replyKey: $.request_id
+body:
+  type: text
+  text: hello
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `subprotocols` | `[]` | Subprotocols to ask for (`Sec-WebSocket-Protocol`), the preferred first. A `Sec-WebSocket-Protocol` header wins. |
+| `messages` | `[]` | Saved messages: `name`, `format` (`text` (default), `json`, or `binary` with hex bytes in `text`), `text` (`{{variables}}` allowed, not in hex). |
+| `onConnect` | `[]` | Steps run after every connect, in order. `type: send` with `message` (a saved message's name). `type: wait` with `match` (`any`, `contains` (default), `exact`, `regex` or `json`), `pattern` and `timeoutMs` (default `5000`). `type: repeat` with `message` and `everyMs`. In collection runs each wait is a test. |
+| `replyKey` | `$.id` | JSON path that pairs received replies with the messages they answer (reply times in the log). |
+
+#### SSE
+
+SSE requests use `http://` or `https://` URLs; `settings.stream` says when runs stop reading.
 
 ## Folders (`_folder.yaml`)
 
@@ -391,13 +462,13 @@ http:
 | `tls` | off | `enabled`, `certPath`, `keyPath` (PEM). Without paths, a self-signed certificate for `localhost` is generated. For `http`, `mcp`, `websocket`, `socketio`, `sse` and `tcp`. |
 | `autoStart` | `false` | Start with the workspace. Only configurations this computer has started or saved before start by themselves; one that is new or changed outside Zorvik (e.g. by a Git pull) must be started once by hand. |
 | `http` | | Mock API: routes and fallback (below). |
-| `websocket` | | WebSocket server: `mode`, `greeting`, `rules`. |
+| `websocket` | | WebSocket server: `mode`, `greeting`, `rules`, `schedule`. |
 | `socketio` | | Socket.IO server (below). |
 | `mcp` | | MCP server (below). |
-| `sse` | | SSE server: `events`, `intervalMs`, `repeat`. |
+| `sse` | | SSE server: `events`, `intervalMs`, `repeat`, `retryMs`, `closeAfterLast`. |
 | `socket` | | TCP and UDP servers: `mode`, `greeting`, `rules`, `encoding`, `framing`, `lengthBytes`, `lineEnding`. |
 | `dns` | | DNS server: `records`, `upstream`. |
-| `proxy` | | TCP relay: `target`, `upstreamTls`. |
+| `proxy` | | TCP relay: `target`, `upstreamTls`, and faults (below). |
 | `docs` | | Markdown notes. |
 
 ### Mock API (`http`)
@@ -423,11 +494,14 @@ Route fields:
 | `matchQuery` | `[]` | Only match requests with these query parameters (empty value = any value). |
 | `matchHeaders` | `[]` | Only match requests with these headers (empty value = any value). |
 | `matchBody` | `""` | Only match requests whose body contains this text. |
+| `matchJson` | `""` | Only match requests with a JSON body meeting this condition, e.g. `$.user.role == "admin"` or `$.user.id` (the value is there). |
 | `fault` | `none` | Instead of the answer: `error` (500), `reset` (close the connection) or `hang` (never answer). |
 | `faultPercent` | `100` | How often the fault happens, in percent. |
+| `sequence` | `[]` | Answers for the first calls, in order (at most 100): `status` (default 200), `headers` (added to the route's; one of the same name replaces it), `body`, `delayMs` (default: the route's), `fault`. Later calls get the route's own answer. |
+| `sequenceRepeat` | `false` | After the route's own answer, start the sequence over. |
 | `enabled` | `true` | |
 
-Status, headers and body are templates: `{{request.params.id}}`, `{{request.query.name}}`, `{{request.headers.name}}`, `{{request.body}}`, `{{request.method}}`, `{{request.path}}`, dynamic values such as `{{$uuid}}`, and the active environment's and workspace variables. Secret variables are never filled in, and text a client sends is never expanded.
+Status, headers and body are templates: `{{request.params.id}}`, `{{request.query.name}}`, `{{request.headers.name}}`, `{{request.body}}`, `{{request.json.path}}` (one value of a JSON body), `{{request.method}}`, `{{request.path}}`, dynamic values such as `{{$uuid}}`, and the active environment's and workspace variables. Secret variables are never filled in, and text a client sends is never expanded.
 
 ### WebSocket, TCP and UDP servers
 
@@ -435,7 +509,8 @@ Status, headers and body are templates: `{{request.params.id}}`, `{{request.quer
 |---|---|---|
 | `mode` | `echo` | `echo` (send every message back), `rules` (reply with the first matching rule), `manual` (only what you send from the app) or `discard`. |
 | `greeting` | `""` | Sent to each client right after it connects (WebSocket, TCP). |
-| `rules` | `[]` | Replies for `mode: rules`: `match` (`any`, `contains` (default), `exact`, `regex`), `pattern`, `reply`, `delayMs`, `enabled`. |
+| `rules` | `[]` | Replies for `mode: rules`: `match` (`any`, `contains` (default), `exact`, `regex`, `json`), `pattern`, `reply` (may use `{{message}}` and `{{message.path}}`), `delayMs`, `enabled`; WebSocket also `close` (a close code: after the reply, close the connection). |
+| `schedule` | `[]` | WebSocket: messages sent to each client on a timer: `message` (templates allowed), `everyMs` (10 or more), `enabled` (default `true`). |
 | `encoding` | `text` | TCP and UDP: `text` or `hex` (e.g. `48 65 6c 6c 6f`) for greeting, patterns and replies. |
 | `framing` | `raw` | TCP: `raw`, `line` or `lengthPrefixed`. |
 | `lengthBytes` | `2` | TCP, `lengthPrefixed`: 1, 2 or 4. |
@@ -447,7 +522,8 @@ Status, headers and body are templates: `{{request.params.id}}`, `{{request.quer
 |---|---|---|
 | `mode` | `echo` | `echo` (emit every event back, acknowledge with its arguments), `rules`, `manual` or `discard`. |
 | `greetingEvent`, `greetingArgs` | `""` | An event (and its JSON arguments) emitted to each client that joins a namespace. |
-| `rules` | `[]` | For `mode: rules`: `event` (`*` for any), `match` (`any` (default), `contains`, `exact`, `regex`) and `pattern` on the arguments, `ack` (acknowledgement arguments), `replyEvent` and `replyArgs`, `broadcast`, `delayMs`, `enabled`. |
+| `rules` | `[]` | For `mode: rules`: `event` (`*` for any), `match` (`any` (default), `contains`, `exact`, `regex`, `json`) and `pattern` on the arguments, `ack` (acknowledgement arguments), `replyEvent` and `replyArgs`, `broadcast`, `delayMs`, `enabled`. |
+| `schedule` | `[]` | Events emitted on a timer to every client of a namespace: `event`, `args` (JSON, templates allowed), `namespace` (default `/`), `everyMs` (10 or more), `enabled` (default `true`). |
 | `path` | `/socket.io/` | Where the server answers. |
 | `cors` | `false` | Allow browsers on other origins. |
 
@@ -474,6 +550,8 @@ Results, resource texts and prompt messages can use `{{args.name}}`, `{{args}}`,
 | `events` | `[]` | Sent in order to each client after it connects: `event` (empty: `message`), `data`, `id`. |
 | `intervalMs` | `0` | Pause between events (0: all at once). |
 | `repeat` | `false` | Start over after the last event. |
+| `retryMs` | `0` | Sent first as `retry:`: how long clients wait before reconnecting (0: not sent). |
+| `closeAfterLast` | `false` | End the stream after the last event (without `repeat`), so clients reconnect. |
 
 ### DNS server (`dns`)
 
@@ -488,6 +566,10 @@ Results, resource texts and prompt messages can use `{{args.name}}`, `{{args}}`,
 |---|---|---|
 | `target` | `""` | `host:port` every client connection is relayed to. |
 | `upstreamTls` | `false` | Connect to the target with TLS (clients still talk plain TCP to the relay). |
+| `delayMs` | `0` | Fault: each chunk of data waits this long before it is passed on. |
+| `bytesPerSecond` | `0` | Fault: at most this many bytes a second in each direction (0: no limit). |
+| `dropAfterMs` | `0` | Fault: close both connections this long after the target connected (0: never). |
+| `dropAfterBytes` | `0` | Fault: close both connections once this many bytes went through, both directions together (0: never). |
 
 ## Load tests (`loadtests/*.yaml`)
 

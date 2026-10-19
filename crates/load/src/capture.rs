@@ -7,6 +7,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use zorvik_engine::Header;
 use zorvik_engine::pool::KeptResponse;
+use zorvik_formats::matching::JsonPath;
 use zorvik_formats::{CaptureFrom, LoadCapture};
 
 /// Body bytes a capture looks at (the rest of the body is read, not kept).
@@ -81,7 +82,7 @@ pub(crate) struct Capture {
 
 #[derive(Debug)]
 enum How {
-    Json(Vec<Step>),
+    Json(JsonPath),
     /// Lowercase header name.
     Header(String),
     Regex(regex::bytes::Regex),
@@ -100,7 +101,7 @@ impl Capture {
         let path = c.path.trim();
         let problem = |message: String| format!("capture '{variable}': {message}");
         let how = match c.from {
-            CaptureFrom::Json => How::Json(parse_path(path).map_err(problem)?),
+            CaptureFrom::Json => How::Json(JsonPath::parse(path).map_err(problem)?),
             CaptureFrom::Header if path.is_empty() => return Err(problem("give the header name".into())),
             CaptureFrom::Header => How::Header(path.to_ascii_lowercase()),
             CaptureFrom::Regex if path.is_empty() => return Err(problem("give a regular expression".into())),
@@ -126,7 +127,7 @@ pub(crate) fn apply(captures: &[Capture], response: &KeptResponse, vars: &mut Us
             How::Json(steps) => json
                 .get_or_insert_with(|| serde_json::from_slice(&response.body).ok())
                 .as_ref()
-                .and_then(|root| json_value(root, steps)),
+                .and_then(|root| steps.text(root)),
             How::Header(name) => header(&response.headers, name),
             How::Regex(re) => regex_value(re, &response.body),
         };
@@ -151,104 +152,6 @@ fn regex_value(re: &regex::bytes::Regex, body: &[u8]) -> Option<String> {
     let caps = re.captures(body)?;
     let m = if re.captures_len() > 1 { caps.get(1)? } else { caps.get(0)? };
     Some(String::from_utf8_lossy(m.as_bytes()).into_owned())
-}
-
-// ---- JSON path --------------------------------------------------------------
-
-/// One step of a JSON path.
-#[derive(Debug, Clone, PartialEq)]
-enum Step {
-    Key(String),
-    /// From the end when negative (`-1` is the last item).
-    Index(i64),
-}
-
-/// The subset of JSONPath that picks one value: `$`, `.name`, `['name']` or
-/// `["name"]`, and `[n]` (`[-1]` from the end). The leading `$` is optional.
-fn parse_path(path: &str) -> Result<Vec<Step>, String> {
-    let bad = |why: &str| format!("'{path}' is not a JSON path ({why}); use one like $.items[0].id");
-    let mut rest = path.trim();
-    if rest.is_empty() {
-        return Err("give a JSON path, e.g. $.id".into());
-    }
-    rest = rest.strip_prefix('$').unwrap_or(rest);
-    let mut steps = Vec::new();
-    // Without `$`, the path may start with a name: `data.id`.
-    let mut first = !path.trim().starts_with('$');
-    while !rest.is_empty() {
-        if let Some(after) = rest.strip_prefix('[') {
-            let end = bracket_end(after).ok_or_else(|| bad("a [ is never closed"))?;
-            let inner = after[..end].trim();
-            rest = &after[end + 1..];
-            if let Some(quote) = inner.chars().next().filter(|c| *c == '\'' || *c == '"') {
-                let key = inner
-                    .strip_prefix(quote)
-                    .and_then(|k| k.strip_suffix(quote))
-                    .ok_or_else(|| bad("a quoted name is not closed"))?;
-                steps.push(Step::Key(key.replace(&format!("\\{quote}"), &quote.to_string())));
-            } else {
-                let index = inner.parse::<i64>().map_err(|_| bad("[…] needs a number or a quoted name"))?;
-                steps.push(Step::Index(index));
-            }
-        } else {
-            let after = match rest.strip_prefix('.') {
-                Some(after) => after,
-                None if first => rest,
-                None => return Err(bad("expected . or [")),
-            };
-            let end = after.find(['.', '[']).unwrap_or(after.len());
-            let key = after[..end].trim();
-            if key.is_empty() {
-                return Err(bad("a name is empty"));
-            }
-            if key == "*" || key.starts_with('.') {
-                return Err(bad("wildcards and .. are not supported"));
-            }
-            steps.push(Step::Key(key.to_string()));
-            rest = &after[end..];
-        }
-        first = false;
-    }
-    Ok(steps)
-}
-
-/// Position of the `]` that closes a bracket, skipping quoted text.
-fn bracket_end(s: &str) -> Option<usize> {
-    let mut quote: Option<char> = None;
-    let mut escaped = false;
-    for (i, c) in s.char_indices() {
-        match quote {
-            Some(_) if escaped => escaped = false,
-            Some(_) if c == '\\' => escaped = true,
-            Some(q) if c == q => quote = None,
-            Some(_) => {}
-            None if c == '\'' || c == '"' => quote = Some(c),
-            None if c == ']' => return Some(i),
-            None => {}
-        }
-    }
-    None
-}
-
-/// The value at `steps` as a variable: strings as they are, numbers and
-/// booleans as text, objects and arrays as JSON. `null` or nothing: `None`.
-fn json_value(root: &Value, steps: &[Step]) -> Option<String> {
-    let mut at = root;
-    for step in steps {
-        at = match (step, at) {
-            (Step::Key(k), Value::Object(map)) => map.get(k)?,
-            (Step::Index(i), Value::Array(items)) => {
-                let i = if *i < 0 { items.len().checked_sub(i.unsigned_abs() as usize)? } else { *i as usize };
-                items.get(i)?
-            }
-            _ => return None,
-        };
-    }
-    match at {
-        Value::Null => None,
-        Value::String(s) => Some(s.clone()),
-        other => Some(other.to_string()),
-    }
 }
 
 // ---- Server-Timing ----------------------------------------------------------
@@ -322,40 +225,6 @@ mod tests {
             headers: headers.iter().map(|(n, v)| Header::new(*n, *v)).collect(),
             body: body.as_bytes().to_vec().into(),
         }
-    }
-
-    #[test]
-    fn json_paths() {
-        let doc: Value = serde_json::from_str(
-            r#"{"id": 7, "name": "Ada", "ok": true, "none": null,
-                "items": [{"id": "a"}, {"id": "b", "tags": ["x", "y"]}],
-                "odd key": {"a.b": 1}, "nested": {"list": [1, 2]}}"#,
-        )
-        .unwrap();
-        let get = |path: &str| json_value(&doc, &parse_path(path).unwrap());
-        assert_eq!(get("$.id").as_deref(), Some("7"));
-        assert_eq!(get("$.name").as_deref(), Some("Ada"));
-        assert_eq!(get("name").as_deref(), Some("Ada"));
-        assert_eq!(get("$.ok").as_deref(), Some("true"));
-        assert_eq!(get("$.items[0].id").as_deref(), Some("a"));
-        assert_eq!(get("$.items[-1].tags[1]").as_deref(), Some("y"));
-        assert_eq!(get("items[1].id").as_deref(), Some("b"));
-        assert_eq!(get("$['odd key'][\"a.b\"]").as_deref(), Some("1"));
-        assert_eq!(get("$.nested.list").as_deref(), Some("[1,2]"));
-        assert_eq!(get("$.items[1].tags").as_deref(), Some(r#"["x","y"]"#));
-        // Nothing there, or null.
-        for path in ["$.missing", "$.none", "$.items[5]", "$.items[-3]", "$.id.x", "$.name[0]", "$.items.id"] {
-            assert_eq!(get(path), None, "{path}");
-        }
-        // The whole document.
-        assert!(get("$").unwrap().starts_with('{'));
-        for bad in ["", "$.", "$..id", "$.a[", "$.a[x]", "$.*", "$['a]", "$a"] {
-            assert!(parse_path(bad).is_err(), "{bad}");
-        }
-        assert_eq!(
-            parse_path("$.a[0]['b c']").unwrap(),
-            [Step::Key("a".into()), Step::Index(0), Step::Key("b c".into())]
-        );
     }
 
     #[test]

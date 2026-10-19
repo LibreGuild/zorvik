@@ -1,6 +1,6 @@
 ---
 title: Templates in answers
-description: "The complete template syntax for mock responses, event streams, greetings and reply rules: request values, the incoming message, variables and dynamic values."
+description: "The complete template syntax for mock responses, event streams, greetings, scheduled messages and reply rules: request values, the incoming message and its JSON values, variables and dynamic values."
 sidebar:
   order: 2
 ---
@@ -21,10 +21,10 @@ This page lists everything a template can contain. Templates are plain text subs
 
 ## Where templates work
 
-| Where | Request values `{{request.…}}` | `{{message}}` | Variables and dynamic values |
+| Where | Request values `{{request.…}}` | `{{message}}`, `{{message.path}}` | Variables and dynamic values |
 |---|---|---|---|
-| Mock API: route **body** | Yes | No | Yes |
-| Mock API: route **header names and values** | Yes | No | Yes |
+| Mock API: route **body**, and the body of each answer of its sequence | Yes | No | Yes |
+| Mock API: route **header names and values**, and an answer's extra headers | Yes | No | Yes |
 | Mock API: route **status**, **method**, **path** | Not templated | | |
 | Mock API: **Match only when** values | No | No | Yes |
 | Mock API: **Backend URL** (forwarding) | No | No | Yes |
@@ -32,6 +32,7 @@ This page lists everything a template can contain. Templates are plain text subs
 | Event stream server: event **name** | Not templated | | |
 | Event stream server: data of events sent from the traffic panel | Yes, from each client's request | No | Yes |
 | WebSocket server: **greeting** | No | No | Yes |
+| WebSocket server: **scheduled messages** | No | No | Yes, rendered fresh for each send |
 | WebSocket server: rule **replies** | No | Yes | Yes |
 | TCP server: **greeting** (text encoding) | No | Yes, always empty | Yes |
 | TCP and UDP servers: rule **replies** (text encoding) | No | Yes | Yes |
@@ -43,7 +44,7 @@ Text you type in a server's traffic panel and send to WebSocket, TCP, UDP or rel
 
 ## Syntax
 
-- A placeholder is a name between `{{` and `}}`. Spaces around the name are allowed: `{{ request.params.id }}` works like `{{request.params.id}}`. The one exception is `{{message}}`, which must be written exactly like that.
+- A placeholder is a name between `{{` and `}}`. Spaces around the name are allowed: `{{ request.params.id }}` works like `{{request.params.id}}`. The one exception is `{{message}}` and `{{message.path}}`, which must be written without spaces: `{{ message }}` is not the message.
 - A placeholder can't span lines. `{{}}` and a `{{` without a closing `}}` stay as they are.
 - A variable that isn't defined stays as written: `{{token}}` is sent as the text `{{token}}`. (So does a secret variable, see [below](#variables).)
 - A request value that isn't there (a missing header, an unknown key) becomes an **empty string**.
@@ -60,20 +61,32 @@ Available in mock routes and event stream servers. For an event stream, "the req
 | `{{request.path}}` | The path as sent, without the query (not decoded) | `/users/42` |
 | `{{request.url}}` | Path and query as sent (not decoded) | `/users/42?q=a%20b&tag=x` |
 | `{{request.body}}` | The request body as text (bytes that aren't UTF-8 become `�`) | the body |
+| `{{request.json.PATH}}` | One value of a JSON body, see [below](#values-of-a-json-body) | `{{request.json.user.id}}` |
 | `{{request.params.NAME}}` | The path parameter `:NAME` or `{NAME}` of the route, decoded | `{{request.params.id}}` → `42` |
 | `{{request.params.*}}` | What a trailing `*` in the route path matched, decoded | `/files/*` on `/files/a/b.txt` → `a/b.txt` |
 | `{{request.query.NAME}}` | The query parameter, decoded (`%XX` and `+`). The first one when it repeats. The name is case-sensitive. | `{{request.query.q}}` → `a b` |
 | `{{request.headers.NAME}}` | The request header, name in any case. The first one when it repeats. | `{{request.headers.content-type}}` |
 
-In event stream servers the body is always empty and there are no path parameters.
+In event stream servers the body is always empty (so `{{request.json…}}` is too) and there are no path parameters.
 
-There is no way to reach into the body: `{{request.body.user.name}}` is an unknown key and becomes empty. To echo a field, echo the whole body, or add a route per case with **Body contains** conditions.
+### Values of a JSON body
+
+When the request body is JSON, `{{request.json.PATH}}` picks one value of it with a [JSON path](../mock-api/#json-body-conditions): `{{request.json.user.id}}`, `{{request.json.items[0].sku}}`, `{{request.json.items[-1]}}` (the last item), `{{request.json['odd key']}}`. `{{request.json}}` alone is the whole body as compact JSON.
+
+| The value | Is inserted as | Body `{"id": 7, "user": "ann", "tags": ["a"]}` |
+|---|---|---|
+| Text | The text, without quotes | `{{request.json.user}}` → `ann` |
+| A number, `true` or `false` | As written | `{{request.json.id}}` → `7` |
+| An object or array | Compact JSON | `{{request.json.tags}}` → `["a"]` |
+| `null`, missing, or the body isn't JSON | Nothing | `{{request.json.nope}}` → empty |
+
+So a route that creates a user and answers with what was sent is written `{"id": "{{$uuid}}", "name": "{{request.json.name}}", "age": {{request.json.age}}}`. `{{request.body.user.name}}` is not a JSON path: it is an unknown key and becomes empty.
 
 :::caution[Values are inserted raw]
 Request values are inserted exactly as they are, without JSON or HTML escaping. `{"q": "{{request.query.q}}"}` becomes invalid JSON when `q` contains a `"`. Keep that in mind when a test sends unusual input.
 :::
 
-Request values are never expanded again: a client that sends `{{token}}` in its body and gets it back through `{{request.body}}` receives the text `{{token}}`, never the value of your `token` variable.
+Request values are never expanded again: a client that sends `{{token}}` in its body and gets it back through `{{request.body}}` (or `{{request.json.name}}`) receives the text `{{token}}`, never the value of your `token` variable.
 
 ## `{{message}}`
 
@@ -87,7 +100,20 @@ In WebSocket, TCP and UDP [reply rules](../websocket-and-sse-servers/#reply-rule
 value of {{message}} at {{$isoTimestamp}}
 ```
 
-A TCP greeting is rendered like a reply to an empty message, so `{{message}}` is empty there. In a WebSocket greeting, `{{message}}` is not special: it stays as written unless you have a variable named `message`.
+### Values of a JSON message
+
+When the message is JSON, a [JSON path](../websocket-and-sse-servers/#json-where) after `message` picks one value of it: `{{message.id}}`, `{{message.params.name}}`, `{{message.items[0]}}`, `{{message.items[-1]}}` (the last item), `{{message['odd key']}}`.
+
+| The value | Is inserted as | `{"id": 7, "user": "ann", "tags": ["a"]}` |
+|---|---|---|
+| Text | The text, without quotes | `{{message.user}}` → `ann` |
+| A number, `true` or `false` | As written | `{{message.id}}` → `7` |
+| An object or array | Compact JSON | `{{message.tags}}` → `["a"]` |
+| `null`, missing, or the message isn't JSON | Nothing | `{{message.nope}}` → empty |
+
+So a reply that keeps the request's id and echoes a name is written `{"id": {{message.id}}, "name": "{{message.user}}"}`. Like `{{message}}`, the values are never expanded: a client sending `{"q": "{{token}}"}` gets `{{token}}` back from `{{message.q}}`. Other names that start with `message` (such as `{{messages}}`) are ordinary variables.
+
+A TCP greeting is rendered like a reply to an empty message, so `{{message}}` is empty there. In a WebSocket greeting and in scheduled messages, `{{message}}` is not special: it stays as written unless you have a variable named `message`.
 
 ## Variables
 
@@ -108,7 +134,7 @@ A running server reads the variables when it starts, and again whenever its sett
 
 ## Dynamic values
 
-Names starting with `$` generate a value each time they appear:
+Names starting with `$` generate a value each time they appear. The most common ones are below; every [dynamic variable](../../variables/dynamic-variables/) works, including those that take arguments, such as `{{$randomInt(1, 100)}}` and `{{$randomPrice(5, 50)}}`.
 
 | Placeholder | Value | Example |
 |---|---|---|
@@ -122,11 +148,11 @@ Names starting with `$` generate a value each time they appear:
 | `{{$randomAlphaNumeric}}` | One character, `a`–`z` or `0`–`9` | `k` |
 | `{{$randomEmail}}` | `user` + four digits + `@example.com` | `user4821@example.com` |
 
-Two `{{$uuid}}` in one answer are two different UUIDs. A variable you define with the same name (for example `$timestamp`) is used instead of the generated value. Other `$` names are not defined and stay as written.
+Two `{{$uuid}}` in one answer are two different UUIDs. A variable you define with the same name (for example `$timestamp`) is used instead of the generated value. A `$` name that isn't a dynamic variable stays as written.
 
 ## Limits
 
-A rendered mock response, event or WebSocket greeting can grow to 32 MB; placeholders past that point are left as written. One variable placeholder can expand to at most 16 MB, and variables nested more than 10 levels deep (for example two that refer to each other) are left partly unexpanded.
+A rendered mock response, event, WebSocket greeting or scheduled message can grow to 32 MB; placeholders past that point are left as written. One variable placeholder can expand to at most 16 MB, and variables nested more than 10 levels deep (for example two that refer to each other) are left partly unexpanded.
 
 ## Examples
 
@@ -137,6 +163,17 @@ A rendered mock response, event or WebSocket greeting can grow to 32 MB; placeho
 Content-Type: {{request.headers.content-type}}
 
 {{request.body}}
+```
+
+**Answer with values of a JSON body** (a mock route, `POST /orders`, status `201`):
+
+```json title="Response body"
+{
+  "id": "{{$uuid}}",
+  "customer": "{{request.json.customer.name}}",
+  "items": {{request.json.items}},
+  "createdAt": "{{$isoTimestamp}}"
+}
 ```
 
 **Pass a header through** (a response header row):
@@ -160,3 +197,10 @@ Content-Type: {{request.headers.content-type}}
 | Is exactly | `PING` | `PONG` |
 | Matches regex | `^GET ` | `value of {{message}}` |
 | Contains | `id` | `{{$uuid}}` |
+
+**JSON-RPC style answers** (a WebSocket server):
+
+| When | Message | Reply |
+|---|---|---|
+| JSON where | `$.method == "add"` | `{"id": {{message.id}}, "result": {{message.params}}}` |
+| JSON where | `$.id` | `{"id": {{message.id}}, "error": "unknown method {{message.method}}"}` |

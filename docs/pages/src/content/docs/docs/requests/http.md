@@ -21,7 +21,8 @@ Across the top is the **URL bar**: the method, the URL, **Send**, the save butto
 | **Auth** | How the request authenticates; the tab shows the type unless it inherits | [Auth](../auth/) |
 | **Settings** | Timeout, redirects, TLS verification, HTTP version and decompression for this request | [HTTP versions, timeouts & redirects](../http-versions-timeouts-redirects/#per-request-settings) |
 | **Scripts** | Pre-request and post-response JavaScript; a dot shows when there are scripts | [Scripts & tests](../../scripting/overview/) |
-| **Docs** | Notes about the request in Markdown, saved with it | |
+| **Docs** | Notes about the request in Markdown, saved with it | [below](#docs) |
+| **Examples** | Saved responses: what the request answers, and what mocks answer | [Examples](../responses/#examples) |
 
 The **Params** and **Headers** tabs show how many enabled rows they have.
 
@@ -144,6 +145,27 @@ The response's **Info** tab lists every header that was really sent, under **Req
 - **HTTP/2 and HTTP/3** don't allow connection-specific headers. `Connection`, `Keep-Alive`, `Proxy-Connection`, `Transfer-Encoding` and `Upgrade` are left out there, and on HTTP/3 a `TE` header other than `TE: trailers` is left out too.
 - **Line breaks** in a header value are not allowed; the request fails with *Invalid value for header*.
 - Rows with an empty name, and switched-off rows, are not sent.
+
+## Docs
+
+The **Docs** tab holds notes about the request, written in Markdown. Docs with text open in **Preview**, shown as formatted text; empty docs open in **Edit**, ready to type. Switch with **Preview** and **Edit** at the top right, or double-click the preview (or press <kbd>Enter</kbd> on it) to edit.
+
+The preview understands:
+
+| Write | For |
+|---|---|
+| `# Title` … `###### Title` | Headings |
+| `**bold**`, `*italic*`, `~~struck~~` | Emphasis |
+| `` `code` `` and fenced blocks (```` ``` ````) | Code |
+| `- item`, `1. item`, `- [ ] task` | Lists (indent a line to the item's text to nest it) and task lists |
+| `> quote`, `> [!NOTE]` (also `TIP`, `IMPORTANT`, `WARNING`, `CAUTION`) | Quotes and highlighted notes |
+| `\| a \| b \|` with a `\|---\|---\|` line below | Tables (`:---:` centers a column, `---:` aligns it right) |
+| `[text](https://…)`, `<https://…>` or a bare `https://…` address | Links |
+| `---` | A line across |
+
+Docs come from the workspace files, which may come from anyone through Git, so the preview only shows text: HTML in the docs is shown as written, not run. Links open in your browser, and only `http`, `https` and `mailto` addresses become links. Pictures written into the docs as `data:image/…` addresses show in place; a picture on the web (`![alt](https://…)`) shows as a link instead of being downloaded.
+
+Folders, the workspace, servers and load tests have docs too: in **Folder settings…**, **Workspace settings…**, and the **Docs** section at the bottom of a server's or load test's settings.
 
 ## In the request file
 

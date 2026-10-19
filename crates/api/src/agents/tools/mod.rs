@@ -17,9 +17,12 @@ use zorvik_workspace::formats::{
 };
 use zorvik_workspace::settings::{AgentChanges, AgentTraffic};
 
+mod connections;
 mod files;
 mod servers;
 mod state;
+
+pub(super) use connections::AgentSocket;
 
 use super::redact::Redactor;
 use super::{ActivityStatus, AgentEvent, AgentSessionHandle, AgentTarget, Ask, ConfirmKind, SessionState};
@@ -144,6 +147,23 @@ fn request_schema() -> Value {
                 "transport": { "type": "string", "enum": ["auto", "websocket", "polling"], "description": "Default auto: WebSocket, or long-polling when the server doesn't take WebSocket." },
                 "event": string("The event the message composer emits."),
                 "ack": { "type": "boolean", "description": "The composer asks the server to acknowledge." },
+                "messages": {
+                    "type": "array",
+                    "description": "Saved emits: sent from the composer, by on-connect steps, or with send_message (message).",
+                    "items": obj(json!({
+                        "name": { "type": "string" },
+                        "event": string("The event to emit."),
+                        "format": { "type": "string", "enum": ["text", "json", "binary"], "description": "json (the arguments: an array for several, else one), text (one string argument) or binary (one binary argument, text is hex). Default text." },
+                        "text": string("The arguments; {{variables}} are filled in when it is sent."),
+                        "ack": { "type": "boolean", "description": "Ask the server to acknowledge." },
+                    }), &["name", "event"]),
+                },
+                "onConnect": {
+                    "type": "array",
+                    "description": "Steps right after connecting, as for websocket requests: {\"type\": \"send\", \"message\": \"<saved emit name>\"}, {\"type\": \"wait\", \"event\": \"joined\", \"match\": \"json\", \"pattern\": \"$[0].room == lobby\", \"timeoutMs\": 5000} (the pattern is matched against the event's arguments as a JSON array; no event: any event), or {\"type\": \"repeat\", \"message\": \"<name>\", \"everyMs\": 30000}. In collection runs each wait is a test.",
+                    "items": { "type": "object" },
+                },
+                "autoAck": string("When set, events from the server that ask for an acknowledgement get one with these arguments (JSON: an array for several, else one), e.g. [\"ok\"]."),
             }), &[]),
             "mcp": obj(json!({
                 "transport": { "type": "string", "enum": ["auto", "streamableHttp", "sse", "stdio"], "description": "Default auto: Streamable HTTP for http(s):// addresses (falling back to the older HTTP+SSE transport), otherwise a program over stdio." },
@@ -152,6 +172,24 @@ fn request_schema() -> Value {
                 "arguments": string("The arguments as a JSON object in text, e.g. {\"city\": \"{{city}}\"} (prompt arguments are strings)."),
                 "env": kv,
                 "cwd": string("Programs only: the folder they start in (relative to the workspace folder; default the workspace folder)."),
+            }), &[]),
+            "websocket": obj(json!({
+                "subprotocols": { "type": "array", "items": { "type": "string" }, "description": "Subprotocols to ask for (Sec-WebSocket-Protocol), the preferred first." },
+                "messages": {
+                    "type": "array",
+                    "description": "Saved messages: sent from the composer, by on-connect steps, or with send_message (message).",
+                    "items": obj(json!({
+                        "name": { "type": "string" },
+                        "format": { "type": "string", "enum": ["text", "json", "binary"], "description": "Default text. binary: text is hex bytes." },
+                        "text": string("The message; {{variables}} are filled in when it is sent."),
+                    }), &["name"]),
+                },
+                "onConnect": {
+                    "type": "array",
+                    "description": "Steps right after connecting, in order; the first failure skips the rest. Each is one of {\"type\": \"send\", \"message\": \"<saved message name>\"}, {\"type\": \"wait\", \"match\": \"contains\", \"pattern\": \"welcome\", \"timeoutMs\": 5000} (match: any, contains, exact, regex or json, where the pattern is a condition like $.type == \"welcome\"; timeoutMs default 5000), or {\"type\": \"repeat\", \"message\": \"<saved message name>\", \"everyMs\": 30000} (a heartbeat). In collection runs each wait is a test.",
+                    "items": { "type": "object" },
+                },
+                "replyKey": string("The JSON path whose value pairs a reply with the message it answers, shown as the reply time in the log (default $.id)."),
             }), &[]),
             "docs": string("Markdown notes: what it does, where the handler is in the code."),
             "examples": {
@@ -254,6 +292,8 @@ fn load_test_schema() -> Value {
                 "items": obj(json!({ "durationSecs": { "type": "integer" }, "target": { "type": "integer", "description": "Users (virtualUsers) or requests per second (arrivalRate)." } }), &["durationSecs", "target"]),
             },
             "thinkTimeMs": { "type": "integer", "description": "virtualUsers: pause after each answer, per user." },
+            "thinkTimeMaxMs": { "type": "integer", "description": "virtualUsers: with it, each pause is random between thinkTimeMs and this (at least thinkTimeMs), so users don't send in lock-step. Leave out for a fixed pause." },
+            "warmUpSecs": { "type": "integer", "description": "Requests that finish in the first seconds of the run are charted but left out of the numbers and thresholds (caches, JIT and connection pools warm up first). Must end before the stages do." },
             "maxInFlight": { "type": "integer", "description": "arrivalRate: most requests in flight at once (default 1000); more are counted as dropped." },
             "keepAlive": { "type": "boolean", "description": "Reuse connections (default true). false: a new connection per request." },
             "timeoutMs": { "type": "integer", "description": "Per-request timeout (default: the app setting)." },
@@ -267,6 +307,7 @@ fn load_test_schema() -> Value {
                     "value": { "type": "number", "description": "In the metric's unit: milliseconds, percent (1 = 1 %) or requests per second." },
                     "target": string("Only this request path (default: the whole test)."),
                     "enabled": { "type": "boolean" },
+                    "abortAfterSecs": { "type": "integer", "description": "Stop the run early when this threshold has failed for this many seconds in a row (checked live about 4 times a second, after the warm-up); the run then fails. Leave out to never stop early. Throughput is low while the load ramps up, so give rps thresholds longer than the ramp." },
                 }), &["metric", "op", "value"]),
             },
             "docs": string("Markdown notes."),
@@ -629,6 +670,7 @@ fn all_defs() -> Vec<Def> {
     all.extend(servers::defs());
     all.extend(state::defs());
     all.extend(files::defs());
+    all.extend(connections::defs());
     all
 }
 
@@ -763,6 +805,11 @@ fn describe(name: &str, args: &Value) -> String {
             plural(count("paths") + count("environments") + count("loadTests") + count("servers"), "item")
         }
         "update_from_openapi" => s("folder"),
+        "open_connection" => {
+            let url = args.get("request").and_then(|r| r.get("url")).and_then(Value::as_str).unwrap_or_default();
+            if s("path").is_empty() { url.to_string() } else { s("path") }
+        }
+        "send_message" | "wait_for_message" | "read_messages" | "close_connection" => s("connectionId"),
         "open_workspace" | "import" => {
             [s("path"), s("url"), s("file")].into_iter().find(|v| !v.is_empty()).unwrap_or_default()
         }
@@ -866,6 +913,11 @@ impl Api {
             "export_request" => run!(async move { self.tool_export_request(c) }),
             "open_workspace" => run!(self.tool_open_workspace(c)),
             "open_in_app" => run!(async move { self.tool_open_in_app(c) }),
+            "open_connection" => run!(self.tool_open_connection(c)),
+            "send_message" => run!(self.tool_send_message(c)),
+            "wait_for_message" => run!(self.tool_wait_for_message(c)),
+            "read_messages" => run!(async move { self.tool_read_messages(c) }),
+            "close_connection" => run!(async move { self.tool_close_connection(c) }),
             _ => {
                 let unknown = Fail::Invalid(format!("Unknown tool '{name}'"));
                 run!(async move { Err(unknown) })
@@ -1767,7 +1819,7 @@ impl Api {
             RequestKind::Http | RequestKind::Grpc | RequestKind::Dns | RequestKind::Sse | RequestKind::Mcp
         ) {
             return Err(Fail::Invalid(format!(
-                "{} requests are live sessions, which agents can't use yet; ask the user to open it in Zorvik",
+                "{} requests are live sessions: use open_connection, then send_message and wait_for_message",
                 method_label(&request)
             )));
         }
@@ -2255,6 +2307,22 @@ impl Api {
             t.metric == zorvik_workspace::formats::ThresholdMetric::ErrorRate && !(0.0..=100.0).contains(&t.value)
         }) {
             return Err(Fail::Invalid(format!("errorRate thresholds are in percent, 0-100 (got {})", t.value)));
+        }
+        if let Some(max) = test
+            .think_time_max_ms
+            .filter(|max| test.model == zorvik_workspace::formats::LoadModel::VirtualUsers && *max < test.think_time_ms)
+        {
+            return Err(Fail::Invalid(format!(
+                "thinkTimeMaxMs ({max}) is below thinkTimeMs ({}): pauses are random between the two",
+                test.think_time_ms
+            )));
+        }
+        if test.warm_up_secs > 0 && u64::from(test.warm_up_secs) >= test.duration_secs() {
+            return Err(Fail::Invalid(format!(
+                "warmUpSecs ({}) must be shorter than the stages ({} s), or nothing would be counted",
+                test.warm_up_secs,
+                test.duration_secs()
+            )));
         }
         let ws = self.agent_ws()?;
         let existing = self.find_load_test(&ws, &name).ok();
@@ -2993,6 +3061,43 @@ mod tests {
         assert_eq!(merged[0].value, "real");
         assert!(merged[0].secret);
         assert_eq!(merged[1].key, "base");
+    }
+
+    #[test]
+    fn load_test_documented_fields_match_the_model() {
+        // Every field the schema documents must be one the load test file accepts.
+        let mut fields = BTreeSet::new();
+        schema_fields(&load_test_schema(), &mut fields);
+        let full = json!({
+            "name": "x", "docs": "", "dataFile": "users.csv", "model": "virtualUsers",
+            "targets": [{ "request": "a.yaml", "weight": 2, "enabled": true, "captures": [{ "variable": "id", "from": "json", "path": "$.id" }] }],
+            "stages": [{ "durationSecs": 10, "target": 5 }],
+            "thinkTimeMs": 100, "thinkTimeMaxMs": 300, "warmUpSecs": 2, "maxInFlight": 10, "keepAlive": false, "timeoutMs": 1000, "httpVersion": "http2",
+            "thresholds": [{ "metric": "errorRate", "op": "<", "value": 1, "target": "a.yaml", "enabled": true, "abortAfterSecs": 5 }],
+        });
+        let test: LoadTest = strict(full.clone(), "test", &load_test_schema()).unwrap();
+        assert_eq!(
+            (test.think_time_max_ms, test.warm_up_secs, test.thresholds[0].abort_after_secs),
+            (Some(300), 2, Some(5))
+        );
+        let mut given = BTreeSet::new();
+        fn keys(v: &Value, out: &mut BTreeSet<String>) {
+            match v {
+                Value::Object(m) => m.iter().for_each(|(k, x)| {
+                    out.insert(k.clone());
+                    keys(x, out);
+                }),
+                Value::Array(a) => a.iter().for_each(|x| keys(x, out)),
+                _ => {}
+            }
+        }
+        keys(&full, &mut given);
+        for f in &fields {
+            assert!(given.contains(f), "the schema documents `{f}`, which the load test above doesn't exercise");
+        }
+        // A misspelled field is refused, not dropped.
+        let err = strict::<LoadTest>(json!({ "name": "x", "warmupSecs": 2 }), "test", &load_test_schema()).unwrap_err();
+        assert!(err.contains("did you mean `warmUpSecs`"), "{err}");
     }
 
     #[test]

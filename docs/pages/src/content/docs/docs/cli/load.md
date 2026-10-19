@@ -32,6 +32,8 @@ Load tests are built and tuned in the app. See [Load testing](../../load-testing
 | `--var` | `<KEY=VALUE>` | | Set a variable with the highest precedence. Repeatable. |
 | `--json` | `<FILE>` | None | Save the summary as JSON to this file |
 | `--html` | `<FILE>` | None | Save an HTML report to this file |
+| `--csv-seconds` | `<FILE>` | None | Save one CSV row per second (requests, errors, latency percentiles, users) to this file |
+| `--csv-requests` | `<FILE>` | None | Save one CSV row per request (and one for all requests) to this file |
 | `-q`, `--quiet` | | Off | Print only the start line and the summary, no progress line every second |
 | `-k`, `--insecure` | | Off | Don't verify TLS certificates |
 | `--allow-outside-files` | | Off | Let requests send body files, and the data file be, outside the workspace folder |
@@ -101,7 +103,7 @@ FAILED
 
 - **The start line**: the load test's name, its peak (`up to N virtual users` or `up to N requests/s` for the arrival-rate model), its total duration and the number of requests.
 - **A progress line per second** (not with `--quiet`): requests per second, p95 and p99 latency, errors, and the active virtual users (`users`) or requests in flight (`in flight`). When the arrival-rate model couldn't start requests because of its in-flight limit, `dropped so far N` is added.
-- **The summary**: totals and latency percentiles. Lines appear only when they have data: `Dropped` (in-flight limit reached), `First byte`, `Connect`, `Server` (from the `Server-Timing` header), `Captures … missed`, `Status`, `Network` (network error kinds such as `timeout` or `connect`) and `CPU` (the load generator's own peak).
+- **The summary**: totals and latency percentiles. `Stopped by the threshold … : it failed for longer than it allows` when a threshold [stopped the run early](../../load-testing/thresholds/#stopping-a-run-early), and `Warm-up    the first N s are left out of these numbers` when the test has a [warm-up](../../load-testing/models-and-stages/#warm-up). Lines appear only when they have data: `Dropped` (in-flight limit reached), `First byte`, `Connect`, `Server` (from the `Server-Timing` header), `Captures … missed`, `Status`, `Network` (network error kinds such as `timeout` or `connect`) and `CPU` (the load generator's own peak).
 - **A table per request** when the test has more than one request, or when a capture missed: requests, requests per second, error rate, p95, p99 and first-byte p95 (and `Missed` captures).
 - **Thresholds**, each with `✓` or `✗` and the actual value (`no data` when there was none), then `PASSED` or `FAILED`.
 
@@ -111,8 +113,10 @@ An `error:` line in the summary means the run couldn't continue.
 
 | Option | File |
 |---|---|
-| `--json <FILE>` | The summary as JSON: `startedAt`, `durationMs`, `totals` (requests, errors, `errorRate`, `rps`, latency percentiles, timing, status codes, bytes, connections, `captureMisses`), `targets` (the same per request), `points` (one per second), `thresholds` (`label`, `metric`, `op`, `value`, `target`, `actual`, `passed`), `passed`, `stoppedEarly`, `error`, `peakCpuPercent` |
+| `--json <FILE>` | The summary as JSON: `startedAt`, `durationMs`, `totals` (requests, errors, `errorRate`, `rps`, latency percentiles, timing, status codes, bytes, connections, `captureMisses`), `targets` (the same per request), `points` (one per second), `thresholds` (`label`, `metric`, `op`, `value`, `target`, `actual`, `passed`), `passed`, `stoppedEarly`, `stoppedByThreshold` (when a threshold stopped the run), `error`, `peakCpuPercent`, `warmUpMs` (when there was a warm-up) |
 | `--html <FILE>` | A single self-contained HTML page (no external files) with the verdict, key numbers, thresholds, charts over time and per-request tables, to open in a browser or keep as a CI artifact |
+| `--csv-seconds <FILE>` | One row per second: `second`, `requests`, `errors`, `p50_ms`, `p95_ms`, `p99_ms`, `active`, `target`, `warm_up` |
+| `--csv-requests <FILE>` | One row for all requests, then one per request: counts, error rate, req/s, latency percentiles, first byte and connect p95, data, status codes and network errors. See [CSV files](../../load-testing/results-and-reports/#csv-files) |
 
 If a file can't be written, the command prints `error: could not save …` and exits with code 2. The summary is still printed.
 
@@ -120,13 +124,14 @@ If a file can't be written, the command prints `error: could not save …` and e
 
 - Press <kbd>Ctrl</kbd>+<kbd>C</kbd> once to stop early: no new requests start, and the requests in flight get a moment to finish (`Stopping (waiting for requests in flight; Ctrl+C again to quit now)…`). The summary is printed with `(stopped early)`, the reports are saved, and the exit code follows the thresholds.
 - Press <kbd>Ctrl</kbd>+<kbd>C</kbd> again to quit at once: `Quit before the run finished.`, no summary, exit code 2.
+- A threshold with `abortAfterSecs` stops the run by itself once it has failed that long: `Stopping: errorRate < 5 % failed for longer than it allows (waiting for requests in flight)…` on standard error, then the summary with `(stopped early)` and `Stopped by the threshold …`, and exit code 1. See [Stopping a run early](../../load-testing/thresholds/#stopping-a-run-early).
 
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
 | `0` | Every threshold passed (also when the test has no thresholds) |
-| `1` | A threshold failed |
+| `1` | A threshold failed, or a threshold stopped the run early |
 | `2` | The run couldn't start (load test, environment or request not found, a request that isn't HTTP, a data file problem, an invalid plan), the run broke off with an error, a report couldn't be saved, or Ctrl+C was pressed twice |
 
 Plan errors are reported as they are in the app, for example `Add a stage with a duration`, `6000 virtual users is more than the limit of 5000`, or `HTTP/3 isn't supported for load tests yet`.

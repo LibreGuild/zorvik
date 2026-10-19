@@ -163,6 +163,9 @@ pub enum StreamEvent {
     /// A TCP/UDP/MQTT client session.
     #[serde(rename_all = "camelCase")]
     Socket { conn_id: String, event: zorvik_engine::SocketEvent },
+    /// A file streaming over a WebSocket or socket session.
+    #[serde(rename_all = "camelCase")]
+    FileStream { conn_id: String, event: crate::file_stream::FileStreamEvent },
     /// An MCP client session: every message, the server's log, the end.
     #[serde(rename_all = "camelCase")]
     Mcp { conn_id: String, event: zorvik_engine::mcp::McpEvent },

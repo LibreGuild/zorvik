@@ -13,7 +13,7 @@ export type Summary = {
  */
 startedAt: number, durationMs: number, totals: MetricsSummary, targets: Array<TargetSummary>, points: Array<TimePoint>, thresholds: Array<ThresholdResult>, 
 /**
- * Every threshold passed (and the run was not aborted by an error).
+ * Every threshold passed (and neither an error nor a threshold stopped the run).
  */
 passed: boolean, 
 /**
@@ -27,4 +27,14 @@ error: string | null,
 /**
  * Highest CPU seen, when known.
  */
-peakCpuPercent: number | null, };
+peakCpuPercent: number | null, 
+/**
+ * Requests that finished in this first part of the run (warm-up) are in
+ * the charts but not in the numbers and thresholds.
+ */
+warmUpMs?: number, 
+/**
+ * The threshold (its label) that stopped the run early: it failed for its
+ * `abortAfterSecs`. The run then fails.
+ */
+stoppedByThreshold?: string, };

@@ -138,7 +138,7 @@ async fn runs_a_folder_in_order_with_scripts_data_and_skips() {
            console.log('iteration', pm.info.iteration, 'of', pm.info.iterationCount);"#,
     )
     .await;
-    let socket = json!({ "name": "Socket", "kind": "websocket", "url": "ws://127.0.0.1:1/ws" });
+    let socket = json!({ "name": "Socket", "kind": "tcp", "url": "tcp://127.0.0.1:1" });
     h.ok("request.create", json!({ "parent": folder, "request": socket })).await;
     h.request(
         folder,
@@ -182,7 +182,7 @@ async fn runs_a_folder_in_order_with_scripts_data_and_skips() {
         ]
     );
     assert_eq!(results[1]["skipped"], true);
-    assert_eq!(results[1]["kind"], "websocket");
+    assert_eq!(results[1]["kind"], "tcp");
     assert!(results[1]["skipReason"].as_str().unwrap().contains("live sessions"), "{}", results[1]);
     // Secret values never show in reported URLs; pm.variables carry through the run.
     let url = results[3]["url"].as_str().unwrap();
@@ -474,4 +474,52 @@ async fn event_streams_run_and_scripts_see_the_events() {
         r["console"].as_array().unwrap().iter().any(|c| c["message"].as_str().unwrap().contains("Read 3 events")),
         "{r}"
     );
+}
+
+#[tokio::test]
+async fn websocket_requests_run_their_steps_as_tests() {
+    let server = TestServer::start().await;
+    let h = Harness::new().await;
+    let folder = h.ok("folder.create", json!({ "parent": "", "name": "Live" })).await.as_str().unwrap().to_string();
+    let chat = json!({
+        "name": "Chat", "kind": "websocket", "url": server.ws_url("/ws"),
+        "websocket": {
+            "messages": [{ "name": "Ask", "format": "json", "text": "{\"id\": 7}" }],
+            "onConnect": [
+                { "type": "send", "message": "Ask" },
+                { "type": "wait", "match": "json", "pattern": "$.id == 7" },
+                { "type": "repeat", "message": "Ask", "everyMs": 1000 },
+                { "type": "wait", "match": "exact", "pattern": "never", "timeoutMs": 100 },
+                { "type": "send", "message": "Missing" },
+                { "type": "wait", "match": "any" },
+            ],
+        },
+    });
+    h.ok("request.create", json!({ "parent": folder, "request": chat })).await;
+    let (_, results, summary) = h.run(json!({ "folder": folder })).await;
+    let r = &results[0];
+    assert_eq!(
+        (r["kind"].clone(), r["status"].clone(), r["passed"].clone()),
+        (json!("websocket"), json!(101), json!(false)),
+        "{r}"
+    );
+    let tests: Vec<(String, bool, bool)> = r["tests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| (t["name"].as_str().unwrap().to_string(), t["passed"] == true, t["skipped"] == true))
+        .collect();
+    assert_eq!(
+        tests,
+        [
+            ("Wait for a JSON message where $.id == 7".to_string(), true, false),
+            ("Wait for the message \"never\"".to_string(), false, false),
+            ("Wait for any message".to_string(), false, true),
+        ]
+    );
+    assert_eq!(r["tests"][1]["error"], "Nothing matched within 100 ms");
+    let console = r["console"].to_string();
+    assert!(console.contains("not in collection runs"), "{console}");
+    // The response body is the transcript: welcome, the sent message and its echo.
+    assert_eq!(summary["testsFailed"], 1);
 }

@@ -88,12 +88,12 @@ test("saves a request into the collection", async ({ page }) => {
 test("WebSocket connects, sends and receives", async ({ page }) => {
   await newTab(page, "WebSocket");
   await setUrl(page, `${WS}/ws`);
-  await page.getByRole("button", { name: "Connect" }).click();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(page.getByTestId("stream-status")).toHaveText("Connected");
   await expect(page.getByTestId("message-log")).toContainText("welcome");
   await page.getByTestId("stream-pane").locator(".cm-content").click();
   await page.keyboard.type("hello from e2e");
-  await page.getByTestId("stream-pane").getByRole("button", { name: "Send" }).click();
+  await page.getByTestId("stream-pane").getByRole("button", { name: "Send", exact: true }).click();
   await expect(page.getByTestId("message-log").getByText("hello from e2e")).toHaveCount(2);
   await page.getByRole("button", { name: "Disconnect" }).click();
   await expect(page.getByTestId("stream-status")).toHaveText("Disconnected");
@@ -102,7 +102,7 @@ test("WebSocket connects, sends and receives", async ({ page }) => {
 test("Server-Sent Events are listed", async ({ page }) => {
   await newTab(page, "Event stream (SSE)");
   await setUrl(page, `${HTTP}/sse?count=3&interval=20`);
-  await page.getByRole("button", { name: "Connect" }).click();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(page.getByTestId("message-log")).toContainText("line one 1");
   await expect(page.getByTestId("stream-status")).toHaveText("Disconnected");
 });

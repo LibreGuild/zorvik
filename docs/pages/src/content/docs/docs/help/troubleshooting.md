@@ -140,7 +140,7 @@ See [Load testing](../../load-testing/overview/).
 | "No answer from the user in Zorvik in time; nothing was done." | Approval questions expire after 55 seconds. Ask the agent to try again and answer in the Zorvik window. |
 | "No workspace is open in Zorvik. …" | Open a workspace, or let the agent call `open_workspace` (you approve it). |
 | "Zorvik stopped a request to *host* …" | A redirect, script or token URL led to a host you hadn't approved. Ask the agent to send again; Zorvik then asks about that host. |
-| "WEBSOCKET requests are live sessions, which agents can't use yet …" | Agents can send HTTP, GraphQL, gRPC (unary), DNS and SSE requests only. |
+| "WEBSOCKET requests are live sessions: use open_connection, then send_message and wait_for_message" (also SOCKETIO, TCP, UDP, MQTT) | The agent tried `send_request` on a live request. Agents open WebSocket, Socket.IO, TCP, UDP and MQTT connections with `open_connection` and the other [connection tools](../../agents/tools/#live-connections); most agents follow the hint by themselves. |
 | Nothing happens and no question appears | Questions queue one at a time per agent; look for the Zorvik window (it may be behind others) and the title bar pill. |
 
 The app writes "AI agents can't connect: …" to its [log](../../reference/data-locations/#logs) when it could not start listening for `zorvik mcp`. `zorvik mcp` itself prints its problems to standard error; most agents show that output in their MCP server logs.

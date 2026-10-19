@@ -6,8 +6,10 @@ import type { LoadCapture } from "../../bindings/LoadCapture";
 import type { LoadModel } from "../../bindings/LoadModel";
 import type { LoadStage } from "../../bindings/LoadStage";
 import type { LoadTarget } from "../../bindings/LoadTarget";
+import type { LoadTest } from "../../bindings/LoadTest";
 import type { MetricsSummary } from "../../bindings/MetricsSummary";
 import type { RequestKind } from "../../bindings/RequestKind";
+import type { Summary } from "../../bindings/Summary";
 import type { TargetSummary } from "../../bindings/TargetSummary";
 import type { Threshold } from "../../bindings/Threshold";
 import type { ThresholdMetric } from "../../bindings/ThresholdMetric";
@@ -103,6 +105,38 @@ export function thresholdLabel(t: Pick<Threshold, "metric" | "op" | "value">, ta
   const name = m.unit === "ms" ? m.short : m.label;
   const value = `${formatNumber(t.value)} ${m.unit === "%" ? "%" : m.unit}`;
   return `${name} ${OP_LABELS[t.op]} ${value}${targetName ? ` · ${targetName}` : ""}`;
+}
+
+/** Longest "stop early" wait the editor offers (an hour). */
+export const MAX_ABORT_SECS = 3600;
+/** A threshold that newly stops the run waits this long first. */
+export const DEFAULT_ABORT_SECS = 10;
+
+/** "Stops the run after 10 s failing", for titles and lists; `null` when it never stops the run. */
+export function abortLabel(t: Pick<Threshold, "abortAfterSecs">): string | null {
+  if (t.abortAfterSecs == null) return null;
+  return t.abortAfterSecs === 0 ? "Stops the run as soon as it fails" : `Stops the run after ${formatDuration(t.abortAfterSecs)} failing`;
+}
+
+// ---- options ----------------------------------------------------------------
+
+/** Why the think time or warm-up can't be used, if they can't (the generator checks again). */
+export function optionsProblem(test: Pick<LoadTest, "model" | "thinkTimeMs" | "thinkTimeMaxMs" | "warmUpSecs" | "stages">): string | null {
+  if (test.model === "virtualUsers" && test.thinkTimeMaxMs != null && test.thinkTimeMaxMs < (test.thinkTimeMs ?? 0)) {
+    return "The longest think time is shorter than the shortest";
+  }
+  const warmUp = test.warmUpSecs ?? 0;
+  const total = totalDuration(test.stages);
+  if (warmUp > 0 && total > 0 && warmUp >= total) return "The warm-up must end before the run does";
+  return null;
+}
+
+/** "none", "250 ms", "100–300 ms (random)". */
+export function thinkTimeLabel(test: Pick<LoadTest, "thinkTimeMs" | "thinkTimeMaxMs">): string {
+  const min = test.thinkTimeMs ?? 0;
+  const max = test.thinkTimeMaxMs;
+  if (max != null && max > min) return `${formatCount(min)}–${formatCount(max)} ms (random)`;
+  return min > 0 ? `${formatCount(min)} ms` : "none";
 }
 
 // ---- stages -----------------------------------------------------------------
@@ -364,6 +398,78 @@ export function formatChange(r: Pick<CompareRow, "change" | "current" | "baselin
   if (Math.abs(v) < 0.05) return "0%";
   const text = Math.abs(v) < 10 ? Math.abs(v).toFixed(1) : Math.round(Math.abs(v)).toLocaleString("en-US");
   return `${v > 0 ? "+" : "−"}${text}%`;
+}
+
+// ---- results ----------------------------------------------------------------
+
+/** Plain names of the generator's network error kinds (`ErrorKind` in JSON). */
+export const ERROR_KINDS: Record<string, string> = {
+  timeout: "Timed out",
+  connect: "Could not connect",
+  dns: "Host name not found",
+  tls: "TLS handshake failed",
+  proxy: "Proxy error",
+  protocol: "Protocol error",
+  io: "Connection broke",
+  cancelled: "Cut off by the stop",
+  invalidRequest: "Request could not be built",
+  tooManyRedirects: "Too many redirects",
+  notAllowed: "Refused: another host",
+};
+
+export const errorKindLabel = (kind: string) => ERROR_KINDS[kind] ?? (kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : "Error");
+
+/** The numbers the status and error breakdown shows: all requests (`request` null) or one request's (by path). */
+export function breakdownFor(totals: MetricsSummary, targets: TargetSummary[], request: string | null): MetricsSummary {
+  if (request == null) return totals;
+  return targets.find((t) => t.request === request)?.metrics ?? totals;
+}
+
+/** Responses by status class, `[["2xx", 950], ["5xx", 12]]`, in class order (classes with none left out). */
+export function statusClasses(codes: [number, number][]): [string, number][] {
+  const counts = new Map<number, number>();
+  for (const [code, n] of codes) {
+    const c = Math.floor(code / 100);
+    counts.set(c, (counts.get(c) ?? 0) + n);
+  }
+  return [...counts.entries()].sort((a, b) => a[0] - b[0]).map(([c, n]) => [`${c}xx`, n]);
+}
+
+/** What a finished run says about stopping early and its warm-up, for the verdict (empty when neither). */
+/** The verdict's line about thresholds. A run a threshold stopped fails even when the final numbers pass. */
+export function verdictText(summary: Pick<Summary, "thresholds" | "stoppedByThreshold">): string {
+  const total = summary.thresholds.length;
+  const failed = summary.thresholds.filter((t) => !t.passed).length;
+  if (total === 0) return "No thresholds set: the run passes when it completes.";
+  if (failed) return `${failed} of ${total} thresholds failed.`;
+  if (summary.stoppedByThreshold) return "The final numbers pass, but a threshold failed for too long while the test ran.";
+  return total === 1 ? "The threshold passed." : `All ${total} thresholds passed.`;
+}
+
+export function runNotes(summary: Pick<Summary, "stoppedByThreshold" | "warmUpMs">): string[] {
+  const notes: string[] = [];
+  if (summary.stoppedByThreshold) notes.push(`Stopped early: ${summary.stoppedByThreshold} failed for longer than it allows.`);
+  if (summary.warmUpMs) notes.push(`The first ${formatDuration(summary.warmUpMs / 1000)} (warm-up) are charted but left out of the numbers and thresholds.`);
+  return notes;
+}
+
+/** The export formats of a finished run: menu label, save dialog title, file name suffix. */
+export const EXPORTS = [
+  { format: "html", label: "HTML report…", title: "Save the HTML report", suffix: ".html" },
+  { format: "json", label: "JSON…", title: "Save the results as JSON", suffix: ".json" },
+  { format: "secondsCsv", label: "CSV, one row per second…", title: "Save one row per second as CSV", suffix: " per second.csv" },
+  { format: "requestsCsv", label: "CSV, one row per request…", title: "Save one row per request as CSV", suffix: " per request.csv" },
+] as const;
+
+export type ExportFormat = (typeof EXPORTS)[number]["format"];
+
+/** "Smoke 2026-09-27 12-00 per second.csv": the test name made safe for a file name, the run's local start time, the suffix. */
+export function exportFileName(name: string, startedAt: number, suffix: string): string {
+  const d = new Date(startedAt);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}-${pad(d.getMinutes())}`;
+  const safe = name.replace(/[\\/:*?"<>|]+/g, "-").trim() || "load test";
+  return `${safe} ${stamp}${suffix}`;
 }
 
 /** Share (percent) of requests that opened a new connection. */
