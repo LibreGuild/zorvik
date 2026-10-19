@@ -72,6 +72,8 @@ impl ByteBudget {
             return n;
         }
         let left = |taken: u64| self.limit.saturating_sub(taken).min(n as u64);
+        // Rust 1.99 deprecates this for `try_update`, which the minimum Rust version (`rust-version`) lacks.
+        #[allow(deprecated)]
         let before = match self.taken.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |t| Some(t + left(t))) {
             Ok(before) | Err(before) => before,
         };
