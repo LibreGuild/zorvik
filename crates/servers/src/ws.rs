@@ -10,6 +10,7 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
+use tokio::time::Instant;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
@@ -17,6 +18,7 @@ use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_util::sync::CancellationToken;
 use zorvik_engine::framing::PayloadEncoding;
 use zorvik_formats::ReplyMode;
+use zorvik_formats::server::{MIN_SCHEDULE_MS, ScheduledMessage};
 
 use crate::connections::{ConnCommand, Connections};
 use crate::report::{OutgoingMessage, Reporter, TrafficDirection};
@@ -224,8 +226,20 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
         let text = render(greeting, None, &current.vars);
         send_out!(text.into_bytes(), true);
     }
+    let mut schedule = Schedule::new(&current.server.websocket.schedule);
     loop {
         tokio::select! {
+            _ = tokio::time::sleep_until(schedule.next_due()), if schedule.active() => {
+                for template in schedule.take_due(Instant::now()) {
+                    let text = render(&template, None, &current.vars);
+                    send_out!(text.into_bytes(), true);
+                }
+            }
+            Ok(()) = live.changed() => {
+                current = live.borrow_and_update().clone();
+                replier = Replier::new(&current.server.websocket.rules, PayloadEncoding::Text);
+                schedule.update(&current.server.websocket.schedule);
+            }
             incoming = source.next() => {
                 let (bytes, is_text) = match incoming {
                     Some(Ok(Message::Text(text))) => (text.as_bytes().to_vec(), true),
@@ -244,6 +258,7 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
                 if live.has_changed().unwrap_or(false) {
                     current = live.borrow_and_update().clone();
                     replier = Replier::new(&current.server.websocket.rules, PayloadEncoding::Text);
+                    schedule.update(&current.server.websocket.schedule);
                 }
                 match current.server.websocket.mode {
                     ReplyMode::Echo => send_out!(bytes, is_text),
@@ -252,10 +267,21 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
                             if reply.delay_ms > 0 {
                                 tokio::select! {
                                     _ = tokio::time::sleep(Duration::from_millis(reply.delay_ms)) => {}
+                                    _ = commands.closing() => {
+                                        close(&mut sink, &mut source, CloseCode::Normal, "").await;
+                                        return "closed by you".into();
+                                    }
                                     _ = cancel.cancelled() => return "server stopped".into(),
                                 }
                             }
-                            send_out!(reply.bytes, true);
+                            // A rule that only closes sends nothing first.
+                            if !(reply.bytes.is_empty() && reply.close.is_some()) {
+                                send_out!(reply.bytes, true);
+                            }
+                            if let Some(code) = reply.close {
+                                close(&mut sink, &mut source, CloseCode::from(code), "").await;
+                                return format!("closed by a reply rule ({code})");
+                            }
                         }
                     }
                     ReplyMode::Manual | ReplyMode::Discard => {}
@@ -273,6 +299,57 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(
                 return "server stopped".into();
             }
         }
+    }
+}
+
+/// The scheduled messages of one connection and when each is next due.
+struct Schedule {
+    source: Vec<ScheduledMessage>,
+    items: Vec<(String, Duration, Instant)>,
+}
+
+impl Schedule {
+    fn new(messages: &[ScheduledMessage]) -> Self {
+        let now = Instant::now();
+        let items = messages
+            .iter()
+            .filter(|m| m.enabled)
+            .map(|m| {
+                let every = Duration::from_millis(m.every_ms.max(MIN_SCHEDULE_MS));
+                (m.message.clone(), every, now + every)
+            })
+            .collect();
+        Self { source: messages.to_vec(), items }
+    }
+
+    /// Starts the timers again only when the scheduled messages changed, not with every edit
+    /// of the server.
+    fn update(&mut self, messages: &[ScheduledMessage]) {
+        if self.source != messages {
+            *self = Self::new(messages);
+        }
+    }
+
+    fn active(&self) -> bool {
+        !self.items.is_empty()
+    }
+
+    fn next_due(&self) -> Instant {
+        self.items.iter().map(|(_, _, due)| *due).min().unwrap_or_else(|| Instant::now() + Duration::from_secs(3600))
+    }
+
+    /// The messages due at `now`, in order; each is due again one interval later (after a
+    /// stall, from now: no burst of missed messages).
+    fn take_due(&mut self, now: Instant) -> Vec<String> {
+        let mut due = Vec::new();
+        for (template, every, next) in &mut self.items {
+            if *next <= now {
+                due.push(template.clone());
+                let again = *next + *every;
+                *next = if again <= now { now + *every } else { again };
+            }
+        }
+        due
     }
 }
 

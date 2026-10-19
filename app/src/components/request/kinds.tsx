@@ -18,6 +18,7 @@ import { MqttSubscriptions } from "./MqttSubscriptions";
 import { MqttTopicField } from "./MqttTopicField";
 import { SocketIoEventField, SocketIoOptions } from "./SocketIo";
 import { SocketOptions } from "./SocketOptions";
+import { MessagesTab, OnConnectTab } from "./ConnectionEditors";
 
 export interface KindPaneProps {
   tab: Tab;
@@ -35,6 +36,8 @@ export interface KindEditorTab {
   id: string;
   label: string;
   View: ComponentType<KindPaneProps>;
+  /** A count shown on the tab. */
+  badge?: (tab: Tab) => number | undefined;
 }
 
 export const KIND_EDITOR_TABS: Partial<Record<RequestKind, KindEditorTab[]>> = {
@@ -51,7 +54,15 @@ export const KIND_EDITOR_TABS: Partial<Record<RequestKind, KindEditorTab[]>> = {
     { id: "protos", label: "Proto files", View: GrpcProtoFilesTab },
   ],
   // Shown before the HTTP-like tabs (Params, Headers, Auth, …).
-  socketio: [{ id: "connection", label: "Connection", View: SocketIoOptions }],
+  socketio: [
+    { id: "connection", label: "Connection", View: SocketIoOptions },
+    { id: "messages", label: "Emits", View: MessagesTab, badge: (t) => t.draft.socketio?.messages?.length || undefined },
+    { id: "onConnect", label: "On connect", View: OnConnectTab, badge: (t) => t.draft.socketio?.onConnect?.length || undefined },
+  ],
+  websocket: [
+    { id: "messages", label: "Messages", View: MessagesTab, badge: (t) => t.draft.websocket?.messages?.length || undefined },
+    { id: "onConnect", label: "On connect", View: OnConnectTab, badge: (t) => t.draft.websocket?.onConnect?.length || undefined },
+  ],
   // Followed by Headers, Auth, Settings, Scripts and Docs.
   mcp: [
     { id: "call", label: "Call", View: McpCallTab },
@@ -60,7 +71,7 @@ export const KIND_EDITOR_TABS: Partial<Record<RequestKind, KindEditorTab[]>> = {
 };
 
 /** Kinds whose editor tabs come before the usual Params, Headers, Auth and Settings. */
-export const WITH_HTTP_TABS: RequestKind[] = ["socketio"];
+export const WITH_HTTP_TABS: RequestKind[] = ["socketio", "websocket"];
 
 /** Replaces the method picker left of the URL (e.g. the DNS record type). */
 export const URL_PREFIXES: Partial<Record<RequestKind, ComponentType<KindPaneProps>>> = {

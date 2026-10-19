@@ -1,6 +1,6 @@
 ---
 title: TCP relay
-description: Put a relay between a client and a TCP server to see the bytes in both directions, including decrypted TLS traffic, and inject your own.
+description: Put a relay between a client and a TCP server to see the bytes in both directions, including decrypted TLS traffic, inject your own, and add delays, bandwidth limits and dropped connections.
 sidebar:
   order: 8
 ---
@@ -52,6 +52,21 @@ When the target can't be reached, the log shows **Could not connect to the targe
 
 **Half-close**: when one side stops sending (closes its writing half), the relay passes that on to the other side and keeps the other direction open. The pair closes when both sides are done, on an error, or when you disconnect it. The close reason names who closed first: **client closed** or **target closed**.
 
+## Faults
+
+Open **Faults** to make the connection between client and target slow or unreliable, for example to see how a database driver copes with a slow network, or whether a client reconnects when its connection drops in the middle of a transfer. A field set to `0` is off; the number of faults that are on shows next to **Faults**.
+
+| Field | What it does |
+|---|---|
+| **Delay per chunk (ms)** | Each chunk waits this long before it is passed on, in both directions. A request and its answer each wait once, so a round trip takes twice the delay longer. |
+| **Bandwidth (bytes/s)** | At most this many bytes a second in each direction, sent evenly (in twentieths of a second). The relay reads no faster than it sends, so a fast sender is slowed down too. |
+| **Drop after (ms)** | Closes both connections this long after the target connected. |
+| **Drop after (bytes)** | Closes both connections once this many bytes went through, both directions together. Exactly that many arrive: a chunk that crosses the limit is cut. |
+
+A dropped connection's close reason says so: **dropped by the relay after 5000 ms** or **dropped by the relay after 1234 bytes**. Delays and dropping times are at most 24 hours. Like the target, faults apply to new connections: change them and connect again.
+
+Data you send from the traffic panel is not delayed or limited, and doesn't count toward **Drop after (bytes)**.
+
 ## Traffic
 
 Each chunk the relay passes on is one row in the traffic log:
@@ -81,6 +96,8 @@ port: 9100
 proxy:
   target: db.internal:5432
   upstreamTls: false
+  delayMs: 200
+  bytesPerSecond: 50000
 ```
 
 | Field | Default | Description |
@@ -88,5 +105,9 @@ proxy:
 | `kind` | | `tcpProxy`. |
 | `proxy.target` | empty | `host:port` (or `tcp://…`, `tls://…`). Required. |
 | `proxy.upstreamTls` | `false` | Connect to the target with TLS. |
+| `proxy.delayMs` | `0` | Delay per chunk, in ms. |
+| `proxy.bytesPerSecond` | `0` | Bandwidth limit per direction (0: none). |
+| `proxy.dropAfterMs` | `0` | Close both connections this long after the target connected (0: never). |
+| `proxy.dropAfterBytes` | `0` | Close both connections after this many bytes, both directions together (0: never). |
 
 For TCP servers that answer by themselves, see [TCP, UDP & DNS servers](../tcp-udp-dns-servers/). To talk to a TCP server from Zorvik, use a [TCP connection](../../protocols/tcp-udp/).

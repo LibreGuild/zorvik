@@ -1,5 +1,6 @@
 // TLS inspector: trust verdict, negotiated parameters, the certificate chain,
 // and which protocol versions and cipher suites the server accepts.
+import type { ReactNode } from "react";
 import { CircleAlert, Info, Lock, ShieldAlert, ShieldCheck, Square, TriangleAlert, X } from "lucide-react";
 import type { TlsCertificate } from "../../bindings/TlsCertificate";
 import type { TlsReport } from "../../bindings/TlsReport";
@@ -177,7 +178,7 @@ function Summary({ report, leaf }: { report: TlsReport; leaf: TlsCertificate | u
   );
 }
 
-function DaysLeft({ cert }: { cert: TlsCertificate }) {
+export function DaysLeft({ cert }: { cert: TlsCertificate }) {
   if (cert.parseError) return null;
   const expired = cert.daysLeft < 0;
   const tone = expired || cert.notYetValid ? "bg-danger/12 text-danger" : cert.daysLeft < 30 ? "bg-warning/14 text-warning" : "bg-hover text-muted";
@@ -195,7 +196,7 @@ function DaysLeft({ cert }: { cert: TlsCertificate }) {
   );
 }
 
-function WarningRow({ warning }: { warning: TlsWarning }) {
+export function WarningRow({ warning }: { warning: TlsWarning }) {
   const style =
     warning.level === "danger"
       ? { cls: "border-danger/30 bg-danger/8 text-danger", icon: <CircleAlert size={14} /> }
@@ -215,7 +216,8 @@ function role(cert: TlsCertificate, index: number): string {
   return cert.selfSigned && cert.isCa ? "Root" : "Intermediate";
 }
 
-function CertificateCard({ cert, index }: { cert: TlsCertificate; index: number }) {
+/** A certificate's details; the certificate decoder passes its own caption and extra rows. */
+export function CertificateCard({ cert, index, caption, children }: { cert: TlsCertificate; index: number; caption?: string; children?: ReactNode }) {
   if (cert.parseError) {
     return (
       <div className="rounded-lg border border-line p-3 text-[12.5px]">
@@ -234,7 +236,7 @@ function CertificateCard({ cert, index }: { cert: TlsCertificate; index: number 
   return (
     <div className="rounded-lg border border-line py-2" data-testid="tls-certificate">
       <div className="flex flex-wrap items-center gap-2 px-4 pb-1">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-faint">{role(cert, index)}</span>
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-faint">{caption ?? role(cert, index)}</span>
         <span className="selectable truncate text-[13px] font-semibold text-fg">{cert.commonName ?? cert.subject}</span>
         {cert.selfSigned && <Badge className="bg-hover text-muted">self-signed</Badge>}
         {cert.isCa && <Badge className="bg-hover text-muted">CA</Badge>}
@@ -264,11 +266,12 @@ function CertificateCard({ cert, index }: { cert: TlsCertificate; index: number 
       <KV label="Signature" value={cert.signatureAlgorithm} mono={false} />
       <KV label="SHA-256" value={cert.sha256} copy={cert.sha256} />
       <KV label="Serial" value={cert.serial} copy={cert.serial} />
+      {children}
     </div>
   );
 }
 
-function formatDate(rfc3339: string): string {
+export function formatDate(rfc3339: string): string {
   const d = new Date(rfc3339);
   return Number.isNaN(d.getTime()) ? rfc3339 : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }

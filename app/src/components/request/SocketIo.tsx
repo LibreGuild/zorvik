@@ -54,6 +54,14 @@ export function SocketIoOptions({ tab }: KindPaneProps) {
           <CodeEditor value={io.auth ?? ""} onChange={(auth) => set({ auth })} language="json" variables={names} lineNumbers={false} placeholder={'{"token": "{{token}}"}'} />
         </div>
       </Field>
+      <Field
+        label="Answer acknowledgements (JSON)"
+        hint="When the server emits an event that asks for an acknowledgement, answer it right away with these arguments (an array for several). Empty: don't answer. Can use {{variables}}."
+      >
+        <div className="h-16 overflow-hidden rounded-lg border border-line bg-input focus-within:border-accent" data-testid="socketio-auto-ack">
+          <CodeEditor value={io.autoAck ?? ""} onChange={(autoAck) => set({ autoAck: autoAck || undefined })} language="json" variables={names} lineNumbers={false} placeholder={'["ok"]'} />
+        </div>
+      </Field>
     </div>
   );
 }

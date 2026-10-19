@@ -18,11 +18,15 @@ Open the **Tools** sidebar and click a tool. Each tool opens in its own tab and 
 | [Network interfaces](#network-interfaces) | This computer's addresses, to reach its servers from other devices. |
 | [HTTP/3 check](#http3-check) | Whether a site speaks HTTP/3 (QUIC). |
 
+The other tools work on data you paste, without the network: [Encoders](../encoders/), [Certificate decoder](../certificate-decoder/), [JSON compare](../json-compare/), [Filter playground](../filter-playground/) and [Regex tester](../regex-tester/).
+
 ## TLS inspector
 
 Enter the **Server** (`example.com`, `example.com:8443` or a URL such as `https://example.com/path`; the port defaults to 443) and, optionally, the **Server name (SNI)** to send when it differs from the server, for example when you connect to an IP address. Press **Inspect** (**Cancel** stops it).
 
 The inspector makes one full TLS handshake to record the certificate chain, and checks the chain the same way requests do: against this computer's trusted certificates plus the extra CA from **Settings → Certificates**. Then it makes more handshakes, a few at a time, to try each protocol version and cipher suite. The HTTP proxy from Settings is used (through a `CONNECT` tunnel) when it applies to the host.
+
+To read a certificate file instead of a server's, use the [Certificate decoder](../certificate-decoder/).
 
 ### The report
 

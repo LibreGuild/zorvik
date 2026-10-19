@@ -3,6 +3,7 @@
 // (configuration; runs live in store/loadtests.ts), collection runs (settings and results
 // live in store/runner.ts) and tools.
 import { create } from "zustand";
+import type { ChunkMessage } from "../bindings/ChunkMessage";
 import type { ErrorKind } from "../bindings/ErrorKind";
 import type { LoadTest } from "../bindings/LoadTest";
 import type { Request } from "../bindings/Request";
@@ -149,6 +150,8 @@ function reqTab(id: string): Tab | undefined {
 const requestTabs = (): Tab[] => get().tabs.filter(isRequestTab);
 
 const MAX_MESSAGES = 5000;
+/** About 64 MB: the text and base64 (in characters) a tab's message log keeps; a flood of large messages drops the oldest. */
+export const MAX_LOG_BYTES = 64 * 1024 * 1024;
 
 /** Bumped by resetTabs so async work started for the previous tabs (restore, open) is dropped. */
 let epoch = 0;
@@ -705,11 +708,11 @@ export async function connect(id: string) {
     if (which === "socket") {
       const r = await api.socketConnect(connId, tab.draft, tab.path);
       opened = r.opened;
-      summary = [r.opened.protocol, r.opened.remoteAddr, `${Math.round(r.opened.timing.totalMs)} ms`].filter(Boolean).join(" · ");
+      summary = openedSummary(r.opened);
     } else {
       const r = which === "ws" ? await api.wsConnect(connId, tab.draft, tab.path) : await api.sseConnect(connId, tab.draft, tab.path);
       opened = r;
-      summary = `${r.meta.status} ${r.meta.statusText} · ${Math.round(r.timing.totalMs)} ms`;
+      summary = openedSummary(r);
     }
     // Disconnected, closed or replaced while connecting: close it rather than leak it (closing
     // before it opened was a no-op on the backend).
@@ -725,6 +728,43 @@ export async function connect(id: string) {
     updateTab(id, (t) => ({ stream: { ...t.stream, status: "closed", error: message } }));
     pushMessage(id, { direction: "error", kind: "error", text: message });
   }
+}
+
+/** "101 Switching Protocols · 38 ms · protocol chat.v1", or "Socket.IO over WebSocket · 127.0.0.1:3000 · 12 ms". */
+function openedSummary(r: StreamOpened | SocketOpened): string {
+  if (!("meta" in r)) return [r.protocol, r.remoteAddr, `${Math.round(r.timing.totalMs)} ms`].filter(Boolean).join(" · ");
+  const header = (name: string) => r.meta.headers.find((h) => h.name.toLowerCase() === name)?.value;
+  const protocol = header("sec-websocket-protocol");
+  const extensions = header("sec-websocket-extensions");
+  return [
+    `${r.meta.status} ${r.meta.statusText}`,
+    `${Math.round(r.timing.totalMs)} ms`,
+    protocol ? `protocol ${protocol}` : null,
+    extensions ? `extensions ${extensions}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/**
+ * Show a connection opened elsewhere (by an AI agent) in a tab: its saved request's tab when
+ * that isn't connected, else a new one. Its messages then flow into the tab.
+ */
+export async function attachStream(path: string | null, request: Request, connId: string, opened: StreamOpened | SocketOpened, note: string, activate = true) {
+  let tab = path ? requestTabs().find((t) => t.path === path) : undefined;
+  if (path && !tab) {
+    await openRequest(path, { activate }).catch(() => {});
+    tab = requestTabs().find((t) => t.path === path);
+  }
+  if (!tab || tab.stream.status === "open" || tab.stream.status === "connecting") {
+    const id = openDraft(structuredClone(request), { activate });
+    tab = reqTab(id);
+  } else if (activate) {
+    set({ activeId: tab.id });
+  }
+  if (!tab) return;
+  updateTab(tab.id, (t) => ({ stream: { ...t.stream, status: "open", connId, opened, error: null } }));
+  pushMessage(tab.id, { direction: "info", kind: "info", text: `${note} · ${openedSummary(opened)}` });
 }
 
 export async function disconnect(id: string) {
@@ -748,35 +788,36 @@ export async function wsSend(id: string, text: string, binary: boolean) {
   if (!tab || tab.stream.status !== "open") return;
   const socket = SOCKET_KINDS.includes(tab.draft.kind ?? "http");
   try {
-    const base64 = binary ? hexToBase64(text) : null;
-    if (binary && base64 === null) {
-      toast("error", "Invalid hex", "Binary messages are entered as hex bytes, e.g. 48 65 6c 6c 6f");
-      return;
-    }
-    if (tab.draft.kind === "socketio") {
-      // The composer's text is the arguments: JSON, or one string in text mode, or one binary argument.
+    if (binary) {
+      const base64 = hexToBase64(text);
+      if (base64 === null) {
+        toast("error", "Invalid hex", "Binary messages are entered as hex bytes, e.g. 48 65 6c 6c 6f");
+        return;
+      }
+      const target = await chunkTarget(tab);
+      if (typeof target === "string") toast("info", target);
+      else await sendChunk(tab.stream.connId, tab.draft, target, base64);
+    } else if (tab.draft.kind === "socketio") {
+      // The composer's text is the arguments: JSON, or one string in text mode.
       const options = tab.draft.socketio;
       const event = options?.event?.includes("{{") ? await api.renderVariables(options.event) : (options?.event ?? "");
       if (!event.trim()) {
         toast("info", "Enter the name of the event to emit");
         return;
       }
-      const rendered = base64 !== null ? "" : text.includes("{{") ? await api.renderVariables(text) : text;
-      const args = base64 !== null || tab.draft.body?.type === "json" ? rendered : JSON.stringify(rendered);
-      await api.socketSend(tab.stream.connId, { type: "emit", event: event.trim(), args, base64, ack: options?.ack ?? false });
+      const rendered = text.includes("{{") ? await api.renderVariables(text) : text;
+      const args = tab.draft.body?.type === "json" ? rendered : JSON.stringify(rendered);
+      await api.socketSend(tab.stream.connId, { type: "emit", event: event.trim(), args, base64: null, ack: options?.ack ?? false });
     } else if (tab.draft.kind === "mqtt") {
-      // Text or bytes, always as a publish (the session has no plain "send").
+      // Always a publish (the session has no plain "send").
       const mqtt = tab.draft.mqtt;
       const topic = mqtt?.topic?.includes("{{") ? await api.renderVariables(mqtt.topic) : (mqtt?.topic ?? "");
       if (!topic.trim()) {
         toast("info", "Enter a topic to publish to");
         return;
       }
-      const rendered = base64 !== null ? null : text.includes("{{") ? await api.renderVariables(text) : text;
-      await api.socketSend(tab.stream.connId, { type: "publish", topic, text: rendered, base64, qos: mqtt?.qos ?? 0, retain: mqtt?.retain ?? false });
-    } else if (base64 !== null) {
-      if (socket) await api.socketSend(tab.stream.connId, { type: "binary", base64 });
-      else await api.wsSend(tab.stream.connId, { type: "binary", base64 });
+      const rendered = text.includes("{{") ? await api.renderVariables(text) : text;
+      await api.socketSend(tab.stream.connId, { type: "publish", topic, text: rendered, base64: null, qos: mqtt?.qos ?? 0, retain: mqtt?.retain ?? false });
     } else {
       const rendered = text.includes("{{") ? await api.renderVariables(text) : text;
       if (socket) await api.socketSend(tab.stream.connId, { type: "text", text: rendered });
@@ -785,6 +826,32 @@ export async function wsSend(id: string, text: string, binary: boolean) {
   } catch (e) {
     toast("error", "Send failed", errorMessage(e));
   }
+}
+
+/**
+ * How binary messages go out on the tab's connection: a binary message, an MQTT publish to the
+ * topic or a Socket.IO emit of the event (variables filled in). A string says what is missing.
+ */
+export async function chunkTarget(tab: Tab): Promise<ChunkMessage | string> {
+  if (tab.draft.kind === "socketio") {
+    const options = tab.draft.socketio;
+    const event = options?.event?.includes("{{") ? await api.renderVariables(options.event) : (options?.event ?? "");
+    return event.trim() ? { type: "emit", event: event.trim(), ack: options?.ack ?? false } : "Enter the name of the event to emit";
+  }
+  if (tab.draft.kind === "mqtt") {
+    const mqtt = tab.draft.mqtt;
+    const topic = mqtt?.topic?.includes("{{") ? await api.renderVariables(mqtt.topic) : (mqtt?.topic ?? "");
+    return topic.trim() ? { type: "publish", topic, qos: mqtt?.qos ?? 0, retain: mqtt?.retain ?? false } : "Enter a topic to publish to";
+  }
+  return { type: "binary" };
+}
+
+/** Send one binary message (base64) on a connection, as `target` says. */
+export async function sendChunk(connId: string, request: Request, target: ChunkMessage, base64: string) {
+  if (!SOCKET_KINDS.includes(request.kind ?? "http")) await api.wsSend(connId, { type: "binary", base64 });
+  else if (target.type === "emit") await api.socketSend(connId, { type: "emit", event: target.event, args: "", base64, ack: target.ack });
+  else if (target.type === "publish") await api.socketSend(connId, { type: "publish", topic: target.topic, text: null, base64, qos: target.qos, retain: target.retain });
+  else await api.socketSend(connId, { type: "binary", base64 });
 }
 
 /** Hex bytes (`48 65 6c`) as base64, or null when not valid hex. */
@@ -823,6 +890,28 @@ function pushMessage(tabId: string, msg: Omit<StreamMessage, "id" | "size" | "ti
   if (!flushTimer) flushTimer = setTimeout(flush, 40);
 }
 
+const messageBytes = (m: StreamMessage) => (m.text?.length ?? 0) + (m.base64?.length ?? 0);
+
+// The size of each log appendMessages built, so a flush adds only the new messages' sizes.
+const logBytes = new WeakMap<StreamMessage[], number>();
+
+/**
+ * `messages` with `added` after them, keeping the newest `maxCount` within `maxBytes` (and always
+ * the newest one).
+ */
+export function appendMessages(messages: StreamMessage[], added: StreamMessage[], maxCount = MAX_MESSAGES, maxBytes = MAX_LOG_BYTES): StreamMessage[] {
+  // A log from elsewhere (cleared, or a new tab) is measured once.
+  let bytes = logBytes.get(messages) ?? messages.reduce((n, m) => n + messageBytes(m), 0);
+  for (const m of added) bytes += messageBytes(m);
+  const all = [...messages, ...added];
+  let drop = Math.max(0, all.length - maxCount);
+  for (let i = 0; i < drop; i++) bytes -= messageBytes(all[i]);
+  while (bytes > maxBytes && drop < all.length - 1) bytes -= messageBytes(all[drop++]);
+  const kept = drop ? all.slice(drop) : all;
+  logBytes.set(kept, bytes);
+  return kept;
+}
+
 function flush() {
   flushTimer = null;
   const batch = pending;
@@ -833,8 +922,7 @@ function flush() {
       if (!isRequestTab(t)) return t;
       const mine = batch.filter((b) => b.tabId === t.id);
       if (!mine.length) return t;
-      let messages = [...t.stream.messages, ...mine.map((m) => m.msg)];
-      if (messages.length > MAX_MESSAGES) messages = messages.slice(messages.length - MAX_MESSAGES);
+      const messages = appendMessages(t.stream.messages, mine.map((m) => m.msg));
       const closing = mine.find((m) => m.close);
       return {
         ...t,
@@ -872,8 +960,10 @@ function handleEvent(e: StreamEvent) {
         });
       } else if (ev.type === "error") {
         pushMessage(tab.id, { direction: "error", kind: "error", text: ev.message });
+      } else if (ev.type === "info") {
+        pushMessage(tab.id, { direction: "info", kind: "info", text: ev.text, timestamp: ev.timestamp });
       } else {
-        const reason = [ev.code != null ? `code ${ev.code}` : null, ev.reason || null].filter(Boolean).join(" · ");
+        const reason = [ev.code != null ? `code ${ev.code}` : null, ev.reason || null, ev.meaning ?? null].filter(Boolean).join(" · ");
         pushMessage(
           tab.id,
           { direction: "info", kind: "info", text: `Disconnected${ev.byClient ? "" : " by server"}${reason ? ` (${reason})` : ""}` },

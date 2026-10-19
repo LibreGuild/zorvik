@@ -55,9 +55,55 @@ pub enum WsEvent {
         timestamp: f64,
     },
     #[serde(rename_all = "camelCase")]
-    Closed { code: Option<u16>, reason: String, by_client: bool },
+    Closed {
+        code: Option<u16>,
+        reason: String,
+        by_client: bool,
+        /// What the close code means, e.g. "Policy violation" for 1008.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        meaning: Option<String>,
+    },
     #[serde(rename_all = "camelCase")]
     Error { message: String },
+    /// A note for the log that is not a message (e.g. what an on-connect step did).
+    #[serde(rename_all = "camelCase")]
+    Info { text: String, timestamp: f64 },
+}
+
+impl WsEvent {
+    pub fn closed(code: Option<u16>, reason: impl Into<String>, by_client: bool) -> Self {
+        let meaning = code.and_then(close_code_meaning).map(str::to_string);
+        WsEvent::Closed { code, reason: reason.into(), by_client, meaning }
+    }
+
+    pub fn info(text: impl Into<String>) -> Self {
+        WsEvent::Info { text: text.into(), timestamp: now_ms() }
+    }
+}
+
+/// What a WebSocket close code means (RFC 6455 and the IANA registry), for the log.
+pub fn close_code_meaning(code: u16) -> Option<&'static str> {
+    Some(match code {
+        1000 => "Normal closure",
+        1001 => "Going away (the server is shutting down, or the page left)",
+        1002 => "Protocol error",
+        1003 => "Unsupported data (e.g. binary where only text is accepted)",
+        1005 => "No close code was given",
+        1006 => "The connection dropped without a close frame",
+        1007 => "Invalid data (e.g. text that is not UTF-8)",
+        1008 => "Policy violation",
+        1009 => "Message too big",
+        1010 => "A required extension was not agreed",
+        1011 => "Internal server error",
+        1012 => "Service restart",
+        1013 => "Try again later",
+        1014 => "Bad gateway",
+        1015 => "TLS handshake failed",
+        3000..=3999 => "Registered by a library or framework",
+        4000..=4999 => "Defined by the application",
+        _ => return None,
+    })
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -284,15 +330,37 @@ fn handshake_error(err: tungstenite::Error) -> EngineError {
             EngineError::new(ErrorKind::Protocol, msg)
         }
         tungstenite::Error::Io(e) => EngineError::new(ErrorKind::Io, format!("WebSocket I/O error: {e}")),
+        tungstenite::Error::Protocol(tungstenite::error::ProtocolError::SecWebSocketSubProtocolError(e)) => {
+            use tungstenite::error::SubProtocolError as S;
+            let msg = match e {
+                S::NoSubProtocol => {
+                    "The server accepted none of the subprotocols asked for (Sec-WebSocket-Protocol). Remove them \
+                     in Settings → Subprotocols, or ask for one the server speaks."
+                }
+                S::ServerSentSubProtocolNoneRequested => {
+                    "The server picked a subprotocol although none was asked for (Sec-WebSocket-Protocol)."
+                }
+                S::InvalidSubProtocol => "The server picked a subprotocol that was not asked for.",
+            };
+            EngineError::new(ErrorKind::Protocol, msg)
+        }
         other => EngineError::new(ErrorKind::Protocol, format!("WebSocket handshake failed: {other}")),
     }
 }
 
+/// A message for the log. What was sent is kept only as its start ([`sent_preview`]); `size`
+/// is always the whole message's.
 fn message_event(direction: Direction, msg: &Message) -> Option<WsEvent> {
     let b64 = |b: &[u8]| Some(base64::engine::general_purpose::STANDARD.encode(b));
+    fn keep(direction: Direction, b: &[u8]) -> &[u8] {
+        if direction == Direction::Sent { crate::framing::sent_preview(b) } else { b }
+    }
     let (kind, text, base64, size) = match msg {
-        Message::Text(t) => (WsMessageKind::Text, Some(t.to_string()), None, t.len()),
-        Message::Binary(b) => (WsMessageKind::Binary, None, b64(b), b.len()),
+        Message::Text(t) => {
+            let kept = String::from_utf8_lossy(keep(direction, t.as_bytes())).into_owned();
+            (WsMessageKind::Text, Some(kept), None, t.len())
+        }
+        Message::Binary(b) => (WsMessageKind::Binary, None, b64(keep(direction, b)), b.len()),
         Message::Ping(b) => (WsMessageKind::Ping, None, b64(b), b.len()),
         Message::Pong(b) => (WsMessageKind::Pong, None, b64(b), b.len()),
         _ => return None,
@@ -319,14 +387,16 @@ async fn run_session<S>(
     loop {
         tokio::select! {
             _ = &mut close_deadline, if closing_by_client => {
-                let _ = events.send(WsEvent::Closed {
-                    code: None,
-                    reason: "Server did not answer the close request".into(),
-                    by_client: true,
-                });
+                let _ = events.send(WsEvent::closed(None, "Server did not answer the close request", true));
                 return;
             }
             out = outgoing.recv() => {
+                // After our close frame, nothing else may be sent (the server would see a
+                // protocol error); a repeating send or a stream may still be on its way.
+                if closing_by_client && matches!(out, Some(WsOutgoing::Text { .. } | WsOutgoing::Binary { .. } | WsOutgoing::Ping)) {
+                    let _ = events.send(WsEvent::Error { message: "Not sent: the connection is closing".into() });
+                    continue;
+                }
                 let msg = match out {
                     Some(WsOutgoing::Text { text }) => Message::text(text),
                     Some(WsOutgoing::Binary { base64 }) => {
@@ -359,7 +429,7 @@ async fn run_session<S>(
                 };
                 if let Err(message) = sent {
                     let _ = events.send(WsEvent::Error { message });
-                    let _ = events.send(WsEvent::Closed { code: None, reason: "Connection lost".into(), by_client: false });
+                    let _ = events.send(WsEvent::closed(None, "Connection lost", false));
                     return;
                 }
                 if let Some(event) = event {
@@ -371,7 +441,7 @@ async fn run_session<S>(
                     let (code, reason) = frame.map(|f| (Some(u16::from(f.code)), f.reason.to_string())).unwrap_or((None, String::new()));
                     // tungstenite replies to the close handshake while flushing.
                     let _ = sink.flush().await;
-                    let _ = events.send(WsEvent::Closed { code, reason, by_client: closing_by_client });
+                    let _ = events.send(WsEvent::closed(code, reason, closing_by_client));
                     return;
                 }
                 Some(Ok(msg)) => {
@@ -392,11 +462,11 @@ async fn run_session<S>(
                             "Connection lost".to_string()
                         }
                     };
-                    let _ = events.send(WsEvent::Closed { code: None, reason, by_client: closing_by_client });
+                    let _ = events.send(WsEvent::closed(None, reason, closing_by_client));
                     return;
                 }
                 None => {
-                    let _ = events.send(WsEvent::Closed { code: None, reason: "Connection closed".into(), by_client: closing_by_client });
+                    let _ = events.send(WsEvent::closed(None, "Connection closed", closing_by_client));
                     return;
                 }
             }

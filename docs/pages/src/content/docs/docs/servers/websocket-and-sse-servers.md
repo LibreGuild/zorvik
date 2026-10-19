@@ -1,6 +1,6 @@
 ---
 title: WebSocket & SSE servers
-description: Run a WebSocket server that echoes, answers by rules or lets you type the replies, and an event stream server that plays a list of events.
+description: Run a WebSocket server that echoes, answers by rules (JSON conditions, values from the message, closing with a code) or lets you type the replies, sends scheduled messages, and an event stream server that plays a list of events.
 sidebar:
   order: 5
 ---
@@ -22,7 +22,7 @@ The **Replies** setting decides what happens with each incoming message:
 | **Manual** | `manual` | Nothing is sent automatically: reply from the traffic panel. |
 | **Discard** | `discard` | Messages are read and dropped. |
 
-In **Rules** mode, text and binary messages are both matched (as text), and replies are always sent as text messages.
+In **Rules** mode, text and binary messages are both matched (as text), and replies are always sent as text messages. A rule can also close the connection after its reply (**Then close**).
 
 ### Greeting
 
@@ -31,6 +31,18 @@ In **Rules** mode, text and binary messages are both matched (as text), and repl
 ```json
 {"type": "welcome", "session": "{{$uuid}}"}
 ```
+
+### Scheduled messages
+
+**Scheduled messages** are sent to every connected client on a timer, in any reply mode: a price ticker, a heartbeat, a notification now and then. Click **Add scheduled message**, type the message and how often to send it, in milliseconds (10 or more). The checkbox switches one off without removing it.
+
+Each message is rendered fresh every time, so dynamic values and variables change:
+
+```json
+{"type": "tick", "price": {{$randomPrice(5, 50)}}, "at": "{{$isoTimestamp}}"}
+```
+
+A client gets the first one an interval after it connects, then one every interval while it stays connected. When sending stalls for a while (a client that doesn't read, a rule's delay), the messages missed in between are not sent in a burst; the schedule picks up from then. Edits apply to connected clients at once, starting a new interval.
 
 ### Connections
 
@@ -41,7 +53,7 @@ In **Rules** mode, text and binary messages are both matched (as text), and repl
 - Every `Origin` is accepted.
 - With **TLS** on, the address is `wss://`.
 
-**Disconnect** (in the traffic panel) closes a client with code `1000`; stopping the server closes every client with `1001` and the reason `server stopped`. The log records why each connection ended, for example **closed by the client (1001 going away)** or **the client dropped the connection without a close frame**.
+**Disconnect** (in the traffic panel) closes a client with code `1000`; stopping the server closes every client with `1001` and the reason `server stopped`; a rule with **Then close** closes it with its code. The log records why each connection ended, for example **closed by the client (1001 going away)**, **closed by a reply rule (4001)** or **the client dropped the connection without a close frame**.
 
 ## Reply rules
 
@@ -50,10 +62,11 @@ WebSocket, TCP and UDP servers share the same reply rules: "when a message match
 | Column | Description |
 |---|---|
 | Checkbox | Turns the rule on or off. |
-| **When** | **Contains**, **Is exactly**, **Matches regex** or **Any message**. |
+| **When** | **Contains**, **Is exactly**, **Matches regex**, **JSON where** or **Any message**. |
 | **Message** | The pattern (not used for **Any message**). |
-| **Reply** | What to send back. May use `{{message}}`, dynamic values and variables (text encoding only). |
+| **Reply** | What to send back. May use `{{message}}`, values of a JSON message such as `{{message.id}}`, dynamic values and variables (text encoding only). |
 | **Delay ms** | Wait this long before replying. |
+| **Then close** | WebSocket servers: close the connection after the reply, with this close code (`1000`, or `3000` to `4999`). Empty: stay open. |
 
 The rules are checked **from top to bottom**; the **first** enabled rule that matches answers, and a message no rule matches gets no reply.
 
@@ -62,18 +75,37 @@ The rules are checked **from top to bottom**; the **first** enabled rule that ma
 | **Contains** (default) | `contains` | The message contains the pattern (case-sensitive). An empty pattern matches every message. |
 | **Is exactly** | `exact` | The message equals the pattern. Line breaks at the end of either are ignored, so `PING` matches `PING\r\n`. |
 | **Matches regex** | `regex` | The regular expression matches anywhere in the message. Use `^` and `$` to anchor it. The syntax is Rust's `regex` crate (like RE2: no look-around or backreferences). |
+| **JSON where** | `json` | The message is JSON and meets a condition: `$.op == "subscribe"`, `$.id` (the value is there), `$.type != ping`. See [JSON where](#json-where). |
 | **Any message** | `any` | Always. Put it last as a catch-all. |
 
-A rule that can't be used (an invalid regex, or invalid hex on TCP and UDP) is skipped, and the traffic log shows why once, for example **Rule 3: invalid regex: …**.
+A rule that can't be used (an invalid regex or JSON path, or invalid hex on TCP and UDP) is skipped, and the traffic log shows why once, for example **Rule 3: invalid regex: …**.
+
+Try a pattern on sample messages in the [Regex tester](../../tools/regex-tester/) first.
+
+### JSON where
+
+A **JSON where** condition is a JSON path, optionally compared with a value:
+
+| Condition | Matches a JSON message where |
+|---|---|
+| `$.path` | the value is there and isn't `null` |
+| `$.path == value` | the value equals `value` |
+| `$.path != value` | the value is anything else, or isn't there |
+
+Paths look like `$.type`, `$.params.user.id`, `$.items[0]`, `$.items[-1]` (the last item) or `$['odd key']`; there are no wildcards or filters. The value is JSON (`"subscribe"`, `7`, `true`, `null`) or bare text (`$.op == subscribe`), and values are compared as text, so `$.id == 7` matches `7` and `"7"`. A message that isn't JSON matches no **JSON where** rule. WebSocket requests use the same conditions; see [JSON conditions](../../protocols/websocket/#json-conditions).
 
 ```text title="Example rules"
-Is exactly     PING              →  PONG
-Matches regex  ^subscribe (\w+)  →  {"subscribed": "{{message}}", "id": "{{$uuid}}"}   (delay 200)
-Contains       error             →  {"type": "error", "code": 500}
-Any message                      →  {"type": "ack"}
+Is exactly     PING                  →  PONG
+JSON where     $.op == "bye"         →  (empty)                                              then close 4001
+JSON where     $.id                  →  {"id": {{message.id}}, "result": "ok"}               (delay 200)
+Matches regex  ^subscribe (\w+)      →  {"subscribed": "{{message}}", "id": "{{$uuid}}"}
+Contains       error                 →  {"type": "error", "code": 500}
+Any message                          →  {"type": "ack"}
 ```
 
-`{{message}}` is the whole message (trailing line breaks removed). Regex groups can't be used in the reply. See [Templates](../templates/#message).
+In a reply, `{{message}}` is the whole message (trailing line breaks removed). When the message is JSON, `{{message.id}}`, `{{message.params.name}}` or `{{message.items[0]}}` is one value of it: text as it is, numbers, objects and arrays as JSON, and nothing when it isn't there. So `{"id": {{message.id}}}` answers `{"id": 7}` with the same id, and a string needs quotes around it: `"{{message.user}}"`. Regex groups can't be used in the reply. See [Templates](../templates/#message).
+
+With **Then close**, the reply goes out first (an empty reply sends nothing), then the connection is closed with the code. Use it to test how a client handles a server that ends the session, for example `4001` for "session expired".
 
 ## Event stream (SSE) server
 
@@ -125,13 +157,22 @@ Line breaks in names and ids are replaced by spaces.
 | **Interval (ms)** | 1000 | Pause between events. `0` sends them all at once. |
 | **Repeat** | on | Start over after the last event. With an interval of `0`, one round per second. |
 
-Without **Repeat**, a stream stays open after the last event, and only gets what you send from the traffic panel. A comment line (`:keepalive`) is sent every 15 seconds so idle streams (and proxies) stay open. With no events at all, streams stay open and only get what you send.
+Without **Repeat**, a stream stays open after the last event, and only gets what you send from the traffic panel (unless **End after the last event** is on, see below). A comment line (`:keepalive`) is sent every 15 seconds so idle streams (and proxies) stay open. With no events at all, streams stay open and only get what you send.
 
 Edits apply to the next event, also on streams already open.
 
 ### Reconnecting clients
 
 A client that reconnects with a `Last-Event-ID` header (as `EventSource` does) continues **after** the event with that id. This works with fixed ids: ids are compared as written, so an id with a placeholder such as `{{$uuid}}` never matches and the client starts from the first event.
+
+The **Reconnects** section tests how a client reconnects:
+
+| Setting | Description |
+|---|---|
+| **Retry (ms)** | Sent at the start of each stream as `retry: 3000`: how long the client waits before it reconnects. `0` (the default) sends nothing, and clients use their own wait (about 3 seconds for browsers). |
+| **End after the last event** | The server closes the stream once the last event is out (after its interval), so the client reconnects. It can't be combined with **Repeat**. |
+
+With fixed ids on the events, **End after the last event** plays a whole reconnect cycle: the client gets events 1 to 3, the stream ends (**stream ended after the last event** in the log), the client reconnects with `Last-Event-ID: 3`, and so on. A client that reconnects with the id of the **last** event has every event: it gets `204 No Content`, which tells an `EventSource` to stop reconnecting, and the log shows **→ 204 (the client has every event, so it stops reconnecting)**. End a stream from the traffic panel (**Disconnect**) to see how a client handles a stream that breaks off in the middle.
 
 ### Streams and clients
 
@@ -167,12 +208,21 @@ websocket:
     - match: exact
       pattern: ping
       reply: pong
-    - match: regex
-      pattern: ^subscribe
-      reply: '{"subscribed": "{{message}}"}'
+    - match: json
+      pattern: $.op == "bye"
+      close: 4001
+    - match: json
+      pattern: $.id
+      reply: '{"id": {{message.id}}, "result": "ok"}'
       delayMs: 200
     - match: any
       reply: '{"type": "ack"}'
+  schedule:
+    - message: '{"type": "tick", "price": {{$randomPrice(5, 50)}}}'
+      everyMs: 1000
+    - message: '{"type": "notice"}'
+      everyMs: 60000
+      enabled: false
 ```
 
 ```yaml title="servers/Ticker.yaml"
@@ -191,6 +241,7 @@ sse:
       id: "2"
   intervalMs: 1000
   repeat: true
+  retryMs: 3000
 ```
 
 | Field | Default | Description |
@@ -198,18 +249,22 @@ sse:
 | `websocket.mode` | `echo` | `echo`, `rules`, `manual` or `discard`. |
 | `websocket.greeting` | empty | Sent to each client on connect. |
 | `websocket.rules` | none | Reply rules (below). |
+| `websocket.schedule` | none | Scheduled messages: `message`, `everyMs` (10 or more) and `enabled` (default `true`). |
 | `sse.events` | none | `event` (empty: `message`), `data`, `id`. |
 | `sse.intervalMs` | `0` | Pause between events in ms. |
 | `sse.repeat` | `false` | Start over after the last event. |
+| `sse.retryMs` | `0` | Sent first as `retry:` (0: not sent). |
+| `sse.closeAfterLast` | `false` | End the stream after the last event (without `repeat`). |
 
 Reply rules (`rules[]`, also used by TCP and UDP servers):
 
 | Field | Default | Description |
 |---|---|---|
-| `match` | `contains` | `contains`, `exact`, `regex` or `any`. |
+| `match` | `contains` | `contains`, `exact`, `regex`, `json` or `any`. |
 | `pattern` | empty | The pattern. |
 | `reply` | empty | The reply. |
 | `delayMs` | `0` | Delay before replying, in ms. |
+| `close` | none | WebSocket servers: close the connection after the reply with this code (`1000`, or `3000` to `4999`). |
 | `enabled` | `true` | Whether the rule is used. |
 
 To talk to these servers from Zorvik, use a [WebSocket request](../../protocols/websocket/) or an [event stream request](../../protocols/sse/).

@@ -1,6 +1,8 @@
 //! Server-Sent Events server: every GET (any path) opens an event stream that
 //! plays the configured events in order (once or on repeat), plus events sent
 //! from the UI. A comment every 15 s keeps idle streams (and proxies) alive.
+//! A stream may start with a `retry:` time and end after the last event, so
+//! clients reconnect (continuing after their `Last-Event-ID`).
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -15,7 +17,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use zorvik_engine::Header;
-use zorvik_formats::SseEventTemplate;
+use zorvik_formats::{SseEventTemplate, SseServerConfig};
 
 use crate::connections::{Commands, ConnCommand, Connections};
 use crate::http::{Body, Handler, HandlerFuture, Peer, header_list, parse_query, serve};
@@ -45,6 +47,7 @@ pub(crate) async fn run(listener: TcpListener, ctx: Ctx) -> Result<(), String> {
         conns: conns.clone(),
         stopped: ctx.cancel.clone(),
     });
+    crate::report_problems(&ctx, |live| problems(&live.server.sse));
     let handler: Handler = Arc::new(move |req: Request<Incoming>, peer: Peer| -> HandlerFuture {
         let state = state.clone();
         Box::pin(async move { Ok(state.open(req, peer)) })
@@ -66,6 +69,22 @@ pub(crate) async fn run(listener: TcpListener, ctx: Ctx) -> Result<(), String> {
         Control::Disconnect { conn } => conns.close(conn),
     })
     .await
+}
+
+/// Settings clients would trip over, in words.
+fn problems(config: &SseServerConfig) -> Vec<String> {
+    let no_id = |e: &SseEventTemplate| e.id.trim().is_empty();
+    // A client that reconnects without the last event's id is never told it has everything.
+    if config.close_after_last && !config.repeat && config.events.last().is_some_and(no_id) {
+        return vec![if config.events.iter().all(no_id) {
+            "Close after the last event: give the events an id, or clients that reconnect get them all again".into()
+        } else {
+            "Close after the last event: give the last event an id, or clients that reconnect get the events after \
+             the last id again"
+                .into()
+        }];
+    }
+    Vec::new()
 }
 
 struct Sse {
@@ -114,6 +133,27 @@ impl Sse {
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty()),
         };
+        // A client that reconnects after the last event of a stream that ends there is told to
+        // stop: an EventSource doesn't reconnect after a 204.
+        let finished = {
+            let config = &self.live.borrow().server.sse;
+            config.close_after_last
+                && !config.repeat
+                && config
+                    .events
+                    .last()
+                    .is_some_and(|e| !e.id.is_empty() && Some(&e.id) == opened.last_event_id.as_ref())
+        };
+        if finished {
+            self.reporter.info(format!(
+                "GET {} from {} → 204 (the client has every event, so it stops reconnecting)",
+                opened.path, peer.addr
+            ));
+            let mut response = Response::new(Body::empty());
+            *response.status_mut() = StatusCode::NO_CONTENT;
+            *response.headers_mut() = headers;
+            return response;
+        }
         let (tx, rx) = mpsc::channel(BUFFERED_EVENTS);
         let conn = self.reporter.next_conn();
         tokio::spawn(session(
@@ -205,6 +245,17 @@ async fn play(
     let mut due = Instant::now();
     let mut keepalive = tokio::time::interval_at(Instant::now() + KEEPALIVE, KEEPALIVE);
 
+    let retry_ms = live.borrow().server.sse.retry_ms;
+    if retry_ms > 0 {
+        let sent = tokio::select! {
+            sent = stream.tx.send(Bytes::from(format!("retry: {retry_ms}\n\n"))) => sent.is_ok(),
+            _ = stream.closed.cancelled() => false,
+        };
+        if !sent {
+            return "client disconnected";
+        }
+    }
+
     macro_rules! send {
         ($event:expr, $data:expr, $id:expr) => {{
             let (event, data, id): (&str, &str, &str) = ($event, $data, $id);
@@ -227,7 +278,10 @@ async fn play(
             next = 0;
         }
         let pending = next < events.len();
+        // The last event went out (after its pause, so a client sees it before the end).
+        let ending = !pending && config.close_after_last && !config.repeat;
         tokio::select! {
+            _ = tokio::time::sleep_until(due), if ending => return "stream ended after the last event",
             _ = tokio::time::sleep_until(due), if pending => {
                 let e = &events[next];
                 let data = render(&e.data, Some(&values), &current.vars);
@@ -268,6 +322,24 @@ async fn play(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ending_without_ids_is_a_problem() {
+        let event = |id: &str| SseEventTemplate { data: "x".into(), id: id.into(), ..Default::default() };
+        let config = |events: Vec<SseEventTemplate>, repeat: bool| SseServerConfig {
+            events,
+            repeat,
+            close_after_last: true,
+            ..Default::default()
+        };
+        assert!(problems(&config(vec![event(""), event("")], false))[0].contains("give the events an id"));
+        assert!(problems(&config(vec![event("1"), event(" ")], false))[0].contains("give the last event an id"));
+        assert!(problems(&config(vec![event(""), event("2")], false)).is_empty(), "the last id is enough");
+        assert!(problems(&config(vec![event("")], true)).is_empty(), "repeating streams don't end");
+        assert!(problems(&config(Vec::new(), false)).is_empty());
+        let open = SseServerConfig { close_after_last: false, ..config(vec![event("")], false) };
+        assert!(problems(&open).is_empty());
+    }
 
     #[test]
     fn event_wire_format() {

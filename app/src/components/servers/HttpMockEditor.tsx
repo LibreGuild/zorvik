@@ -1,7 +1,7 @@
 // Mock API settings: the routes (list + the selected route's answer), what
 // happens to requests no route matches, and CORS.
 import { useMemo, useState } from "react";
-import { ChevronRight, Clock, Copy, CopyPlus, GripVertical, MoreHorizontal, Plus, Route as RouteIcon, Trash2, Wand2, Zap } from "lucide-react";
+import { ChevronRight, Clock, Copy, CopyPlus, GripVertical, ListOrdered, MoreHorizontal, Plus, Route as RouteIcon, Trash2, Wand2, Zap } from "lucide-react";
 import type { HttpMockConfig } from "../../bindings/HttpMockConfig";
 import type { KeyValue } from "../../bindings/KeyValue";
 import type { MockFallback } from "../../bindings/MockFallback";
@@ -9,6 +9,7 @@ import type { MockFault } from "../../bindings/MockFault";
 import type { MockRoute } from "../../bindings/MockRoute";
 import { statusTone, toneText } from "../../lib/format";
 import { COMMON_HEADERS, methodColor } from "../../lib/http";
+import { patternProblem } from "../../lib/messageMatch";
 import { copyText } from "../../lib/platform";
 import { isServerTab, updateServerTab, useTabs } from "../../store/tabs";
 import { toast } from "../../store/toasts";
@@ -31,6 +32,7 @@ import {
   STATUS_CODES,
   unusedPath,
 } from "./MockRoutes";
+import { SequenceEditor } from "./SequenceEditor";
 import { EditorSection } from "./ServerView";
 
 const FAULTS: { id: MockFault; label: string; hint: string }[] = [
@@ -235,6 +237,11 @@ function RouteList({
                 <Clock size={12} className="shrink-0 text-faint" />
               </Tooltip>
             )}
+            {(r.sequence?.length ?? 0) > 0 && (
+              <Tooltip content={`The first ${r.sequence!.length === 1 ? "call gets" : `${r.sequence!.length} calls get`} other answers${r.sequenceRepeat ? ", over and over" : ""}`}>
+                <ListOrdered size={12} className="shrink-0 text-faint" />
+              </Tooltip>
+            )}
             {fault && (
               <Tooltip content={`Fault: ${FAULTS.find((f) => f.id === r.fault)?.label ?? r.fault} (${r.faultPercent ?? 100}%)`}>
                 <Zap size={12} className="shrink-0 text-warning" />
@@ -272,7 +279,9 @@ function RouteEditor({ route, onChange, baseUrl }: { route: MockRoute; onChange:
   // Stable while typing in the body, so the editor doesn't re-highlight on every key.
   const placeholders = requestPlaceholders(route).join("\n");
   const variables = useMemo(() => [...names, ...placeholders.split("\n")], [names, placeholders]);
-  const conditions = (route.matchQuery ?? []).filter((q) => q.key.trim()).length + (route.matchHeaders ?? []).filter((h) => h.key.trim()).length + (route.matchBody ? 1 : 0);
+  const conditions =
+    (route.matchQuery ?? []).filter((q) => q.key.trim()).length + (route.matchHeaders ?? []).filter((h) => h.key.trim()).length + (route.matchBody ? 1 : 0) + (route.matchJson?.trim() ? 1 : 0);
+  const jsonProblem = route.matchJson?.trim() ? patternProblem("json", route.matchJson) : null;
   const [showConditions, setShowConditions] = useState(conditions > 0);
   const fault = route.fault ?? "none";
   const bodyless = route.status === 204 || route.status === 304 || (route.status >= 100 && route.status < 200);
@@ -390,8 +399,8 @@ function RouteEditor({ route, onChange, baseUrl }: { route: MockRoute; onChange:
             </div>
             <p className="text-[11.5px] text-faint">
               Use <code className="font-mono">{"{{request.params.id}}"}</code>, <code className="font-mono">{"{{request.query.q}}"}</code>,{" "}
-              <code className="font-mono">{"{{request.headers.name}}"}</code>, <code className="font-mono">{"{{request.body}}"}</code>, <code className="font-mono">{"{{$uuid}}"}</code> and
-              environment variables. {contentType ? "" : "Without a Content-Type header, JSON, XML, HTML or plain text is detected."}
+              <code className="font-mono">{"{{request.headers.name}}"}</code>, <code className="font-mono">{"{{request.body}}"}</code>, <code className="font-mono">{"{{request.json.user.id}}"}</code>{" "}
+              (one value of a JSON body), <code className="font-mono">{"{{$uuid}}"}</code> and environment variables. {contentType ? "" : "Without a Content-Type header, JSON, XML, HTML or plain text is detected."}
             </p>
           </>
         )}
@@ -434,6 +443,8 @@ function RouteEditor({ route, onChange, baseUrl }: { route: MockRoute; onChange:
         {fault !== "none" && <p className="text-[12px] text-muted">{FAULTS.find((f) => f.id === fault)?.hint} The delay still applies first.</p>}
       </EditorSection>
 
+      <SequenceEditor route={route} onChange={onChange} variables={variables} />
+
       <section className="flex flex-col gap-2.5 px-4 py-3">
         <button
           aria-expanded={showConditions}
@@ -457,6 +468,16 @@ function RouteEditor({ route, onChange, baseUrl }: { route: MockRoute; onChange:
             </div>
             <Field label="Body contains">
               <Input className="font-mono" value={route.matchBody ?? ""} placeholder='"type": "admin"' onChange={(e) => onChange({ matchBody: e.target.value })} />
+            </Field>
+            <Field label="JSON body" hint={jsonProblem ?? "A condition on a JSON body: $.type == \"admin\", $.items[0].id != 0, or just $.user.id (the value is there)."}>
+              <Input
+                className="font-mono"
+                aria-label="JSON body condition"
+                invalid={!!jsonProblem}
+                value={route.matchJson ?? ""}
+                placeholder='$.user.role == "admin"'
+                onChange={(e) => onChange({ matchJson: e.target.value })}
+              />
             </Field>
           </>
         )}

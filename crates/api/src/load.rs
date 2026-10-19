@@ -215,7 +215,8 @@ impl Api {
                     id: String,
                     run_id: String,
                     path: String,
-                    /// `json` or `html`.
+                    /// `json`, `html`, `secondsCsv` (one row per second) or
+                    /// `requestsCsv` (one row per request).
                     format: String,
                 }
                 let P { id, run_id, path, format } = params(p)?;
@@ -227,6 +228,8 @@ impl Api {
                         serde_json::to_vec_pretty(&summary).map_err(|e| ApiError::new("internal", e.to_string()))?
                     }
                     "html" => zorvik_load::html_report(&name, &summary).into_bytes(),
+                    "secondsCsv" => zorvik_load::seconds_csv(&summary).into_bytes(),
+                    "requestsCsv" => zorvik_load::requests_csv(&summary).into_bytes(),
                     other => return Err(ApiError::invalid(format!("Unknown report format '{other}'"))),
                 };
                 tokio::task::spawn_blocking(move || std::fs::write(&path, data).map_err(|e| (path, e)))
@@ -430,6 +433,8 @@ impl Api {
             model: test.model,
             stages: test.stages.clone(),
             think_time: std::time::Duration::from_millis(test.think_time_ms),
+            think_time_max: test.think_time_max_ms.map(std::time::Duration::from_millis),
+            warm_up: std::time::Duration::from_secs(u64::from(test.warm_up_secs)),
             max_in_flight: test.max_in_flight,
             keep_alive: test.keep_alive,
             options,
@@ -747,6 +752,8 @@ mod tests {
             model: Default::default(),
             stages: Vec::new(),
             think_time: std::time::Duration::ZERO,
+            think_time_max: None,
+            warm_up: std::time::Duration::ZERO,
             max_in_flight: 1,
             keep_alive: true,
             options: Default::default(),

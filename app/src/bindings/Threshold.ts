@@ -9,4 +9,9 @@ export type Threshold = { metric: ThresholdMetric, op: ThresholdOp, value: numbe
 /**
  * Only this target (request path); the whole test when missing.
  */
-target?: string, enabled?: boolean, };
+target?: string, enabled?: boolean, 
+/**
+ * Stop the run early when this threshold has failed for this many
+ * seconds in a row (checked live, after the warm-up); never when missing.
+ */
+abortAfterSecs?: number, };

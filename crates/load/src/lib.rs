@@ -8,6 +8,7 @@
 //! captures are checked (misses are counted) but no later request uses them.
 
 mod capture;
+mod csv;
 mod html;
 mod metrics;
 pub mod report;
@@ -22,6 +23,7 @@ use zorvik_engine::{HttpRequest, HttpVersionPref, RequestOptions};
 use zorvik_formats::{LoadCapture, LoadModel, LoadStage, Threshold};
 
 pub use capture::{DataRow, UserVars, server_timing_ms};
+pub use csv::{requests_csv, seconds_csv};
 pub use report::*;
 
 /// Most virtual users / requests per second a plan may ask for.
@@ -84,6 +86,11 @@ pub struct Plan {
     pub model: LoadModel,
     pub stages: Vec<LoadStage>,
     pub think_time: Duration,
+    /// Closed model: each pause is random between `think_time` and this (a
+    /// fixed pause when `None`), so users don't send in lock-step.
+    pub think_time_max: Option<Duration>,
+    /// Requests that finish this early in the run are charted but not counted.
+    pub warm_up: Duration,
     pub max_in_flight: u32,
     pub keep_alive: bool,
     /// Timeout, TLS, proxy, HTTP version, redirects, decompression.
@@ -232,6 +239,22 @@ pub fn validate(plan: &Plan) -> Result<(), String> {
     };
     if let Some(stage) = plan.stages.iter().find(|s| s.target > limit) {
         return Err(format!("{} {what} is more than the limit of {limit}", stage.target));
+    }
+    if let Some(max) = plan.think_time_max.filter(|max| plan.model == LoadModel::VirtualUsers && *max < plan.think_time)
+    {
+        return Err(format!(
+            "The longest think time ({} ms) is shorter than the shortest ({} ms)",
+            max.as_millis(),
+            plan.think_time.as_millis()
+        ));
+    }
+    let planned = Duration::from_secs(plan.stages.iter().map(|s| u64::from(s.duration_secs)).sum());
+    if !plan.warm_up.is_zero() && plan.warm_up >= planned {
+        return Err(format!(
+            "The warm-up ({} s) must end before the run does ({} s): nothing would be counted",
+            plan.warm_up.as_secs(),
+            planned.as_secs()
+        ));
     }
     if plan.model == LoadModel::ArrivalRate && plan.max_in_flight == 0 {
         return Err("Allow at least one request in flight".into());

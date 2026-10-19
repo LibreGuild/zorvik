@@ -112,6 +112,8 @@ indexmap = { version = "2", features = ["serde"] }
 dirs = "7"
 tempfile = "3"
 regex = "1"
+# Finding secrets in binary messages (agent connections).
+memchr = "2"
 # Response filters: JSONPath (RFC 9535) and jq.
 serde_json_path = "0.7"
 jaq-core = "3.1"

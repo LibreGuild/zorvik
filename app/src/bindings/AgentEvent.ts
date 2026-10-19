@@ -3,7 +3,8 @@ import type { AgentActivity } from "./AgentActivity";
 import type { AgentConfirm } from "./AgentConfirm";
 import type { AgentSession } from "./AgentSession";
 import type { AgentTarget } from "./AgentTarget";
+import type { Opened } from "./Opened";
 import type { Request } from "./Request";
 import type { RunStarted } from "./RunStarted";
 
-export type AgentEvent = { "type": "sessions", sessions: Array<AgentSession>, } | { "type": "activity", entry: AgentActivity, } | { "type": "confirm", request: AgentConfirm, } | { "type": "confirmClosed", id: string, } | { "type": "show", target: AgentTarget, explicit: boolean, } | { "type": "response", path: string | null, request: Request, kind: string, result: unknown, } | { "type": "run", folder: string, run: RunStarted, } | { "type": "workspaceChanged" };
+export type AgentEvent = { "type": "sessions", sessions: Array<AgentSession>, } | { "type": "activity", entry: AgentActivity, } | { "type": "confirm", request: AgentConfirm, } | { "type": "confirmClosed", id: string, } | { "type": "show", target: AgentTarget, explicit: boolean, } | { "type": "response", path: string | null, request: Request, kind: string, result: unknown, } | { "type": "run", folder: string, run: RunStarted, } | { "type": "stream", path: string | null, request: Request, connId: string, opened: Opened, } | { "type": "workspaceChanged" };

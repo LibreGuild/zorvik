@@ -66,15 +66,21 @@ The composer at the bottom publishes messages:
 | **Topic** | The topic to publish to, for example `devices/42/state`. No wildcards. `{{variables}}` allowed. |
 | **QoS** | 0, 1 or 2. |
 | **Retain** | The broker keeps the last retained message of the topic and sends it to new subscribers. |
-| **Text** / **JSON** / **Binary (hex)** | The payload: text (with `{{variables}}` replaced) or hex bytes. |
+| **Text** / **JSON** / **Binary** | The payload: text (with `{{variables}}` replaced), or bytes typed in hex. **Binary** can also stream a **File** or the **Microphone**, one publish to the topic per piece, as described for [WebSocket](../websocket/#binary-stream-a-file). |
 
 Press **Send** or <kbd>Mod</kbd>+<kbd>Enter</kbd>. Zorvik checks what the broker announced before sending: the highest QoS it accepts, whether it supports retained messages, and how many QoS 1 and 2 messages may wait for its acknowledgement at once. The acknowledgement flows (`PUBACK`, or `PUBREC`/`PUBREL`/`PUBCOMP` for QoS 2) are handled for you, in both directions. Nothing is stored on disk.
 
 ## The message log
 
-Incoming and outgoing messages show their topic as a badge and, in the details, the QoS and flags, for example **QoS 1 · retained** or **QoS 2 · duplicate**. Payloads are shown as text when they are valid UTF-8, otherwise as hex. Subscriptions, errors and the broker disconnecting (**The broker disconnected: …**) appear as notes.
+Incoming and outgoing messages show their topic as a badge and, in the details, the QoS and flags, for example **QoS 1 · retained** or **QoS 2 · duplicate**. Payloads are shown as text when they are valid UTF-8, otherwise as hex. Subscriptions, errors and the broker disconnecting (**The broker disconnected: …**) appear as notes. The filter (words, or a JSON condition such as `$.unit == celsius`), the **View** menu and **Export the log…** work as for [WebSocket](../websocket/#the-message-log).
+
+Above the log, a chip for each topic says how many messages it had, the busiest first. Click a chip to show only that topic, and click it again to show every topic; <kbd>Mod</kbd>-click a chip to hide a noisy topic (it is struck through) and **Show all** to bring everything back. This works like the [event chips of Socket.IO requests](../socketio/#event-chips).
 
 Packets up to 16 MB are accepted and sent.
+
+## AI agents
+
+Coding agents connected through `zorvik mcp` can open MQTT connections with `open_connection` (subscribing to the request's enabled filters), publish with `send_message` (`topic`, `qos` and `retain`, by default the request's), wait for a message on a topic with `wait_for_message` (`event` is the topic) and read the log with `read_messages`. See [Tools](../../agents/tools/#live-connections).
 
 ## Saved format
 

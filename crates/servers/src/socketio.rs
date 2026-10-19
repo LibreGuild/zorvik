@@ -1,7 +1,8 @@
 //! Socket.IO server (Socket.IO 3 and 4, Engine.IO 4): HTTP long-polling and WebSocket,
 //! including the upgrade from polling that socket.io-client makes by default. Clients may
 //! join any namespace. Events are answered by echo or by rules (acknowledgements, replies,
-//! broadcasts to the namespace); the UI can emit to one client or all of them.
+//! broadcasts to the namespace); scheduled events go to a namespace on a timer; the UI can
+//! emit to one client or all of them.
 //!
 //! One Engine.IO session is one connection in the log. Each session has a task that owns
 //! its Socket.IO state; the HTTP handlers and the WebSocket only move packets in and out.
@@ -29,12 +30,14 @@ use tokio_util::sync::CancellationToken;
 use zorvik_engine::socketio::packet::{
     self, CLOSE, Frame, Handshake, Kind, MESSAGE, NOOP, OPEN, PING, PONG, Packet, UPGRADE,
 };
+use zorvik_formats::matching::MessageMatcher;
+use zorvik_formats::server::MIN_SCHEDULE_MS;
 use zorvik_formats::{MatchKind, ReplyMode, SocketIoRule};
 use zorvik_workspace::vars::VarContext;
 
 use crate::http::{Abort, Body, Handler, HandlerFuture, Peer, add_cors, preflight, serve};
 use crate::report::{OutgoingMessage, Reporter, TrafficDirection};
-use crate::{Control, Ctx, Live};
+use crate::{Control, Ctx, Live, PerConfig};
 
 const PING_INTERVAL: Duration = Duration::from_secs(25);
 const PING_TIMEOUT: Duration = Duration::from_secs(20);
@@ -48,11 +51,15 @@ const MAX_DELAY: Duration = Duration::from_secs(3600);
 pub(crate) async fn run(listener: TcpListener, ctx: Ctx) -> Result<(), String> {
     let server = Arc::new(Server {
         live: ctx.live.clone(),
+        patterns: PerConfig::new(ctx.live.clone(), |live, _| {
+            live.server.socketio.rules.iter().map(Pattern::new).collect()
+        }),
         reporter: ctx.reporter.clone(),
         stopped: ctx.cancel.clone(),
         sessions: Mutex::new(HashMap::new()),
     });
-    tokio::spawn(report_problems(ctx.live.clone(), ctx.reporter.clone(), ctx.cancel.clone()));
+    crate::report_problems(&ctx, |live| problems(&live.server.socketio.rules));
+    tokio::spawn(schedule(server.clone(), ctx.cancel.clone()));
     let handler: Handler = {
         let server = server.clone();
         Arc::new(move |req: Request<Incoming>, peer: Peer| -> HandlerFuture {
@@ -73,33 +80,110 @@ pub(crate) async fn run(listener: TcpListener, ctx: Ctx) -> Result<(), String> {
     .await
 }
 
-/// Rules that can never match (bad regex) are reported when they appear.
-async fn report_problems(mut live: watch::Receiver<Arc<Live>>, reporter: Reporter, stopped: CancellationToken) {
-    let mut reported: Vec<String> = Vec::new();
+/// Scheduled events: each goes to every client of its namespace every `everyMs`. A change of
+/// the scheduled events starts the timers again; other edits keep them running.
+async fn schedule(server: Arc<Server>, stopped: CancellationToken) {
+    use tokio::time::{Instant, sleep_until};
+    let mut live = server.live.clone();
+    let mut current = live.borrow_and_update().clone();
     loop {
-        let problems = problems(&live.borrow_and_update().server.socketio.rules);
-        for p in problems.iter().filter(|p| !reported.contains(p)) {
-            reporter.error(None, None, p.clone());
-        }
-        reported = problems;
-        tokio::select! {
-            changed = live.changed() => if changed.is_err() { return },
-            _ = stopped.cancelled() => return,
+        let start = Instant::now();
+        // When each enabled event is next due, and how often; arguments that aren't JSON are
+        // reported once, not with every tick.
+        let mut due: Vec<Option<(Instant, Duration)>> = current
+            .server
+            .socketio
+            .schedule
+            .iter()
+            .map(|m| {
+                let every = Duration::from_millis(m.every_ms.max(MIN_SCHEDULE_MS));
+                (m.enabled && !m.event.trim().is_empty()).then_some((start + every, every))
+            })
+            .collect();
+        loop {
+            let next = due.iter().flatten().map(|(at, _)| *at).min();
+            tokio::select! {
+                _ = sleep_until(next.unwrap_or(start)), if next.is_some() => {
+                    let now = Instant::now();
+                    for (i, slot) in due.iter_mut().enumerate() {
+                        let Some((at, every)) = slot else { continue };
+                        if *at > now {
+                            continue;
+                        }
+                        // A late tick is not caught up with a burst.
+                        let next = *at + *every;
+                        *at = if next <= now { now + *every } else { next };
+                        let m = &current.server.socketio.schedule[i];
+                        let ns = format!("/{}", m.namespace.trim().trim_start_matches('/'));
+                        match render_args(&m.args, None, &current.vars) {
+                            Ok(args) => {
+                                for session in server.members(&ns) {
+                                    server.emit(&session, &ns, m.event.trim(), args.clone());
+                                }
+                            }
+                            Err(e) => {
+                                server.reporter.error(None, None, format!("Scheduled event {}: {e}", i + 1));
+                                *slot = None;
+                            }
+                        }
+                    }
+                }
+                changed = live.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                    let next = live.borrow_and_update().clone();
+                    let restart = next.server.socketio.schedule != current.server.socketio.schedule;
+                    current = next;
+                    if restart {
+                        break;
+                    }
+                }
+                _ = stopped.cancelled() => return,
+            }
         }
     }
 }
 
+/// Rules that can never match (bad regex or JSON condition).
 fn problems(rules: &[SocketIoRule]) -> Vec<String> {
     rules
         .iter()
         .enumerate()
-        .filter(|(_, r)| r.enabled && r.matcher == MatchKind::Regex)
-        .filter_map(|(i, r)| regex::Regex::new(&r.pattern).err().map(|e| format!("Rule {}: invalid regex: {e}", i + 1)))
+        .filter(|(_, r)| r.enabled)
+        .filter_map(|(i, r)| match Pattern::new(r) {
+            Pattern::Invalid(e) => Some(format!("Rule {}: {e}", i + 1)),
+            _ => None,
+        })
         .collect()
+}
+
+/// How a rule's pattern is checked, compiled once per configuration.
+enum Pattern {
+    /// Any, contains or exact: compared as text.
+    Text,
+    /// A regex or JSON condition.
+    Compiled(MessageMatcher),
+    /// A regex or JSON condition that doesn't parse (why): the rule never matches.
+    Invalid(String),
+}
+
+impl Pattern {
+    fn new(rule: &SocketIoRule) -> Self {
+        match rule.matcher {
+            MatchKind::Regex | MatchKind::Json => match MessageMatcher::new(rule.matcher, rule.pattern.as_bytes()) {
+                Ok(m) => Self::Compiled(m),
+                Err(e) => Self::Invalid(e),
+            },
+            MatchKind::Any | MatchKind::Contains | MatchKind::Exact => Self::Text,
+        }
+    }
 }
 
 struct Server {
     live: watch::Receiver<Arc<Live>>,
+    /// The rules' patterns, compiled (one per rule of the configuration they come with).
+    patterns: PerConfig<Vec<Pattern>>,
     reporter: Reporter,
     stopped: CancellationToken,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
@@ -532,7 +616,7 @@ impl Server {
 
     /// Echo or the first matching rule.
     fn answer(self: &Arc<Self>, session: &Arc<Session>, ns: &str, name: &str, args: Vec<Value>, id: Option<u64>) {
-        let live = self.config();
+        let (live, patterns) = self.patterns.get();
         let config = &live.server.socketio;
         match config.mode {
             ReplyMode::Echo => {
@@ -542,7 +626,16 @@ impl Server {
                 self.emit(session, ns, name, args);
             }
             ReplyMode::Rules => {
-                let Some(rule) = config.rules.iter().find(|r| rule_matches(r, name, &args)).cloned() else { return };
+                let arguments = Arguments::new(&args);
+                let Some(rule) = config
+                    .rules
+                    .iter()
+                    .zip(patterns.iter())
+                    .find(|(rule, pattern)| rule_matches(rule, pattern, name, &arguments))
+                    .map(|(rule, _)| rule.clone())
+                else {
+                    return;
+                };
                 let event = (name.to_string(), args);
                 let server = self.clone();
                 let session = session.clone();
@@ -719,24 +812,48 @@ fn random_id() -> String {
     (0..20).map(|_| ALPHABET[rand::random_range(0..ALPHABET.len())] as char).collect()
 }
 
-/// Whether `rule` answers the event: its name (or `*`), then its pattern against the
-/// arguments as JSON (`["hi",{"n":1}]`) or, for one text argument, that text.
-fn rule_matches(rule: &SocketIoRule, name: &str, args: &[Value]) -> bool {
+/// An event's arguments as rules see them, worked out once per event.
+struct Arguments<'a> {
+    /// The arguments as a JSON array.
+    value: Value,
+    /// The same as JSON text (`["hi",{"n":1}]`).
+    json: String,
+    /// The text of a single text argument.
+    single: Option<&'a str>,
+}
+
+impl<'a> Arguments<'a> {
+    fn new(args: &'a [Value]) -> Self {
+        let value = Value::Array(args.to_vec());
+        let json = value.to_string();
+        let single = match args {
+            [Value::String(s)] => Some(s.as_str()),
+            _ => None,
+        };
+        Self { value, json, single }
+    }
+
+    fn texts(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.json.as_str()).chain(self.single)
+    }
+}
+
+/// Whether `rule` answers the event: its name (or `*`), then its pattern (compiled from the
+/// rule) against the arguments as JSON (`["hi",{"n":1}]`) or, for one text argument, that text.
+fn rule_matches(rule: &SocketIoRule, pattern: &Pattern, name: &str, args: &Arguments) -> bool {
     let wanted = rule.event.trim();
     if !rule.enabled || !(wanted == "*" || wanted.is_empty() || wanted == name) {
         return false;
     }
-    let json = Value::Array(args.to_vec()).to_string();
-    let single = match args {
-        [Value::String(s)] => Some(s.as_str()),
-        _ => None,
-    };
-    let candidates: Vec<&str> = std::iter::once(json.as_str()).chain(single).collect();
-    match rule.matcher {
-        MatchKind::Any => true,
-        MatchKind::Contains => candidates.iter().any(|c| c.contains(rule.pattern.as_str())),
-        MatchKind::Exact => candidates.iter().any(|c| c.trim() == rule.pattern.trim()),
-        MatchKind::Regex => regex::Regex::new(&rule.pattern).is_ok_and(|re| candidates.iter().any(|c| re.is_match(c))),
+    match (rule.matcher, pattern) {
+        (MatchKind::Any, _) => true,
+        (MatchKind::Contains, _) => args.texts().any(|c| c.contains(rule.pattern.as_str())),
+        (MatchKind::Exact, _) => args.texts().any(|c| c.trim() == rule.pattern.trim()),
+        (MatchKind::Json, Pattern::Compiled(m)) => {
+            m.matches_json(&args.value) == Some(true) || args.single.is_some_and(|s| m.matches(s.as_bytes()))
+        }
+        (MatchKind::Regex, Pattern::Compiled(m)) => args.texts().any(|c| m.matches(c.as_bytes())),
+        _ => false,
     }
 }
 
@@ -781,6 +898,10 @@ mod tests {
         SocketIoRule { event: event.into(), matcher, pattern: pattern.into(), ..Default::default() }
     }
 
+    fn rule_matches(rule: &SocketIoRule, name: &str, args: &[Value]) -> bool {
+        super::rule_matches(rule, &Pattern::new(rule), name, &Arguments::new(args))
+    }
+
     #[test]
     fn rules_match_by_event_and_arguments() {
         let hi = [json!("hi there")];
@@ -794,7 +915,21 @@ mod tests {
         assert!(!rule_matches(&rule("save", MatchKind::Regex, "("), "save", &obj), "a bad regex never matches");
         let off = SocketIoRule { enabled: false, ..rule("*", MatchKind::Any, "") };
         assert!(!rule_matches(&off, "x", &hi));
-        assert_eq!(problems(&[rule("a", MatchKind::Regex, "(")]).len(), 1);
+        // JSON conditions look at the arguments, or at one text argument that is JSON.
+        assert!(rule_matches(&rule("save", MatchKind::Json, "$[0].id == 7"), "save", &obj));
+        assert!(!rule_matches(&rule("save", MatchKind::Json, "$[0].id == 8"), "save", &obj));
+        assert!(rule_matches(&rule("raw", MatchKind::Json, "$.a == 1"), "raw", &[json!(r#"{"a": 1}"#)]));
+        assert!(!rule_matches(&rule("save", MatchKind::Json, "$..id"), "save", &obj), "a bad condition never matches");
+        // Both kinds of patterns that can't be used are reported.
+        let found = problems(&[
+            rule("a", MatchKind::Regex, "("),
+            rule("b", MatchKind::Json, "$..id == 1"),
+            rule("c", MatchKind::Json, "$[0].id == 7"),
+            SocketIoRule { enabled: false, ..rule("d", MatchKind::Regex, "(") },
+        ]);
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(found[0].starts_with("Rule 1: invalid regex"), "{found:?}");
+        assert!(found[1].starts_with("Rule 2: ") && found[1].contains("not a JSON path"), "{found:?}");
     }
 
     #[test]

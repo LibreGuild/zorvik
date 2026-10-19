@@ -1,8 +1,8 @@
 // Small building blocks shared by the load test editor, results and sidebar.
-import { useEffect, useLayoutEffect, useRef, useState, type InputHTMLAttributes, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Activity } from "lucide-react";
 import type { LoadModel } from "../../bindings/LoadModel";
-import { cx, Input } from "../ui";
+import { cx } from "../ui";
 import { MODELS } from "./model";
 
 /** The model as a badge: "VU" or "RPS". */
@@ -43,70 +43,6 @@ export function useTicker(on: boolean, ms = 1000): number {
     return () => clearInterval(t);
   }, [on, ms]);
   return tick;
-}
-
-/** Whole numbers in the file are u32 (a larger one would make the save fail). */
-const MAX_WHOLE = 4_294_967_295;
-
-/**
- * A number field that lets the text be edited freely (empty, "1." …) and reports numbers
- * of at least `min`. Emptying it changes nothing (the value shows again on blur), except
- * `optional` fields, which report `undefined`. Values above `max` are reported and shown
- * as invalid, so a start that fails for it is explained.
- */
-export function NumberInput({
-  value,
-  onChange,
-  min = 0,
-  max = Number.MAX_SAFE_INTEGER,
-  integer = true,
-  optional,
-  className,
-  ...rest
-}: Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "min" | "max"> & {
-  value: number | undefined;
-  onChange: (v: number | undefined) => void;
-  min?: number;
-  max?: number;
-  integer?: boolean;
-  optional?: boolean;
-}) {
-  const [text, setText] = useState("");
-  const [focused, setFocused] = useState(false);
-  const shown = focused ? text : value === undefined ? "" : String(value);
-  const over = value !== undefined && value > max;
-  const invalid = over || rest["aria-invalid"] === true;
-  return (
-    <Input
-      {...rest}
-      inputMode={integer ? "numeric" : "decimal"}
-      className={cx("font-mono tabular-nums", className)}
-      invalid={invalid}
-      aria-invalid={invalid || undefined}
-      value={shown}
-      onFocus={(e) => {
-        setText(value === undefined ? "" : String(value));
-        setFocused(true);
-        rest.onFocus?.(e);
-      }}
-      onBlur={(e) => {
-        setFocused(false);
-        rest.onBlur?.(e);
-      }}
-      onChange={(e) => {
-        const raw = e.target.value;
-        setText(raw);
-        const trimmed = raw.trim();
-        if (!trimmed) {
-          if (optional) onChange(undefined);
-          return;
-        }
-        const n = Number(trimmed);
-        if (!Number.isFinite(n)) return;
-        onChange(Math.max(min, integer ? Math.min(MAX_WHOLE, Math.trunc(n)) : n));
-      }}
-    />
-  );
 }
 
 /** A titled panel on the results side. */

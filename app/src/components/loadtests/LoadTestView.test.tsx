@@ -201,6 +201,22 @@ describe("load test tab", () => {
     expect(within(screen.getByTestId("load-errors")).getByText("Timed out")).toBeTruthy();
   });
 
+  it("says why a live run is stopping and that it is warming up", () => {
+    renderView();
+    const live = (snap: Snapshot, stopping: boolean) =>
+      act(() => {
+        useLoadTests.setState({
+          active: { runId: "r1", testId: "users", workspacePath: WS, name: "Users load test", startedAt: Date.now() - 3_000, plannedMs: 60_000, model: "virtualUsers", snapshot: snap, points: points(3), stopping },
+        });
+      });
+    live({ ...snapshot, elapsedMs: 3000, warmUpMs: 10_000 }, false);
+    expect(screen.getByTestId("load-warm-up-note").textContent).toBe("Warming up: requests in the first 10 s are charted but not counted.");
+    live({ ...snapshot, phase: "stopping", elapsedMs: 12_000, warmUpMs: 10_000, stoppedByThreshold: "p95 < 500 ms" }, true);
+    expect(screen.getByTestId("load-warm-up-note").textContent).toBe("The first 10 s (warm-up) are charted but not counted.");
+    expect(screen.getByText(/Stopping: p95 < 500 ms failed for longer than it allows\./)).toBeTruthy();
+    expect(within(screen.getByTestId("load-threshold-results")).getByTestId("load-threshold-stopped")).toBeTruthy();
+  });
+
   it("shows the latest finished run with its verdict", async () => {
     mocked.loadRuns.mockResolvedValue([
       { runId: "r9", startedAt: summary.startedAt, durationMs: 60_000, passed: true, stoppedEarly: false, requests: 6000, rps: 100, p95: 25, errorRate: 0, error: null },
@@ -241,17 +257,94 @@ describe("load test tab", () => {
 
   it("keeps option values within what the file and the generator accept", () => {
     renderView();
-    fireEvent.change(screen.getByLabelText("Think time in milliseconds"), { target: { value: "99999999999" } });
+    // Values out of range become the nearest allowed one when the field is left.
+    const think = screen.getByLabelText("Think time in milliseconds");
+    fireEvent.change(think, { target: { value: "99999999999" } });
+    fireEvent.blur(think);
     expect(draft().thinkTimeMs).toBe(3_600_000);
-    fireEvent.change(screen.getByLabelText("Timeout in milliseconds"), { target: { value: "-5" } });
+    const timeout = screen.getByLabelText("Timeout in milliseconds");
+    fireEvent.change(timeout, { target: { value: "-5" } });
+    fireEvent.blur(timeout);
     expect(draft().timeoutMs).toBe(0);
-    fireEvent.change(screen.getByLabelText("Timeout in milliseconds"), { target: { value: "" } });
+    fireEvent.change(timeout, { target: { value: "" } });
     expect(draft().timeoutMs).toBeUndefined();
     // Above the limit is kept (and explained) but never beyond a whole number the file can hold.
     const target = screen.getByLabelText("Stage 1 target");
     fireEvent.change(target, { target: { value: "1e20" } });
+    fireEvent.keyDown(target, { key: "Enter" });
     expect(draft().stages[0].target).toBe(4_294_967_295);
     expect(target.getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("edits a random think time, the warm-up and stopping early on a threshold", () => {
+    renderView();
+    fireEvent.change(screen.getByLabelText("Think time in milliseconds"), { target: { value: "500" } });
+    const longest = screen.getByLabelText("Longest think time in milliseconds");
+    fireEvent.change(longest, { target: { value: "200" } });
+    expect(draft().thinkTimeMaxMs).toBe(200);
+    expect(longest.getAttribute("aria-invalid")).toBe("true");
+    fireEvent.change(longest, { target: { value: "1500" } });
+    expect(longest.getAttribute("aria-invalid")).toBeNull();
+    fireEvent.change(longest, { target: { value: "" } });
+    expect(draft().thinkTimeMaxMs).toBeUndefined();
+
+    const warmUp = screen.getByLabelText("Warm-up in seconds");
+    fireEvent.change(warmUp, { target: { value: "60" } });
+    expect(draft().warmUpSecs).toBe(60);
+    expect(screen.getByText("Longer than the stages: nothing would be counted")).toBeTruthy();
+    fireEvent.change(warmUp, { target: { value: "5" } });
+    expect(draft().warmUpSecs).toBe(5);
+    fireEvent.change(warmUp, { target: { value: "0" } });
+    expect(draft().warmUpSecs).toBeUndefined();
+
+    const stop = screen.getByRole("button", { name: "Stop the run early when this threshold keeps failing" });
+    expect(stop.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(stop);
+    expect(draft().thresholds?.[0].abortAfterSecs).toBe(10);
+    fireEvent.change(screen.getByLabelText("Seconds failing before the run stops"), { target: { value: "30" } });
+    expect(draft().thresholds?.[0].abortAfterSecs).toBe(30);
+    fireEvent.click(stop);
+    expect(draft().thresholds?.[0].abortAfterSecs).toBeUndefined();
+    expect(screen.queryByLabelText("Seconds failing before the run stops")).toBeNull();
+  });
+
+  it("shows a run stopped by a threshold, its warm-up and each request's status codes", async () => {
+    const label = "errorRate < 1 %";
+    const stopped: Summary = {
+      ...summary,
+      durationMs: 14_000,
+      passed: false,
+      stoppedEarly: true,
+      stoppedByThreshold: label,
+      warmUpMs: 5000,
+      thresholds: [{ label, metric: "errorRate", op: "<", value: 1, target: null, actual: 40, passed: false }],
+      targets: [
+        { name: "List users", request: "Users/List.yaml", metrics: { ...totals(3000), statusCodes: [[200, 3000]] } },
+        { name: "Create user", request: "Users/Create.yaml", metrics: { ...totals(2000, 2000), statusCodes: [[503, 2000]], errorKinds: [["io", 3]] } },
+      ],
+    };
+    mocked.loadRuns.mockResolvedValue([
+      { runId: "r12", startedAt: stopped.startedAt, durationMs: 14_000, passed: false, stoppedEarly: true, requests: 5000, rps: 100, p95: 25, errorRate: 40, error: null },
+    ]);
+    mocked.loadRun.mockResolvedValue(stopped);
+    renderView();
+    const verdict = await screen.findByTestId("load-verdict");
+    expect(verdict.textContent).toContain("FAILED");
+    expect(verdict.textContent).toContain("Stopped by a threshold");
+    expect(verdict.textContent).toContain("Stopped early: errorRate < 1 % failed for longer than it allows.");
+    expect(verdict.textContent).toContain("The first 5 s (warm-up) are charted but left out");
+    expect(within(screen.getByTestId("load-threshold-results")).getByTestId("load-threshold-stopped")).toBeTruthy();
+
+    // All requests, then one request's status codes and errors.
+    const codes = screen.getByTestId("load-status-codes");
+    expect(codes.textContent).toContain("200");
+    expect(screen.getByTestId("load-status-classes").textContent).toContain("2xx");
+    fireEvent.change(screen.getByLabelText("Status codes and errors of"), { target: { value: "Users/Create.yaml" } });
+    expect(within(screen.getByTestId("load-status-codes")).queryByText("200")).toBeNull();
+    expect(within(screen.getByTestId("load-status-codes")).getByText("503")).toBeTruthy();
+    expect(within(screen.getByTestId("load-errors")).getByText("Connection broke")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Status codes and errors of"), { target: { value: "" } });
+    expect(within(screen.getByTestId("load-status-codes")).getByText("200")).toBeTruthy();
   });
 
   it("explains why a test can't start", () => {
@@ -269,6 +362,10 @@ describe("load test tab", () => {
     const capture = { variable: "id", from: "json" as const, path: "" };
     expect(startProblem({ ...test, targets: [{ request: "Users/List.yaml", captures: [capture] }] }, tree)).toBe("A capture needs a variable name and a path");
     expect(startProblem({ ...test, targets: [{ request: "Users/List.yaml", captures: [{ ...capture, path: "$.id" }] }] }, tree)).toBeNull();
+    const listed = { ...test, targets: [{ request: "Users/List.yaml" }] };
+    expect(startProblem({ ...listed, thinkTimeMs: 500, thinkTimeMaxMs: 200 }, tree)).toBe("The longest think time is shorter than the shortest");
+    expect(startProblem({ ...listed, warmUpSecs: 60 }, tree)).toBe("The warm-up must end before the run does");
+    expect(startProblem({ ...listed, thinkTimeMs: 200, thinkTimeMaxMs: 500, warmUpSecs: 10 }, tree)).toBeNull();
   });
 
   it("edits a request's captures and the data file", async () => {

@@ -1,6 +1,6 @@
 // Live traffic of a server: counters, a filterable log, and a composer to
 // send to one client or all of them.
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownLeft,
   ArrowLeftRight,
@@ -15,9 +15,11 @@ import {
   Link2Off,
   Search,
   Send,
+  SquarePlus,
   Trash2,
   Unplug,
 } from "lucide-react";
+import type { MockRoute } from "../../bindings/MockRoute";
 import type { OutgoingMessage } from "../../bindings/OutgoingMessage";
 import type { RunningServerInfo } from "../../bindings/RunningServerInfo";
 import type { Server } from "../../bindings/Server";
@@ -32,17 +34,52 @@ import { useWorkspace } from "../../store/workspace";
 import { beautifyJson } from "../request/jsonFormat";
 import { Button, cx, EmptyState, IconButton, Segmented } from "../ui";
 import { SERVER_KINDS } from "./kinds";
+import { methodText, routeFromExchange, routesFromTraffic } from "./MockRoutes";
 
 const EMPTY: TrafficEntry[] = [];
 
 const plural = (n: number, word: string) => (n === 1 ? word : word === "query" ? "queries" : `${word}s`);
 
-export function TrafficPanel({ serverId, server, running }: { serverId: string; server: Server; running?: RunningServerInfo }) {
+export function TrafficPanel({
+  serverId,
+  server,
+  running,
+  onAddRoutes,
+}: {
+  serverId: string;
+  server: Server;
+  running?: RunningServerInfo;
+  /** Mock APIs: add routes to the server (recorded from proxied answers). */
+  onAddRoutes?: (routes: MockRoute[]) => void;
+}) {
   const wsPath = useWorkspace((s) => s.info?.path ?? "");
   const entries = useServers((s) => s.logs[serverKey(wsPath, serverId)] ?? EMPTY);
   const [filter, setFilter] = useState("");
   const [target, setTarget] = useState<number | null>(null);
   const stats = running?.stats;
+  const canRecord = server.kind === "http" && !!onAddRoutes;
+  const proxied = useMemo(() => canRecord && entries.some((e) => e.http?.note === "proxy" && e.http.status > 0), [canRecord, entries]);
+
+  // Stable for the memoized rows, which re-render with every batch of traffic otherwise.
+  const addRoutes = useRef(onAddRoutes);
+  addRoutes.current = onAddRoutes;
+  const saveRoute = useCallback((e: TrafficEntry) => {
+    const made = e.http ? routeFromExchange(e.http) : null;
+    if (!made || !addRoutes.current) return;
+    addRoutes.current([made.route]);
+    const { route } = made;
+    toast("success", "Route added", [`${methodText(route.method)} ${route.path} → ${route.status}. Save the server to keep it.`, ...made.notes].join(" "));
+  }, []);
+  const saveAll = () => {
+    const { routes, skipped, notes } = routesFromTraffic(entries, server.http?.routes ?? []);
+    const cut = skipped ? ` ${skipped} answer${skipped === 1 ? " was" : "s were"} cut, binary or compressed and can't be replayed.` : "";
+    if (!routes.length) {
+      toast("info", "No new answers to save", `Every proxied answer already has a route.${cut}`);
+      return;
+    }
+    onAddRoutes?.(routes);
+    toast("success", `${routes.length} route${routes.length === 1 ? "" : "s"} added`, [`Matching requests are answered by the mock now. Save the server to keep them.${cut}`, ...notes].join(" "));
+  };
 
   const visible = useMemo(() => {
     const q = filter.trim();
@@ -88,6 +125,11 @@ export function TrafficPanel({ serverId, server, running }: { serverId: string; 
             className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-faint"
           />
         </div>
+        {proxied && (
+          <IconButton label="Save proxied answers as routes" onClick={saveAll}>
+            <SquarePlus size={14} />
+          </IconButton>
+        )}
         <IconButton label="Clear traffic" onClick={() => void clearServerLog(serverId)}>
           <Trash2 size={14} />
         </IconButton>
@@ -119,6 +161,7 @@ export function TrafficPanel({ serverId, server, running }: { serverId: string; 
         canReply={canSend}
         // Stable: the panel re-renders with every stats update, the log's rows must not.
         onReplyTo={setTarget}
+        onSaveRoute={canRecord ? saveRoute : undefined}
       />
       {canSend && running && <Composer runId={running.runId} server={server} target={target} setTarget={setTarget} open={open} />}
     </div>
@@ -131,12 +174,14 @@ const TrafficLog = memo(function TrafficLog({
   runId,
   canReply,
   onReplyTo,
+  onSaveRoute,
 }: {
   entries: TrafficEntry[];
   empty: boolean;
   runId?: string;
   canReply: boolean;
   onReplyTo: (conn: number) => void;
+  onSaveRoute?: (e: TrafficEntry) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -164,7 +209,7 @@ const TrafficLog = memo(function TrafficLog({
       data-testid="traffic-log"
     >
       {entries.map((e) => (
-        <TrafficRow key={e.id} e={e} runId={runId} canReply={canReply} onReplyTo={onReplyTo} />
+        <TrafficRow key={e.id} e={e} runId={runId} canReply={canReply} onReplyTo={onReplyTo} onSaveRoute={onSaveRoute} />
       ))}
     </div>
   );
@@ -212,13 +257,16 @@ const TrafficRow = memo(function TrafficRow({
   runId,
   canReply,
   onReplyTo,
+  onSaveRoute,
 }: {
   e: TrafficEntry;
   runId?: string;
   canReply: boolean;
   onReplyTo: (conn: number) => void;
+  onSaveRoute?: (e: TrafficEntry) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const recordable = !!onSaveRoute && e.http?.note === "proxy" && e.http.status > 0;
   const expandable = e.kind === "data" || e.kind === "http" || e.kind === "dns";
   const status = e.http?.status;
   // HTTP rows show the status as a colored badge and the time on the right, not in the text.
@@ -253,6 +301,17 @@ const TrafficRow = memo(function TrafficRow({
           {e.kind === "data" && <span className="shrink-0 text-[11px] text-faint">{formatBytes(e.size)}</span>}
           {e.http && status ? <span className="shrink-0 text-[11px] tabular-nums text-faint">{Math.round(e.http.durationMs)} ms</span> : null}
         </button>
+        {recordable && (
+          <button
+            aria-label="Save as route"
+            title={e.http!.responseBodyComplete ? "Save as route: the mock answers this request like the backend did" : "The answer's body was cut, binary or compressed: it can't be saved as a route"}
+            disabled={!e.http!.responseBodyComplete}
+            onClick={() => onSaveRoute!(e)}
+            className="shrink-0 rounded p-1 text-faint opacity-0 hover:bg-hover hover:text-fg focus-visible:opacity-100 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-faint group-hover/row:opacity-100"
+          >
+            <SquarePlus size={12} />
+          </button>
+        )}
         {canReply && runId && e.conn != null && e.kind !== "close" && (
           <span className="flex shrink-0 gap-0.5 opacity-0 focus-within:opacity-100 group-hover/row:opacity-100">
             <button aria-label={`Reply to #${e.conn}`} title={`Send to #${e.conn}`} onClick={() => onReplyTo(e.conn!)} className="rounded p-1 text-faint hover:bg-hover hover:text-fg">

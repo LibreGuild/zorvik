@@ -124,3 +124,71 @@ test("socket.io-client talks to a Socket.IO server made in Zorvik", async ({ pag
     await page.getByTestId("server-stop").click();
   }
 });
+
+test("Socket.IO saved emits, on-connect steps, answered acknowledgements and event chips", async ({ page }) => {
+  const port = 18923;
+  const server = new Server(port);
+  let answered: unknown = null;
+  server.of("/rooms").on("connection", (socket) => {
+    socket.on("join", (room: string, ack?: (answer: unknown) => void) => {
+      socket.emit("joined", { room });
+      ack?.({ ok: true });
+    });
+    // The server asks the client for an acknowledgement.
+    setTimeout(() => {
+      socket
+        .timeout(3000)
+        .emitWithAck("ping", 1)
+        .then((answer: unknown) => (answered = answer))
+        .catch(() => (answered = "none"));
+    }, 400);
+  });
+  const pick = async (button: string, item: string) => {
+    await expect(async () => {
+      await page.getByRole("button", { name: button, exact: true }).click();
+      await page.getByRole("menuitem", { name: item }).click({ timeout: 1000 });
+    }).toPass();
+  };
+  try {
+    await page.getByRole("button", { name: "New tab" }).click();
+    await page.getByRole("menuitem", { name: "Socket.IO client" }).click();
+    await page.getByLabel("URL", { exact: true }).fill(`http://127.0.0.1:${port}/rooms`);
+    await page.getByTestId("socketio-auto-ack").locator(".cm-content").click();
+    await page.keyboard.insertText('"pong"');
+
+    await page.getByRole("tab", { name: "Emits" }).click();
+    await page.getByRole("button", { name: "Add emit" }).click();
+    const card = page.getByTestId("ws-message");
+    await card.getByLabel("Message name").fill("Join");
+    await card.getByLabel("Event").fill("join");
+    await card.getByRole("checkbox", { name: "Ask for acknowledgement" }).click();
+    await card.locator(".cm-content").click();
+    await page.keyboard.insertText("lobby");
+
+    await page.getByRole("tab", { name: "On connect" }).click();
+    await pick("Add step", "Send a saved message");
+    await pick("Add step", "Wait for a message");
+    const wait = page.getByTestId("ws-step").nth(1);
+    await wait.getByLabel("Event").fill("joined");
+    await wait.getByLabel("Match").selectOption("json");
+    await wait.getByLabel("Pattern").fill("$[0].room == lobby");
+
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    const log = page.getByTestId("message-log");
+    await expect(log).toContainText("On connect: sent Join");
+    await expect(log).toContainText('On connect: got the event "joined" with arguments where $[0].room == lobby');
+    // The acknowledgement of the join shows its time; the server's question was answered.
+    await expect(page.getByTestId("reply-time")).toHaveCount(1);
+    await expect.poll(() => answered).toBe("pong");
+
+    // Event chips: only "joined", then all again.
+    const chips = page.getByTestId("event-chips");
+    await chips.getByRole("button", { name: /^joined/ }).click();
+    await expect(log.getByText('[{"room":"lobby"}]')).toBeVisible();
+    await expect(log.getByText("On connect: sent Join")).toHaveCount(0);
+    await chips.getByRole("button", { name: "Show all" }).click();
+    await expect(log.getByText("On connect: sent Join")).toBeVisible();
+  } finally {
+    server.close();
+  }
+});

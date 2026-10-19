@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { LoadStage } from "../../bindings/LoadStage";
 import type { MetricsSummary } from "../../bindings/MetricsSummary";
 import type { PhaseSummary } from "../../bindings/PhaseSummary";
+import type { Summary } from "../../bindings/Summary";
 import type { TreeNode } from "../../bindings/TreeNode";
 import {
+  abortLabel,
+  breakdownFor,
   captureProblem,
   changeMetric,
   compactNumber,
@@ -11,6 +14,9 @@ import {
   cpuShare,
   decimate,
   defaultThreshold,
+  errorKindLabel,
+  exportFileName,
+  EXPORTS,
   flattenRequests,
   formatChange,
   formatDuration,
@@ -23,18 +29,23 @@ import {
   nameFromPath,
   newConnectionShare,
   niceMax,
+  optionsProblem,
   peakTarget,
   presetStages,
+  runNotes,
   scaleDurations,
   scaleTargets,
   sendingTargets,
   stageShape,
+  statusClasses,
   targetAt,
   targetShares,
+  thinkTimeLabel,
   thresholdLabel,
   timeLabel,
   timeTicks,
   totalDuration,
+  verdictText,
 } from "./model";
 
 const stage = (durationSecs: number, target: number): LoadStage => ({ durationSecs, target });
@@ -302,5 +313,99 @@ describe("chart helpers", () => {
     expect(formatChange({ current: 0, baseline: 0, change: null })).toBe("0%");
     expect(formatChange({ current: 100, baseline: 100, change: 0.01 })).toBe("0%");
     expect(newConnectionShare(current.totals)).toBe(1);
+  });
+});
+
+describe("think time range, warm-up and stopping early", () => {
+  const stages = [stage(10, 5), stage(20, 5)];
+  it("explains settings the generator would refuse", () => {
+    const base = { model: "virtualUsers" as const, stages };
+    expect(optionsProblem({ ...base, thinkTimeMs: 100, thinkTimeMaxMs: 300, warmUpSecs: 5 })).toBeNull();
+    expect(optionsProblem({ ...base, thinkTimeMs: 100, thinkTimeMaxMs: 50 })).toBe("The longest think time is shorter than the shortest");
+    // Think time is not used by the request-rate model.
+    expect(optionsProblem({ ...base, model: "arrivalRate", thinkTimeMs: 100, thinkTimeMaxMs: 50 })).toBeNull();
+    expect(optionsProblem({ ...base, thinkTimeMaxMs: 0 })).toBeNull();
+    expect(optionsProblem({ ...base, warmUpSecs: 30 })).toBe("The warm-up must end before the run does");
+    expect(optionsProblem({ ...base, warmUpSecs: 29 })).toBeNull();
+    // Without a duration the stages explain the problem first.
+    expect(optionsProblem({ ...base, stages: [stage(0, 5)], warmUpSecs: 5 })).toBeNull();
+  });
+
+  it("labels think time and stopping early", () => {
+    expect(thinkTimeLabel({})).toBe("none");
+    expect(thinkTimeLabel({ thinkTimeMs: 250 })).toBe("250 ms");
+    expect(thinkTimeLabel({ thinkTimeMs: 250, thinkTimeMaxMs: 250 })).toBe("250 ms");
+    expect(thinkTimeLabel({ thinkTimeMs: 1000, thinkTimeMaxMs: 3000 })).toBe("1,000–3,000 ms (random)");
+    expect(abortLabel({})).toBeNull();
+    expect(abortLabel({ abortAfterSecs: 0 })).toBe("Stops the run as soon as it fails");
+    expect(abortLabel({ abortAfterSecs: 90 })).toBe("Stops the run after 1m 30s failing");
+  });
+
+  it("notes a stop by a threshold and the warm-up of a run", () => {
+    expect(runNotes({})).toEqual([]);
+    expect(runNotes({ stoppedByThreshold: "errorRate < 1 %", warmUpMs: 10_000 })).toEqual([
+      "Stopped early: errorRate < 1 % failed for longer than it allows.",
+      "The first 10 s (warm-up) are charted but left out of the numbers and thresholds.",
+    ]);
+  });
+
+  it("says why a run failed when the final numbers pass", () => {
+    const passed = { passed: true } as Summary["thresholds"][number];
+    const failed = { passed: false } as Summary["thresholds"][number];
+    expect(verdictText({ thresholds: [] })).toBe("No thresholds set: the run passes when it completes.");
+    expect(verdictText({ thresholds: [passed, failed] })).toBe("1 of 2 thresholds failed.");
+    expect(verdictText({ thresholds: [passed, passed] })).toBe("All 2 thresholds passed.");
+    expect(verdictText({ thresholds: [passed], stoppedByThreshold: "errorRate < 1 %" })).toBe(
+      "The final numbers pass, but a threshold failed for too long while the test ran.",
+    );
+  });
+});
+
+describe("status and error breakdown", () => {
+  const zero = { count: 0, avg: 0, p50: 0, p95: 0, p99: 0, max: 0 };
+  const metrics = (requests: number, codes: [number, number][]): MetricsSummary => ({
+    requests,
+    errors: 0,
+    errorRate: 0,
+    rps: requests / 10,
+    bytesIn: 0,
+    bytesOut: 0,
+    latency: { min: 1, avg: 2, p50: 2, p90: 3, p95: 4, p99: 5, p999: 6, max: 7 },
+    statusCodes: codes,
+    errorKinds: [],
+    dropped: 0,
+    connections: 1,
+    timing: { connect: zero, ttfb: zero, transfer: zero, server: zero },
+    captureMisses: 0,
+  });
+  it("shows all requests or one", () => {
+    const totals = metrics(30, [[200, 25], [503, 5]]);
+    const targets = [
+      { name: "List", request: "list.yaml", metrics: metrics(20, [[200, 20]]) },
+      { name: "Create", request: "create.yaml", metrics: metrics(10, [[201, 5], [503, 5]]) },
+    ];
+    expect(breakdownFor(totals, targets, null)).toBe(totals);
+    expect(breakdownFor(totals, targets, "create.yaml")).toBe(targets[1].metrics);
+    // A request not in these results: all requests.
+    expect(breakdownFor(totals, targets, "gone.yaml")).toBe(totals);
+  });
+
+  it("groups status codes by class and names error kinds", () => {
+    expect(statusClasses([[503, 5], [200, 20], [201, 3], [404, 1]])).toEqual([["2xx", 23], ["4xx", 1], ["5xx", 5]]);
+    expect(statusClasses([])).toEqual([]);
+    expect(errorKindLabel("timeout")).toBe("Timed out");
+    expect(errorKindLabel("io")).toBe("Connection broke");
+    expect(errorKindLabel("notAllowed")).toBe("Refused: another host");
+    expect(errorKindLabel("somethingNew")).toBe("SomethingNew");
+  });
+});
+
+describe("exports", () => {
+  it("offers every format with a file name per run", () => {
+    expect(EXPORTS.map((e) => e.format)).toEqual(["html", "json", "secondsCsv", "requestsCsv"]);
+    const startedAt = new Date(2026, 8, 27, 9, 5).getTime();
+    expect(exportFileName("Smoke", startedAt, ".html")).toBe("Smoke 2026-09-27 09-05.html");
+    expect(exportFileName('a/b:c*"', startedAt, " per second.csv")).toBe("a-b-c- 2026-09-27 09-05 per second.csv");
+    expect(exportFileName("  ", startedAt, ".json")).toBe("load test 2026-09-27 09-05.json");
   });
 });

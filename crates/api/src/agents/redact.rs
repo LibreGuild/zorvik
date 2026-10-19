@@ -32,7 +32,7 @@ pub(crate) fn is_sensitive_header(name: &str) -> bool {
     SENSITIVE_HEADERS.iter().any(|h| name.eq_ignore_ascii_case(h))
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct Redactor {
     /// (value, replacement), longest value first.
     rules: Vec<(String, String)>,
@@ -61,6 +61,20 @@ impl Redactor {
         self
     }
 
+    /// Also hide what `other` hides.
+    pub fn absorb(&mut self, other: &Redactor) {
+        for (value, replacement) in &other.rules {
+            if !self.rules.iter().any(|(v, _)| v == value) {
+                self.rules.push((value.clone(), replacement.clone()));
+            }
+        }
+        self.rules.sort_by_key(|(v, _)| std::cmp::Reverse(v.len()));
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
+    }
+
     fn add(&mut self, value: &str, replacement: &str, min_len: usize) {
         let value = value.trim();
         if value.chars().count() < min_len || self.rules.iter().any(|(v, _)| v == value) {
@@ -80,6 +94,31 @@ impl Redactor {
             if out.contains(value.as_str()) {
                 out = out.replace(value.as_str(), replacement);
             }
+        }
+        out
+    }
+
+    /// `text` for binary data: the bytes of each value are replaced wherever they show up.
+    pub fn bytes<'a>(&self, data: &'a [u8]) -> std::borrow::Cow<'a, [u8]> {
+        let mut out = std::borrow::Cow::Borrowed(data);
+        for (value, replacement) in &self.rules {
+            let finder = memchr::memmem::Finder::new(value.as_bytes());
+            if finder.find(&out).is_none() {
+                continue;
+            }
+            let mut replaced = Vec::with_capacity(out.len());
+            let mut last = 0;
+            for at in finder.find_iter(&out) {
+                // Matches that overlap one already replaced are part of it.
+                if at < last {
+                    continue;
+                }
+                replaced.extend_from_slice(&out[last..at]);
+                replaced.extend_from_slice(replacement.as_bytes());
+                last = at + value.len();
+            }
+            replaced.extend_from_slice(&out[last..]);
+            out = std::borrow::Cow::Owned(replaced);
         }
         out
     }
@@ -124,5 +163,18 @@ mod tests {
         let lines =
             r.headers(&[Header::new("authorization", "Bearer abc.def.ghi"), Header::new("x-trace", "k3y-v@lue")]);
         assert_eq!(lines, vec![format!("authorization: {MASK}"), "x-trace: {{apiKey}}".to_string()]);
+    }
+
+    #[test]
+    fn binary_data_and_merged_rules_are_hidden() {
+        let mut r = Redactor::new(&[var("token", "t0ken-value", true)]);
+        r.absorb(&Redactor::default().with_headers(&[Header::new("X-Api-Key", "header-secret-1")]));
+        let data = [&[0xff, 0x00][..], b"t0ken-value|header-secret-1|t0ken-value", &[0xfe]].concat();
+        let out = r.bytes(&data);
+        assert_eq!(
+            &out[..],
+            [&[0xff, 0x00][..], format!("{{{{token}}}}|{MASK}|{{{{token}}}}").as_bytes(), &[0xfe]].concat()
+        );
+        assert!(matches!(r.bytes(b"nothing here"), std::borrow::Cow::Borrowed(_)));
     }
 }

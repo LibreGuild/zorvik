@@ -24,4 +24,13 @@ points: Array<TimePoint>, thresholds: Array<ThresholdResult>,
 /**
  * CPU used by this app (percent of one core × cores, 0–100 per core summed), when known.
  */
-cpuPercent: number | null, };
+cpuPercent: number | null, 
+/**
+ * Requests that finish in this first part of the run are charted but left
+ * out of the numbers and thresholds.
+ */
+warmUpMs?: number, 
+/**
+ * The threshold (its label) that is stopping the run: it failed for its `abortAfterSecs`.
+ */
+stoppedByThreshold?: string, };

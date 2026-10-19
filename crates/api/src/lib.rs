@@ -7,8 +7,10 @@ pub mod agents;
 mod batch;
 mod dns;
 mod dto;
+mod file_stream;
 mod graphql;
 mod grpc;
+mod live;
 mod load;
 pub mod mcp;
 mod mock;
@@ -22,6 +24,7 @@ pub mod sse_read;
 mod state;
 mod tools;
 mod watcher;
+mod websocket;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -33,7 +36,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
-use zorvik_engine::{Client, CookieJar, EngineError, ErrorKind, HttpResponse, SseParser, WsOutgoing, WsSession};
+use zorvik_engine::{Client, CookieJar, EngineError, ErrorKind, HttpResponse, SseParser};
 use zorvik_workspace::Workspace;
 use zorvik_workspace::formats::curl::{CurlFlavor, parse_curl, to_curl};
 use zorvik_workspace::formats::{
@@ -53,6 +56,7 @@ pub use agents::AgentSessionHandle;
 pub use batch::BatchingSink;
 pub use dns::DnsQueryResult;
 pub use dto::*;
+pub use file_stream::{FileStreamEvent, FileStreamInfo, FileStreamProgress, FileStreamStarted, WavInfo};
 pub use graphql::GraphqlSchema;
 pub use grpc::{GrpcDescribeResult, GrpcInvokeResult, GrpcStartResult};
 pub use load::{ActiveLoadRun, LoadRunRecord, LoadStarted};
@@ -148,8 +152,10 @@ struct Inner {
     /// Cancellation handles keyed by caller id, tagged with a generation so a
     /// finished request never removes a newer one with the same id.
     inflight: Mutex<HashMap<String, (u64, CancellationToken)>>,
-    ws_sessions: Mutex<HashMap<String, WsEntry>>,
+    ws_sessions: Mutex<HashMap<String, websocket::WsEntry>>,
     socket_sessions: Mutex<HashMap<String, sockets::SocketEntry>>,
+    /// Files streaming over a connection, by connection id (`fileStream.*`).
+    file_streams: Mutex<HashMap<String, (u64, CancellationToken)>>,
     mcp_sessions: Mutex<HashMap<String, mcp::McpEntry>>,
     /// Programs the user let workspaces start (MCP servers over stdio).
     programs: mcp::TrustedPrograms,
@@ -193,15 +199,6 @@ pub(crate) struct RecentResponse {
     /// Text of the body (the first 64 K characters), `None` for binary bodies.
     pub body: Option<String>,
     pub body_cut: bool,
-}
-
-/// A WebSocket by caller id. Registered before connecting (`session` is `None`
-/// until then) so `ws.close` can abort a pending connect; the generation keeps
-/// an old connection from removing a newer one with the same id.
-struct WsEntry {
-    generation: u64,
-    cancel: CancellationToken,
-    session: Option<WsSession>,
 }
 
 #[derive(Clone)]
@@ -377,6 +374,7 @@ impl Api {
             inflight: Mutex::new(HashMap::new()),
             ws_sessions: Mutex::new(HashMap::new()),
             socket_sessions: Mutex::new(HashMap::new()),
+            file_streams: Mutex::new(HashMap::new()),
             mcp_sessions: Mutex::new(HashMap::new()),
             programs,
             servers: servers::Manager::default(),
@@ -423,6 +421,8 @@ impl Api {
         match method.split_once('.').map_or("", |(group, _)| group) {
             "server" => return self.call_server(method, p).await,
             "socket" => return self.call_socket(method, p).await,
+            "ws" => return self.call_ws(method, p).await,
+            "fileStream" => return self.call_file_stream(method, p).await,
             "mcp" => return self.call_mcp(method, p).await,
             "tools" => return self.call_tool(method, p).await,
             "dns" => return self.call_dns(method, p).await,
@@ -714,14 +714,46 @@ impl Api {
                 ok(())
             }
 
+            // Save what the UI holds (an exported message log, a binary message) to a file the
+            // user picked in a save dialog.
+            "file.save" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct P {
+                    path: String,
+                    #[serde(default)]
+                    text: Option<String>,
+                    #[serde(default)]
+                    base64: Option<String>,
+                }
+                let P { path, text, base64 } = params(p)?;
+                let data = match (text, base64) {
+                    (Some(text), None) => text.into_bytes(),
+                    (None, Some(b64)) => base64::engine::general_purpose::STANDARD
+                        .decode(b64)
+                        .map_err(|e| ApiError::invalid(format!("Not valid base64: {e}")))?,
+                    _ => return Err(ApiError::invalid("Give text or base64")),
+                };
+                let target = PathBuf::from(&path);
+                tokio::task::spawn_blocking(move || std::fs::write(&target, data))
+                    .await
+                    .map_err(join_err)?
+                    .map_err(|e| ApiError::new("io", format!("Could not save to {path}: {e}")))?;
+                ok(())
+            }
+
             "response.text" => {
                 // The whole body of a response sent from the app, as text (for "Save as example").
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
                 struct P {
                     response_id: String,
+                    /// Re-indent a JSON object or array (two spaces; numbers, escapes and key
+                    /// order kept exactly as sent).
+                    #[serde(default)]
+                    pretty: bool,
                 }
-                let P { response_id } = params(p)?;
+                let P { response_id, pretty } = params(p)?;
                 let body = lock(&self.inner.responses).get(&response_id).ok_or_else(|| {
                     ApiError::new("notFound", "That response is no longer available; send the request again")
                 })?;
@@ -734,7 +766,12 @@ impl Api {
                 let text = std::str::from_utf8(&body).map_err(|_| {
                     ApiError::new("binary", "Binary responses can't be kept as examples (use Save to file)")
                 })?;
-                ok(serde_json::json!({ "text": text }))
+                // Kept as sent when it isn't JSON, or when indenting would take it past the limit.
+                let formatted = (pretty && text.trim_start().starts_with(['{', '[']))
+                    .then(|| zorvik_engine::pretty_json(text))
+                    .flatten()
+                    .filter(|t| t.len() <= zorvik_workspace::formats::MAX_EXAMPLE_BODY);
+                ok(serde_json::json!({ "text": formatted.as_deref().unwrap_or(text) }))
             }
 
             "response.filter" => {
@@ -767,47 +804,6 @@ impl Api {
                 ok(result)
             }
 
-            "ws.connect" => ok(self.ws_connect(params(p)?).await?),
-            "ws.send" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct P {
-                    conn_id: String,
-                    message: WsOutgoing,
-                }
-                let P { conn_id, message } = params(p)?;
-                let sessions = lock(&self.inner.ws_sessions);
-                let session = sessions
-                    .get(&conn_id)
-                    .and_then(|e| e.session.as_ref())
-                    .ok_or_else(|| ApiError::new("notFound", "WebSocket is not connected"))?;
-                session.send(message)?;
-                ok(())
-            }
-            "ws.close" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct P {
-                    conn_id: String,
-                    code: Option<u16>,
-                    reason: Option<String>,
-                }
-                let P { conn_id, code, reason } = params(p)?;
-                let mut sessions = lock(&self.inner.ws_sessions);
-                if let Some(entry) = sessions.get(&conn_id) {
-                    match &entry.session {
-                        Some(session) => {
-                            let _ = session.send(WsOutgoing::Close { code, reason });
-                        }
-                        // Still connecting: abort it.
-                        None => {
-                            entry.cancel.cancel();
-                            sessions.remove(&conn_id);
-                        }
-                    }
-                }
-                ok(())
-            }
             "sse.connect" => ok(self.sse_connect(params(p)?).await?),
             "sse.close" => {
                 #[derive(Deserialize)]
@@ -1382,58 +1378,6 @@ impl Api {
     }
 
     // ---- WebSocket / SSE ----------------------------------------------------
-
-    async fn ws_connect(&self, p: StreamParams) -> ApiResult<StreamOpened> {
-        let ws = self.ws()?;
-        let settings = self.settings();
-        let cancel = CancellationToken::new();
-        let generation = self.next_generation();
-        // Replacing an entry drops its session, which closes that connection.
-        let entry = WsEntry { generation, cancel: cancel.clone(), session: None };
-        if let Some(old) = lock(&self.inner.ws_sessions).insert(p.conn_id.clone(), entry) {
-            old.cancel.cancel();
-        }
-        let connected = tokio::select! {
-            r = async {
-                let mut resolved = self.prepare(&ws, &p.request, p.path.as_deref())?;
-                let opts = request_options(&settings, &p.request.settings)?;
-                self.authorize(&ws, &mut resolved, &opts).await?;
-                let jar = settings.cookie_jar.then(|| self.jar(&ws));
-                let conn = self.inner.client.websocket(resolved.request, &opts, jar.as_deref()).await?;
-                if let Some(jar) = &jar {
-                    self.save_jar(&ws, jar);
-                }
-                Ok::<_, ApiError>((conn, resolved.unresolved))
-            } => r,
-            _ = cancel.cancelled() => Err(EngineError::cancelled().into()),
-        };
-        let (conn, unresolved) = match connected {
-            Ok(c) => c,
-            Err(e) => {
-                remove_if_current(&self.inner.ws_sessions, &p.conn_id, |entry| entry.generation == generation);
-                return Err(e);
-            }
-        };
-        let zorvik_engine::WsConnected { meta, timing, session, mut events } = conn;
-        match lock(&self.inner.ws_sessions).get_mut(&p.conn_id) {
-            Some(entry) if entry.generation == generation => entry.session = Some(session),
-            // Closed or replaced while connecting: dropping the session closes the socket.
-            _ => return Err(EngineError::cancelled().into()),
-        }
-        let inner = self.inner.clone();
-        let conn_id = p.conn_id.clone();
-        tokio::spawn(async move {
-            while let Some(event) = events.recv().await {
-                let closed = matches!(event, zorvik_engine::WsEvent::Closed { .. });
-                inner.sink.emit(StreamEvent::Ws { conn_id: conn_id.clone(), event });
-                if closed {
-                    break;
-                }
-            }
-            remove_if_current(&inner.ws_sessions, &conn_id, |entry| entry.generation == generation);
-        });
-        Ok(StreamOpened { meta, timing, unresolved })
-    }
 
     async fn sse_connect(&self, p: StreamParams) -> ApiResult<StreamOpened> {
         let ws = self.ws()?;

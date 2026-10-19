@@ -76,6 +76,8 @@ The body toolbar has the view buttons, the content type, and four icons: **Filte
 
 AI agents can use the same filters: `send_request` takes a `filter` ([AI agents tools](../../agents/tools/)).
 
+To try expressions on JSON or XML you paste, use the [Filter playground](../../tools/filter-playground/).
+
 ### Save to file
 
 **Save to file…** (the download icon) writes the **whole** body to a file you choose, not just what is shown: all bytes of a large or binary response, after decompression.
@@ -87,10 +89,18 @@ Zorvik keeps the bodies of the last 30 responses (up to 512 MB together) for sav
 **Save as example** (above the response) keeps the response in the request, as documentation of what it answers and for mocks:
 
 - The example gets the status as its name (`200 OK`, `200 OK (2)`…), the status code, the response headers and the body. Framing headers, `Date` and `Set-Cookie` are left out: cookies can hold a session, and examples are saved in the workspace (and Git).
+- A JSON body (an object or array) is kept indented with two spaces, so it reads well and changes show clearly in Git. Only the spacing changes: numbers (even ones too large for JavaScript), text and the order of keys stay exactly as the server sent them. Other bodies are kept as they are.
 - Bodies up to 1 MB of text are kept. Binary and larger responses can't be examples; use **Save to file**.
 - A saved request with no other unsaved changes is saved at once. Otherwise the example waits with your other changes until you save.
 
-The request's **Examples** tab lists them: pick one to see its headers and body, rename it, change its status or body, or delete it.
+The request's **Examples** tab lists them. Pick one to change it:
+
+- **Name** and **Status**: the status takes any code from 100 to 599.
+- **Body**: edit it as text. For a JSON body, **Beautify** indents it again (numbers kept as written); a body that isn't valid JSON is left as it is, with a message.
+- **Headers**: add, change, switch off or remove headers, as in a request. The tab shows how many are switched on. Mocks answer with the headers that are on.
+- The trash icon deletes the example.
+
+Changes are saved with the request (<kbd>Mod</kbd>+<kbd>S</kbd>).
 
 [Mock APIs built from a folder](../../servers/from-openapi-and-folders/#from-a-folder-of-requests) answer with the examples: an example saved while the URL had query parameters answers only requests with those parameters, and the first one without answers the rest.
 

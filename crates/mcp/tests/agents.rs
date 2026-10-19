@@ -548,3 +548,135 @@ async fn agent_reads_state_writes_files_and_exports() {
         .await;
     assert!(err && text.contains("thresholds"), "{text}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn agent_talks_over_a_websocket() {
+    let server = TestServer::start().await;
+    let (api, mut agent, _asked, _data, _ws, _listener) = connected("Live").await;
+    let tools = agent.request("tools/list", json!({})).await;
+    let names: Vec<&str> =
+        tools["result"]["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
+    for tool in ["open_connection", "send_message", "wait_for_message", "read_messages", "close_connection"] {
+        assert!(names.contains(&tool), "{tool}");
+    }
+
+    // send_request points to the connection tools.
+    let chat = json!({
+        "name": "Chat", "kind": "websocket", "url": server.ws_url("/ws"),
+        "websocket": {
+            "messages": [{ "name": "Ask", "format": "json", "text": "{\"id\": 1, \"q\": \"{{$randomInt(5, 5)}}\"}" }],
+            "onConnect": [
+                { "type": "wait", "match": "exact", "pattern": "welcome" },
+                { "type": "send", "message": "Ask" },
+                { "type": "wait", "match": "json", "pattern": "$.id == 1" },
+            ],
+        },
+    });
+    let (err, _, text) = agent.call("send_request", json!({ "request": chat })).await;
+    assert!(err && text.contains("open_connection"), "{text}");
+
+    let (err, opened, text) = agent.call("open_connection", json!({ "request": chat })).await;
+    assert!(!err, "{text}");
+    assert_eq!(opened["status"], 101);
+    let steps = opened["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 2, "{text}");
+    assert!(steps.iter().all(|s| s["passed"] == true), "{text}");
+    assert_eq!(steps[1]["message"]["text"], "{\"id\": 1, \"q\": \"5\"}");
+    let id = opened["connectionId"].as_str().unwrap().to_string();
+
+    // A reply that came back before the wait still counts.
+    let (err, _, text) =
+        agent.call("send_message", json!({ "connectionId": id, "json": { "id": 2, "op": "echo" } })).await;
+    assert!(!err, "{text}");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let (err, got, text) = agent
+        .call(
+            "wait_for_message",
+            json!({ "connectionId": id, "match": "json", "pattern": "$.id == 2", "timeoutMs": 3000 }),
+        )
+        .await;
+    assert!(!err, "{text}");
+    assert_eq!(got["message"]["direction"], "received");
+    assert_eq!(got["message"]["text"], "{\"id\":2,\"op\":\"echo\"}");
+    let (_, got, _) =
+        agent.call("wait_for_message", json!({ "connectionId": id, "pattern": "nope", "timeoutMs": 100 })).await;
+    assert_eq!(got["timedOut"], true);
+    let (err, _, text) = agent.call("send_message", json!({ "connectionId": id, "text": "a", "hex": "01" })).await;
+    assert!(err && text.contains("exactly one"), "{text}");
+    let (err, _, _) = agent.call("send_message", json!({ "connectionId": id, "message": "Ask" })).await;
+    assert!(!err);
+    let (err, _, _) = agent.call("send_message", json!({ "connectionId": id, "hex": "0a 0b" })).await;
+    assert!(!err);
+
+    let (_, read, text) = agent.call("read_messages", json!({ "connectionId": id, "limit": 3 })).await;
+    let messages = read["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 3, "{text}");
+    assert_eq!(messages[2]["base64"], "Cgs=", "{text}");
+    assert!(read["leftOut"].as_u64().unwrap() > 0);
+    let last = read["lastId"].as_u64().unwrap();
+    let (_, read, _) = agent.call("read_messages", json!({ "connectionId": id, "sinceId": last })).await;
+    assert_eq!(read["messages"], json!([]));
+
+    // The echo server closes with 4000 when told "close".
+    agent.call("send_message", json!({ "connectionId": id, "text": "close" })).await;
+    let (_, got, text) =
+        agent.call("wait_for_message", json!({ "connectionId": id, "pattern": "never", "timeoutMs": 3000 })).await;
+    assert!(got["closed"].as_str().expect(&text).contains("code 4000"), "{text}");
+
+    // Another connection is closed when the agent goes away.
+    let (_, opened, text) = agent
+        .call(
+            "open_connection",
+            json!({ "request": { "name": "Again", "kind": "websocket", "url": server.ws_url("/ws") } }),
+        )
+        .await;
+    let again = opened["connectionId"].as_str().expect(&text).to_string();
+    let (err, _, text) = agent.call("close_connection", json!({ "connectionId": again, "code": 1001 })).await;
+    assert!(err && text.contains("3000 to 4999"), "{text}");
+    drop(agent);
+    for _ in 0..100 {
+        if api.call("ws.send", json!({ "connId": again, "message": { "type": "text", "text": "x" } })).await.is_err() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the connection stayed open after the agent left");
+}
+
+#[tokio::test]
+async fn agent_never_reads_secrets_from_a_connection() {
+    let server = TestServer::start().await;
+    let (_api, mut agent, _asked, _data, _ws, _listener) = connected("Secrets").await;
+    let (err, _, text) = agent
+        .call(
+            "save_environment",
+            json!({ "name": "Local", "activate": true, "variables": [{ "key": "token", "value": "s3cret-token-value", "secret": true }] }),
+        )
+        .await;
+    assert!(!err, "{text}");
+    let url = format!("{}?t={{{{token}}}}", server.ws_url("/ws"));
+    let (err, opened, text) =
+        agent.call("open_connection", json!({ "request": { "name": "Echo", "kind": "websocket", "url": url } })).await;
+    assert!(!err, "{text}");
+    assert!(!text.contains("s3cret") && opened["url"].as_str().unwrap().contains("{{token}}"), "{text}");
+    let id = opened["connectionId"].as_str().unwrap().to_string();
+    let (err, _, text) = agent.call("send_message", json!({ "connectionId": id, "text": "key={{token}}" })).await;
+    assert!(!err, "{text}");
+    let (_, got, text) =
+        agent.call("wait_for_message", json!({ "connectionId": id, "pattern": "key=", "timeoutMs": 3000 })).await;
+    assert_eq!(got["message"]["text"], "key={{token}}", "{text}");
+
+    // Switching the environment off doesn't reveal what was sent, and a wait can't probe it.
+    let (err, _, text) = agent.call("set_active_environment", json!({ "name": "" })).await;
+    assert!(!err, "{text}");
+    let (_, read, text) = agent.call("read_messages", json!({ "connectionId": id })).await;
+    assert!(!text.contains("s3cret") && text.contains("key={{token}}"), "{text}");
+    assert!(read["messages"].as_array().unwrap().len() >= 2, "{text}");
+    let (_, got, text) = agent
+        .call(
+            "wait_for_message",
+            json!({ "connectionId": id, "match": "regex", "pattern": "s3", "sinceId": 0, "timeoutMs": 200 }),
+        )
+        .await;
+    assert_eq!(got["timedOut"], true, "{text}");
+}

@@ -13,6 +13,7 @@ import type { RequestSettings } from "./RequestSettings";
 import type { Scripts } from "./Scripts";
 import type { SocketIoOptions } from "./SocketIoOptions";
 import type { SocketOptions } from "./SocketOptions";
+import type { WebSocketOptions } from "./WebSocketOptions";
 
 /**
  * A saved request (a `.yaml` file under `requests/`).
@@ -42,7 +43,7 @@ paramDescriptions?: Array<KeyValue>, headers?: Array<KeyValue>, body?: Body, aut
 /**
  * TCP/UDP options.
  */
-socket?: SocketOptions, dns?: DnsOptions, mqtt?: MqttOptions, grpc?: GrpcOptions, socketio?: SocketIoOptions, mcp?: McpOptions, scripts?: Scripts, docs?: string, 
+socket?: SocketOptions, dns?: DnsOptions, mqtt?: MqttOptions, grpc?: GrpcOptions, socketio?: SocketIoOptions, websocket?: WebSocketOptions, mcp?: McpOptions, scripts?: Scripts, docs?: string, 
 /**
  * The OpenAPI operation this request was imported from (see [`OpenApiSource`]).
  */

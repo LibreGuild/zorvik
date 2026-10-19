@@ -6,7 +6,8 @@
 //!
 //! A request fails when it can't be sent, a script fails or a test fails; an HTTP
 //! status of 400 or more fails it only when it has no tests (and HTTP errors are
-//! not allowed). Other request kinds (WebSocket, gRPC, …) are reported as skipped.
+//! not allowed). A WebSocket or Socket.IO request connects, runs its on-connect steps (each
+//! wait is a test) and closes. Other request kinds (gRPC, TCP, …) are reported as skipped.
 //! `pm.execution.setNextRequest(name)` jumps to that request, `null` ends the iteration.
 
 mod data;
@@ -372,7 +373,18 @@ pub async fn run(
             }
             steps += 1;
             let request = match &item.request {
-                Ok(r) if matches!(r.kind, RequestKind::Http | RequestKind::Sse | RequestKind::Mcp) => r,
+                Ok(r)
+                    if matches!(
+                        r.kind,
+                        RequestKind::Http
+                            | RequestKind::Sse
+                            | RequestKind::Mcp
+                            | RequestKind::Websocket
+                            | RequestKind::SocketIo
+                    ) =>
+                {
+                    r
+                }
                 other => {
                     let mut result = base_result(item, index);
                     match other {
@@ -468,7 +480,8 @@ pub async fn run(
             let described: Vec<String> = report.errors.iter().map(|e| e.describe()).collect();
             match scripted.result {
                 Ok(sent) => {
-                    if sent.request.kind != RequestKind::Mcp {
+                    // A script may change the method; other kinds keep their label (MCP, WS, IO).
+                    if matches!(sent.request.kind, RequestKind::Http | RequestKind::Sse) {
                         result.method = sent.request.method.clone();
                     }
                     result.url = mask_secrets(&sent.url, &secret_values(plan, vars));
@@ -610,16 +623,16 @@ fn plural(n: usize, what: &str) -> String {
 /// Why the runner doesn't send a request of `kind`.
 fn skip_reason(kind: RequestKind) -> String {
     let what = match kind {
-        RequestKind::Websocket => "WebSocket connections are live sessions",
         RequestKind::Tcp => "TCP connections are live sessions",
         RequestKind::Udp => "UDP sockets are live sessions",
         RequestKind::Mqtt => "MQTT clients are live sessions",
-        RequestKind::SocketIo => "Socket.IO clients are live sessions",
         RequestKind::Grpc => "gRPC calls don't run in the collection runner",
         RequestKind::Dns => "DNS queries don't run in the collection runner",
-        RequestKind::Http | RequestKind::Sse | RequestKind::Mcp => "not sent",
+        RequestKind::Http | RequestKind::Sse | RequestKind::Mcp | RequestKind::Websocket | RequestKind::SocketIo => {
+            "not sent"
+        }
     };
-    format!("{what}; the runner sends HTTP, GraphQL, SSE and MCP requests")
+    format!("{what}; the runner sends HTTP, GraphQL, SSE, WebSocket, Socket.IO and MCP requests")
 }
 
 fn base_result(item: &RunItem, iteration: u32) -> RunResult {
@@ -630,7 +643,12 @@ fn base_result(item: &RunItem, iteration: u32) -> RunResult {
         name: item.name.clone(),
         kind: request.map(|r| r.kind).unwrap_or_default(),
         method: request
-            .map(|r| if r.kind == RequestKind::Mcp { "MCP".into() } else { r.method.clone() })
+            .map(|r| match r.kind {
+                RequestKind::Mcp => "MCP".into(),
+                RequestKind::Websocket => "WS".into(),
+                RequestKind::SocketIo => "IO".into(),
+                _ => r.method.clone(),
+            })
             .unwrap_or_default(),
         url: request.map(|r| r.url.clone()).unwrap_or_default(),
         passed: true,

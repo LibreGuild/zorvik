@@ -252,7 +252,7 @@ pub(crate) async fn send_scripted_with(
         }
     }
 
-    let (resolved, response, events) = match send(cx, &request, &folders, vars).await {
+    let (resolved, response, events, steps) = match send(cx, &request, &folders, vars).await {
         Ok(sent) => sent,
         Err(e) => return ScriptedSend { report, result: Err(e), next_request },
     };
@@ -291,6 +291,16 @@ pub(crate) async fn send_scripted_with(
     {
         report.get_or_insert_with(Default::default).tests.push(test);
     }
+    // A WebSocket request's waits are its tests.
+    if let Some((tests, notes)) = steps {
+        let report = report.get_or_insert_with(Default::default);
+        report.tests.extend(tests);
+        report.console.extend(
+            notes
+                .into_iter()
+                .map(|message| zorvik_script::ConsoleEntry { level: zorvik_script::ConsoleLevel::Info, message }),
+        );
+    }
     let url = resolved.request.url.clone();
     let stream = events.map(|(list, end)| (list.len(), end));
     ScriptedSend {
@@ -303,14 +313,18 @@ pub(crate) async fn send_scripted_with(
 /// Events an event stream was read to, and why reading stopped.
 type StreamRead = (Vec<zorvik_engine::SseEvent>, crate::sse_read::SseEnd);
 
+/// A WebSocket request's on-connect steps as tests, and notes for the console.
+type StepsRun = (Vec<zorvik_script::TestResult>, Vec<String>);
+
 /// Resolve against the workspace and `vars`, authorize, send. An SSE request is read
 /// until its `settings.stream` says to stop; its response body is the events as text.
+/// A WebSocket request connects, runs its on-connect steps and closes.
 async fn send(
     cx: &SendContext<'_>,
     request: &Request,
     folders: &[FolderMeta],
     vars: &ScriptVars,
-) -> ApiResult<(Resolved, HttpResponse, Option<StreamRead>)> {
+) -> ApiResult<(Resolved, HttpResponse, Option<StreamRead>, Option<StepsRun>)> {
     let outside_files = cx.settings.files_outside_workspace;
     let inherit = Inheritance { workspace: cx.meta, folders, base_dir: cx.ws.root(), outside_files };
     let mut resolved = resolve(request, &inherit, &vars.var_context())?;
@@ -329,7 +343,26 @@ async fn send(
         let calling = crate::mcp::call(cx.client, &resolved, &opts, jar, cx.programs, &workspace, session);
         let (info, call) = Box::pin(calling).await?;
         let response = crate::mcp::as_response(&resolved.request.url, &info, &call);
-        return Ok((resolved, response, None));
+        return Ok((resolved, response, None, None));
+    }
+    if request.kind == zorvik_workspace::formats::RequestKind::SocketIo {
+        let ctx = vars.var_context();
+        let render = move |text: &str| ctx.render(text, &mut std::collections::BTreeSet::new());
+        let running =
+            crate::sockets::run_once_socketio(cx.client, &resolved, &request.socketio, &opts, cx.jar, &render);
+        let (response, steps, notes) = Box::pin(running).await?;
+        let tests = steps.iter().map(crate::live::StepResult::test).collect();
+        return Ok((resolved, response, None, Some((tests, notes))));
+    }
+    if request.kind == zorvik_workspace::formats::RequestKind::Websocket {
+        let ctx = vars.var_context();
+        let render = move |text: &str| ctx.render(text, &mut std::collections::BTreeSet::new());
+        let jar = cx.jar.map(|j| j.as_ref());
+        let running =
+            crate::websocket::run_once(cx.client, resolved.request.clone(), &request.websocket, &opts, jar, &render);
+        let (response, steps, notes) = Box::pin(running).await?;
+        let tests = steps.iter().map(crate::live::StepResult::test).collect();
+        return Ok((resolved, response, None, Some((tests, notes))));
     }
     if let Some(subscription) = resolved.subscription.clone() {
         // Read like an event stream; the body is the results as a JSON array.
@@ -358,7 +391,7 @@ async fn send(
             body_truncated: read.dropped > 0,
             decode_warning: read.error,
         };
-        return Ok((resolved, response, Some((read.events, read.end))));
+        return Ok((resolved, response, Some((read.events, read.end)), None));
     }
     if request.kind == zorvik_workspace::formats::RequestKind::Sse {
         let has = |name: &str| resolved.request.headers.iter().any(|h| h.name.eq_ignore_ascii_case(name));
@@ -395,10 +428,10 @@ async fn send(
             body_truncated: read.dropped > 0,
             decode_warning: read.error,
         };
-        return Ok((resolved, response, Some((read.events, read.end))));
+        return Ok((resolved, response, Some((read.events, read.end)), None));
     }
     let response = cx.client.send(resolved.request.clone(), &opts, cx.jar.map(|j| j.as_ref())).await?;
-    Ok((resolved, response, None))
+    Ok((resolved, response, None, None))
 }
 
 /// Error code of a send a pre-request script skipped (a run reports the request as skipped).

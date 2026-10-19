@@ -72,8 +72,12 @@ pub struct HttpExchange {
     pub duration_ms: f64,
     /// Name or path of the route that answered; `None` for the fallback.
     pub route: Option<String>,
-    /// Fault injected instead of the normal answer (`error`, `reset`, `hang`) or `proxy`.
+    /// Fault injected instead of the normal answer (`error`, `reset`, `hang`), `proxy`, or
+    /// which answer of a route's sequence it was (`answer 2 of 3`).
     pub note: Option<String>,
+    /// `response_body` is the whole body as text (not cut, binary or compressed), so the
+    /// answer can be saved as a route.
+    pub response_body_complete: bool,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

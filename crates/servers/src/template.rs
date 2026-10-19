@@ -3,17 +3,20 @@
 //! environment/workspace variable or a dynamic one (`{{$uuid}}`).
 //!
 //! Request values are inserted as they are: a client sending `{{token}}` in a
-//! body echoed with `{{request.body}}` gets that text back, never the value of
-//! the `token` variable.
+//! body echoed with `{{request.body}}` (or `{{request.json.name}}`) gets that
+//! text back, never the value of the `token` variable.
 
 use std::borrow::Cow;
+use std::cell::OnceCell;
 use std::collections::BTreeSet;
 
+use serde_json::Value;
 use zorvik_engine::Header;
+use zorvik_formats::matching::{JsonPath, value_text};
 use zorvik_workspace::vars::VarContext;
 
 /// Most bytes one rendered template may grow to; placeholders past it stay as written.
-const MAX_OUTPUT: usize = 32 << 20;
+pub(crate) const MAX_OUTPUT: usize = 32 << 20;
 
 /// The request a template is rendered for.
 #[derive(Default)]
@@ -30,6 +33,8 @@ pub(crate) struct RequestValues<'a> {
     pub headers: &'a [Header],
     /// Body as text (lossy UTF-8).
     pub body: &'a str,
+    /// The body parsed as JSON, on first use (`None`: it isn't JSON).
+    pub json: OnceCell<Option<Value>>,
 }
 
 impl RequestValues<'_> {
@@ -44,8 +49,11 @@ impl RequestValues<'_> {
             "url" if self.query_string.is_empty() => Cow::Borrowed(self.path),
             "url" => Cow::Owned(format!("{}?{}", self.path, self.query_string)),
             "body" => Cow::Borrowed(self.body),
+            "json" => Cow::Owned(self.json_value("$")),
             _ => {
-                if let Some(name) = key.strip_prefix("params.") {
+                if let Some(path) = key.strip_prefix("json").filter(|p| p.starts_with(['.', '['])) {
+                    Cow::Owned(self.json_value(path))
+                } else if let Some(name) = key.strip_prefix("params.") {
                     Cow::Owned(pick(self.params, name))
                 } else if let Some(name) = key.strip_prefix("query.") {
                     Cow::Owned(pick(self.query, name))
@@ -56,6 +64,20 @@ impl RequestValues<'_> {
                     Cow::Borrowed("")
                 }
             }
+        }
+    }
+
+    /// The body parsed as JSON (once per request), if it is JSON.
+    pub(crate) fn json(&self) -> Option<&Value> {
+        self.json.get_or_init(|| serde_json::from_str(self.body).ok()).as_ref()
+    }
+
+    /// One value of a JSON body (`.user.id`, `[0].name`): text as it is, other values as
+    /// JSON; empty when the body isn't JSON or has nothing there.
+    fn json_value(&self, path: &str) -> String {
+        match (self.json(), JsonPath::parse(path)) {
+            (Some(root), Ok(path)) => path.get(root).and_then(value_text).unwrap_or_default(),
+            _ => String::new(),
         }
     }
 }
@@ -131,6 +153,7 @@ mod tests {
             query: &query,
             headers: &headers,
             body: "{\"x\":1}",
+            ..Default::default()
         };
         let out = render(
             "{{request.method}} {{request.url}} id={{ request.params.id }} q={{request.query.q}} \
@@ -154,6 +177,31 @@ mod tests {
         assert_eq!(render("echo: {{request.body}}", Some(&req), &vars()), "echo: {{token}} {{request.method}}");
         // Without a request, `request.*` is just an unknown variable.
         assert_eq!(render("{{request.body}}", None, &vars()), "{{request.body}}");
+    }
+
+    #[test]
+    fn json_body_values() {
+        let body = r#"{"user": {"id": 7, "name": "{{token}}"}, "items": [{"sku": "a"}, {"sku": "b"}], "ok": true, "none": null}"#;
+        let req = RequestValues { body, ..Default::default() };
+        let out = render(
+            "{{request.json.user.id}}|{{ request.json.user.name }}|{{request.json.items[-1].sku}}|{{request.json.user}}|\
+             {{request.json.ok}}|[{{request.json.none}}]|[{{request.json.missing.x}}]|[{{request.json..bad}}]|{{token}}",
+            Some(&req),
+            &vars(),
+        );
+        // The client's `{{token}}` stays text; the template's own is the variable.
+        assert_eq!(out, r#"7|{{token}}|b|{"id":7,"name":"{{token}}"}|true|[]|[]|[]|s3cret"#);
+        assert_eq!(
+            render("{{request.json}}", Some(&req), &vars()).len(),
+            serde_json::to_string(&serde_json::from_str::<Value>(body).unwrap()).unwrap().len()
+        );
+        let not_json = RequestValues { body: "a=1", ..Default::default() };
+        assert_eq!(
+            render("[{{request.json.a}}][{{request.json}}][{{request.jsonx}}]", Some(&not_json), &vars()),
+            "[][][]"
+        );
+        let array = RequestValues { body: "[1, 2]", ..Default::default() };
+        assert_eq!(render("{{request.json[1]}}", Some(&array), &vars()), "2");
     }
 
     #[test]

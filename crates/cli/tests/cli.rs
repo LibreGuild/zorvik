@@ -2,9 +2,13 @@
 
 use std::process::Command;
 
+use serde_json::json;
 use zorvik_testkit::TestServer;
 use zorvik_workspace::Workspace;
-use zorvik_workspace::formats::{Auth, Environment, McpToolMock, Request, RequestKind, Server, ServerKind, Variable};
+use zorvik_workspace::formats::{
+    Auth, ConnectStep, Environment, MatchKind, McpToolMock, Request, RequestKind, SavedMessage, Server, ServerKind,
+    Variable, WaitStep,
+};
 
 fn request(name: &str, url: &str) -> Request {
     let mut r = Request::new(name, RequestKind::Http);
@@ -28,9 +32,20 @@ async fn runs_workspace_requests_and_sets_exit_code() {
     let folder = ws.create_folder("", "Smoke").unwrap();
     ws.create_request(&folder, request("Ok", "{{base}}/status/200")).unwrap();
     ws.create_request(&folder, request("Token", "{{base}}/bearer")).unwrap();
-    let mut ws_req = request("Socket", "ws://127.0.0.1:1/ws");
-    ws_req.kind = RequestKind::Websocket;
-    ws.create_request("", ws_req).unwrap();
+    let mut tcp = request("Socket", "tcp://127.0.0.1:1");
+    tcp.kind = RequestKind::Tcp;
+    ws.create_request("", tcp).unwrap();
+    // A WebSocket request runs its on-connect steps; the waits are its tests.
+    let mut chat = request("Chat", &server.ws_url("/ws"));
+    chat.kind = RequestKind::Websocket;
+    chat.websocket.messages =
+        vec![SavedMessage { name: "Hello".into(), text: "hello {{base}}".into(), ..Default::default() }];
+    chat.websocket.on_connect = vec![
+        ConnectStep::Wait(WaitStep { pattern: "welcome".into(), ..Default::default() }),
+        ConnectStep::Send { message: "Hello".into() },
+        ConnectStep::Wait(WaitStep { matcher: MatchKind::Regex, pattern: "^hello http".into(), ..Default::default() }),
+    ];
+    ws.create_request("", chat).unwrap();
     ws.create_environment(&Environment {
         name: "Local".into(),
         variables: vec![Variable { key: "base".into(), value: server.url(""), enabled: true, secret: false }],
@@ -53,13 +68,16 @@ async fn runs_workspace_requests_and_sets_exit_code() {
     assert_eq!(code, 0, "{out}");
     let report: serde_json::Value = serde_json::from_str(&out).unwrap();
     let results = report["results"].as_array().unwrap();
-    assert_eq!(results.len(), 3);
+    assert_eq!(results.len(), 4);
     assert!(results.iter().any(|r| r["skipped"] == true));
+    let chat = results.iter().find(|r| r["name"] == "Chat").unwrap();
+    assert_eq!((chat["status"].clone(), chat["passed"].clone()), (json!(101), json!(true)), "{chat}");
+    assert_eq!(chat["tests"].as_array().unwrap().len(), 2, "{chat}");
     // The fields of the earlier report are still there.
     for field in ["path", "name", "method", "url", "status", "durationMs", "size", "error", "unresolved", "passed"] {
         assert!(results[0].get(field).is_some(), "{field} missing: {}", results[0]);
     }
-    assert_eq!(report["summary"]["requests"], 2);
+    assert_eq!(report["summary"]["requests"], 3);
     assert_eq!(report["summary"]["skipped"], 1);
     assert_eq!(report["summary"]["passed"], true);
 
@@ -68,7 +86,8 @@ async fn runs_workspace_requests_and_sets_exit_code() {
     let (code, out) =
         tokio::task::spawn_blocking(move || run(&["run", &p, "--env", "Local", "--allow-http-errors"])).await.unwrap();
     assert_eq!(code, 0, "{out}");
-    assert!(out.contains("WS      Socket  (skipped: WebSocket connections are live sessions"), "{out}");
+    assert!(out.contains("TCP     Socket  (skipped: TCP connections are live sessions"), "{out}");
+    assert!(out.contains("Wait for a message containing \"welcome\""), "{out}");
 
     let (code, out) = tokio::task::spawn_blocking(move || run(&["run", &path, "--env", "nope"])).await.unwrap();
     assert_eq!(code, 2, "{out}");

@@ -1,6 +1,6 @@
 ---
 title: Mock APIs
-description: Routes with :params, matching on query, headers and body, templated responses, route order, CORS and forwarding unmatched requests to a real backend.
+description: Routes with :params, matching on query, headers, body and JSON values, templated responses, answer sequences, route order, CORS, and forwarding unmatched requests to a real backend (and recording its answers as routes).
 sidebar:
   order: 1
 ---
@@ -21,7 +21,7 @@ You can also build a mock from what you already have: an OpenAPI document, a fol
 
 ## Routes
 
-The **Routes** section lists the routes. Each row shows an on/off checkbox, the method, the path, the route's name, a clock when it has a delay, a lightning bolt when it has a fault, and the status.
+The **Routes** section lists the routes. Each row shows an on/off checkbox, the method, the path, the route's name, a clock when it has a delay, a numbered list when it has an [answer sequence](#answer-sequences), a lightning bolt when it has a fault, and the status.
 
 - **Add route** adds `GET /new` (or `/new-2`, …) answering `200` with a JSON body.
 - Click a row to edit that route below the list. Arrow keys move through the list.
@@ -40,7 +40,8 @@ The **Routes** section lists the routes. Each row shows an on/off checkbox, the 
 | **Response body** | The body, with syntax highlighting chosen from the `Content-Type` header (JSON, HTML, XML, JavaScript or text). **Format JSON** reformats a JSON body. The body may use [templates](../templates/). |
 | **Delay (ms)** | Wait this long before answering. See [Faults, delays & CORS](../faults-delays-cors/). |
 | **Fault** and **How often (%)** | Answer with an error, drop the connection, or never answer, some or all of the time. See [Faults, delays & CORS](../faults-delays-cors/). |
-| **Match only when** | Extra conditions on query parameters, headers and the body. See [Conditions](#conditions). |
+| **Answer sequence** | Other answers for the first calls, for example `503`, `503`, then the route's own answer. See [Answer sequences](#answer-sequences). |
+| **Match only when** | Extra conditions on query parameters, headers, the body and values of a JSON body. See [Conditions](#conditions). |
 
 While the server runs, the route editor shows the route's full address (**Call it at …**) with a copy button.
 
@@ -81,8 +82,43 @@ Open **Match only when** to add conditions. A route answers only when **all** it
 | **Query parameters** | The request has the parameter with exactly this value (after decoding `%XX` and `+`). Any of its values may match when it repeats. Names are case-sensitive. | The parameter is present, with any value. |
 | **Headers** | The request has the header (name in any case) with exactly this value (surrounding spaces ignored; the value is case-sensitive). | The header is present, with any value. |
 | **Body contains** | The request body contains this text (case-sensitive). | No condition. |
+| **JSON body** | The body is JSON and meets the condition, see below. | No condition. |
 
 Condition values may use variables such as `{{role}}` (from the active environment or the workspace), but not request values. Rows that are unchecked or have no name are ignored. A header name that is not a valid HTTP header name never matches.
+
+### JSON body conditions
+
+A **JSON body** condition looks at one value of a JSON request body, picked with a JSON path:
+
+| Condition | Holds when |
+|---|---|
+| `$.user.role == "admin"` | The value is `admin`. |
+| `$.items[0].qty != 0` | The value is anything but `0` (also when it isn't there). |
+| `$.user.id` | The value is there and not `null`. |
+| `$.coupon == null` | The value is `null` or isn't there. |
+
+Paths start at `$` (which may be left out) and use `.name`, `['name with spaces']` and `[0]` (`[-1]` is the last item). The value after `==` or `!=` is JSON (`"text"`, `7`, `true`, `null`) or bare text: `$.type == admin` works too. Numbers and booleans compare as text, so `$.id == 7` and `$.id == "7"` both match `{"id": 7}`. A body that isn't JSON never matches. While a condition can't be read (for example `$..id`), the field turns red and says why, and the route doesn't match.
+
+Two routes for the same path can then answer differently by what is sent: `POST /login` with `$.password == "wrong"` answers `401`, and the next `POST /login` route answers `200`.
+
+## Answer sequences
+
+An answer sequence gives a route's first calls other answers, in order. It is how you test a client that retries: the first two calls get `503 Service Unavailable`, the third gets the route's own `200`.
+
+Open **Answer sequence** under the route and click **Add answer**. Each answer has:
+
+| Field | Description |
+|---|---|
+| **Answer** | **Answer** sends the status, body and headers below; **Error (500)**, **Drop the connection** and **Never answer** work like the route's [faults](../faults-delays-cors/#faults), every time. |
+| **Status** | The status of this answer (new answers start with `503`). |
+| **Delay** | Wait this long before this answer. Empty: the route's delay. |
+| **Body** | Click **Body** to edit the body and **extra headers**. The body may use [templates](../templates/). Extra headers are added to the route's headers; one with the same name (for example `Content-Type`) replaces the route's. `Retry-After` is a common one. |
+
+The last row shows what comes after: **The route's own answer, from then on**. Turn on **Start over after the route's answer** for a backend that keeps failing now and then: with two answers, calls 1 and 2 get the sequence, call 3 the route's answer, call 4 starts over, and so on.
+
+Counting starts again when the server starts (or restarts), and when you change the route's method, path, status, conditions or sequence; editing its own body or headers, or other routes, doesn't reset it. Each route counts its own calls, whatever client sends them. The route's own **Fault** and **How often (%)** apply only to the route's own answer.
+
+The traffic log shows which answer each call got, such as **answer 2 of 3** next to the route, or **reset · answer 2 of 3** for an answer that drops the connection.
 
 ## Route order
 
@@ -159,6 +195,19 @@ When forwarding fails, the mock answers `502 Bad Gateway` with a JSON `error`:
 
 Forwarded exchanges are marked **proxy** in the traffic log. [CORS headers](../faults-delays-cors/#cors), when turned on, are added to forwarded answers too.
 
+### Record the backend's answers as routes
+
+Forwarding also turns a real backend into a mock. Point your app at the mock, use it, then save what the backend answered:
+
+- Hover a forwarded exchange in the traffic log and click **Save as route** (the plus at the end of the row) to add one route for it.
+- Click **Save proxied answers as routes** at the top of the traffic panel to add a route for every forwarded exchange at once: one per method, path and query, leaving out the ones a route already answers. Routes with query conditions come first, so the one without them doesn't answer their requests.
+
+A recorded route has the request's method and path, the query as **Query parameters** conditions, and the backend's status, headers and body. Like **Mock this response**, it leaves out `Set-Cookie` (it often holds a session, and server files are shared through Git), `Content-Length`, `Content-Encoding`, `Date` and connection headers. Credentials stay out of the file too: headers such as `Authorization` or `X-Auth-Token` are left out, query values such as `api_key`, `access_token`, `code` or `sig` are left empty (the condition then matches any value), and tokens and codes are removed from `Location` addresses. Zorvik shows a note for each, and one when the body or a header contains `{{…}}`, which the mock fills in when it answers. An answer whose body is binary, compressed or larger than 64 KB can't be recorded: its button is greyed out.
+
+Forwards that fail (the backend is down or too slow) are marked **proxy failed** and can't be saved as routes.
+
+The routes are added to the end of the list and the first one is selected. They answer at once while the server runs, so the next same request no longer reaches the backend. They are unsaved edits: press **Save** to keep them.
+
 ## Browser access (CORS)
 
 Turn on **Allow cross-origin requests (CORS)** under **Browser access** when a web app on another origin (for example `http://localhost:5173`) calls the mock. The mock then answers preflight requests and adds `Access-Control-Allow-*` headers to every answer. The details are in [Faults, delays & CORS](../faults-delays-cors/#cors).
@@ -199,9 +248,22 @@ http:
     - method: POST
       path: /login
       status: 401
-      matchBody: '"password": "wrong"'
+      matchJson: $.password == "wrong"
       body: '{"error": "invalid credentials"}'
       delayMs: 300
+    - method: GET
+      path: /reports
+      status: 200
+      body: '{"ready": true}'
+      sequence:
+        - status: 503
+          headers:
+            - key: Retry-After
+              value: "1"
+          body: '{"error": "busy"}'
+        - status: 503
+          body: '{"error": "busy"}'
+      sequenceRepeat: true
   fallback: proxy
   proxyUrl: "{{baseUrl}}"
   cors: true
@@ -221,9 +283,22 @@ Route fields (`http.routes[]`):
 | `matchQuery` | none | Query conditions (`key`/`value` rows; empty value = present). |
 | `matchHeaders` | none | Header conditions (`key`/`value` rows; empty value = present). |
 | `matchBody` | empty | Text the body must contain. |
+| `matchJson` | empty | A condition on a JSON body, such as `$.user.role == "admin"`. |
 | `fault` | `none` | `none`, `error`, `reset` or `hang`. |
 | `faultPercent` | `100` | How often the fault happens, 0–100. |
+| `sequence` | none | Answers for the first calls, in order (at most 100), see below. |
+| `sequenceRepeat` | `false` | Start the sequence over after the route's own answer. |
 | `enabled` | `true` | Whether the route answers. |
+
+Answers of a sequence (`sequence[]`):
+
+| Field | Default | Description |
+|---|---|---|
+| `status` | `200` | Status code. |
+| `headers` | none | Extra headers (`key`/`value` rows); one with the same name replaces the route's. |
+| `body` | empty | Body (a template). |
+| `delayMs` | the route's | Delay before this answer, in ms. |
+| `fault` | `none` | `none`, `error`, `reset` or `hang`, every time. |
 
 Mock settings (`http`):
 

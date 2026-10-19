@@ -160,6 +160,10 @@ describe("chart points", () => {
     expect(failed.detail).toContain("p95 < 1 ms");
     expect(failed.detail).toContain("30 requests");
     expect(finishedMessage("Smoke", summary(false, { error: "boom" }))).toMatchObject({ tone: "error", detail: "boom" });
+    // Stopped by a threshold that kept failing.
+    const stopped = finishedMessage("Smoke", summary(false, { stoppedEarly: true, stoppedByThreshold: "errorRate < 1 %" }));
+    expect(stopped).toMatchObject({ tone: "error", title: "“Smoke” was stopped by a threshold" });
+    expect(stopped.detail).toContain("errorRate < 1 % failed for longer than it allows · stopped after 3 s");
   });
 });
 

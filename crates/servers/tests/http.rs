@@ -11,7 +11,7 @@ use tokio::net::TcpStream;
 use zorvik_engine::{
     Client, EngineError, Header, HttpRequest, HttpResponse, HttpVersionPref, RequestOptions, TlsOptions,
 };
-use zorvik_formats::{KeyValue, MockFallback, MockFault, MockRoute, Server, ServerKind, ServerTls, Variable};
+use zorvik_formats::{KeyValue, MockFallback, MockFault, MockRoute, MockStep, Server, ServerKind, ServerTls, Variable};
 use zorvik_servers::{OutgoingMessage, RunningServer, TrafficKind};
 use zorvik_workspace::vars::VarContext;
 
@@ -197,6 +197,74 @@ async fn live_edits_delays_and_faults() {
 }
 
 #[tokio::test]
+async fn sequences_answer_the_first_calls_differently() {
+    let step = |status: u16, body: &str| MockStep { status, body: body.into(), ..Default::default() };
+    let mut flaky = route("GET", "/flaky", 200, "ok {{request.query.n}}");
+    flaky.headers = vec![KeyValue::new("Content-Type", "text/plain")];
+    flaky.sequence = vec![
+        MockStep { headers: vec![KeyValue::new("Retry-After", "1")], ..step(503, "busy {{request.query.n}}") },
+        MockStep { fault: MockFault::Reset, ..step(200, "") },
+    ];
+    let mut server = mock(vec![route("GET", "/other", 200, "x"), flaky]);
+    let (running, events) = start(server.clone()).await;
+    let url = |n: u32| format!("{}/flaky?n={n}", running.url);
+
+    let r = send("GET", &url(1), &[], "").await;
+    assert_eq!((r.meta.status, text(&r).as_str(), header(&r, "retry-after")), (503, "busy 1", Some("1")));
+    assert!(send_with("GET", &url(2), &[], "", &opts()).await.is_err(), "the second call is dropped");
+    for n in 3..5 {
+        let r = send("GET", &url(n), &[], "").await;
+        assert_eq!((r.meta.status, text(&r)), (200, format!("ok {n}")));
+    }
+    // The traffic says which answer each call got.
+    assert_eq!(wait_http(&events, "/flaky?n=1").await.note.as_deref(), Some("answer 1 of 3"));
+    assert_eq!(wait_http(&events, "/flaky?n=2").await.note.as_deref(), Some("reset · answer 2 of 3"));
+    assert_eq!(wait_http(&events, "/flaky?n=3").await.note.as_deref(), Some("answer 3 of 3"));
+    assert_eq!(wait_http(&events, "/flaky?n=4").await.note, None);
+
+    // A changed route counts again; with repeat it starts over after its own answer.
+    server.http.routes[1].sequence.truncate(1);
+    server.http.routes[1].sequence_repeat = true;
+    assert!(running.update(server.clone(), VarContext::new()));
+    let statuses: Vec<u16> = {
+        let mut out = Vec::new();
+        for n in 10..15 {
+            out.push(send("GET", &url(n), &[], "").await.meta.status);
+        }
+        out
+    };
+    assert_eq!(statuses, [503, 200, 503, 200, 503]);
+    // Other routes are not counted.
+    assert_eq!(wait_http(&events, "/flaky?n=14").await.note.as_deref(), Some("answer 1 of 2"));
+    send("GET", &format!("{}/other", running.url), &[], "").await;
+    assert_eq!(wait_http(&events, "/other").await.note, None);
+
+    // A restart starts counting again.
+    drop(running);
+    let (running, _events) = start(server).await;
+    assert_eq!(send("GET", &format!("{}/flaky", running.url), &[], "").await.meta.status, 503);
+}
+
+#[tokio::test]
+async fn json_bodies_in_conditions_and_templates() {
+    let mut admin =
+        route("POST", "/login", 200, r#"{"welcome": "{{request.json.user.name}}", "id": {{request.json.user.id}}}"#);
+    admin.match_json = r#"$.user.role == "admin""#.into();
+    let mut guest = route("POST", "/login", 403, r#"{"error": "{{request.json.user.name}} is not an admin"}"#);
+    guest.match_json = "$.user.name".into();
+    let (running, _events) = start(mock(vec![admin, guest, route("POST", "/login", 400, "no user")])).await;
+    let url = format!("{}/login", running.url);
+
+    let r = send("POST", &url, &[], r#"{"user": {"role": "admin", "name": "Ada", "id": 7}}"#).await;
+    assert_eq!((r.meta.status, text(&r).as_str()), (200, r#"{"welcome": "Ada", "id": 7}"#));
+    assert_eq!(header(&r, "content-type"), Some("application/json"));
+    // A client's {{…}} is answered as text, never filled in.
+    let r = send("POST", &url, &[], r#"{"user": {"role": "guest", "name": "{{$uuid}}"}}"#).await;
+    assert_eq!((r.meta.status, text(&r).as_str()), (403, r#"{"error": "{{$uuid}} is not an admin"}"#));
+    assert_eq!(send("POST", &url, &[], "user=ada").await.meta.status, 400);
+}
+
+#[tokio::test]
 async fn delayed_request_is_logged_when_the_client_leaves() {
     let (running, events) = start(mock(vec![MockRoute { delay_ms: 5_000, ..route("GET", "/wait", 200, "") }])).await;
     let short = RequestOptions { timeout: Some(Duration::from_millis(200)), ..opts() };
@@ -287,6 +355,8 @@ async fn proxy_fallback_forwards_unmatched_requests() {
     assert_eq!((r.body.len(), header(&r, "content-length")), (0, Some(host.len().to_string().as_str())));
     let x = wait_http(&events, "/real?x=1").await;
     assert_eq!((x.note.as_deref(), x.status, x.route), (Some("proxy"), 202, None));
+    // A whole text answer: it can be saved as a route.
+    assert!(x.response_body_complete);
 
     // A backend that is down, and one that points back at the mock.
     let backend_url = backend.url.clone();
@@ -295,6 +365,8 @@ async fn proxy_fallback_forwards_unmatched_requests() {
     let r = send("GET", &url("/gone"), &[], "").await;
     assert_eq!(r.meta.status, 502);
     assert!(text(&r).contains("Could not reach the backend"), "{}", text(&r));
+    // Not noted "proxy": the traffic panel saves those answers as routes.
+    assert_eq!(wait_http(&events, "/gone").await.note.as_deref(), Some("proxy failed"));
     front.http.proxy_url = running.url.clone();
     assert!(running.update(front, vars));
     let r = send("GET", &url("/loop"), &[], "").await;

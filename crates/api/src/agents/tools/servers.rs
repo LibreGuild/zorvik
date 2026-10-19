@@ -21,7 +21,7 @@ const TRAFFIC_BODY_CHARS: usize = 4_000;
 /// Placeholders mock bodies, headers, greetings and SSE events can use.
 const PLACEHOLDERS: &str = "Templates in status, headers and body: {{request.params.id}} (a :id path segment; \
     {{request.params.*}} for a trailing *), {{request.query.name}}, {{request.headers.name}}, {{request.body}}, \
-    {{request.method}}, {{request.path}}, {{request.url}}; dynamic values: every Postman one and more, e.g. {{$uuid}}, \
+    {{request.json.user.id}} (one value of a JSON body), {{request.method}}, {{request.path}}, {{request.url}}; dynamic values: every Postman one and more, e.g. {{$uuid}}, \
     {{$isoTimestamp}}, {{$timestamp(+1h)}}, {{$randomInt(1, 100)}}, {{$randomFullName}}, {{$randomEmail}}, \
     {{$randomPrice(5, 50)}}, {{$randomFrom(a, b, c)}}; and the active environment's and the collection's variables \
     (secret ones stay literal). Text a client sends is inserted as-is, never expanded.";
@@ -34,17 +34,51 @@ fn key_values(description: &str) -> Value {
     })
 }
 
-fn reply_rules() -> Value {
+fn reply_rules(websocket: bool) -> Value {
+    let mut fields = json!({
+        "match": { "type": "string", "enum": ["any", "contains", "exact", "regex", "json"], "description": "Default contains. json: the pattern is a condition on a JSON message, like $.type == \"ping\", $.id != 0, or just $.id (the value is there)." },
+        "pattern": { "type": "string" },
+        "reply": string("Reply text (templates allowed). {{message}} is the incoming message; when it is JSON, {{message.id}} or {{message.params.name}} is one of its values (text as it is, other values as JSON)."),
+        "delayMs": { "type": "integer" },
+        "enabled": { "type": "boolean" },
+    });
+    if websocket {
+        fields["close"] = json!({ "type": "integer", "description": "Close the connection after the reply (if any) with this close code, e.g. 1000 or 4001 (1000, or 3000-4999)." });
+    }
     json!({
         "type": "array",
         "description": "Replies for mode rules: the first enabled rule whose pattern matches answers.",
+        "items": obj(fields, &[]),
+    })
+}
+
+/// A route's answers for its first calls.
+fn sequence() -> Value {
+    json!({
+        "type": "array",
+        "description": "Answers for the first calls, in order (e.g. 503, 503 to test a client's retries); later calls get the route's own answer. Counting starts again when the server starts or the route changes. At most 100.",
         "items": obj(json!({
-            "match": { "type": "string", "enum": ["any", "contains", "exact", "regex"], "description": "Default contains." },
-            "pattern": { "type": "string" },
-            "reply": string("Reply text (templates allowed, {{message}} is the incoming message)."),
-            "delayMs": { "type": "integer" },
-            "enabled": { "type": "boolean" },
+            "status": { "type": "integer", "description": "Default 200." },
+            "headers": key_values("Added to the route's headers (one of the same name replaces the route's), e.g. Retry-After."),
+            "body": string("Templates allowed."),
+            "delayMs": { "type": "integer", "description": "Wait before this answer (default: the route's delay)." },
+            "fault": { "type": "string", "enum": ["none", "error", "reset", "hang"], "description": "Instead of this answer, every time." },
         }), &[]),
+    })
+}
+
+/// Socket.IO events emitted on a timer.
+fn socketio_schedule() -> Value {
+    json!({
+        "type": "array",
+        "description": "Events emitted on a timer to every client of a namespace, in any mode (arguments rendered fresh each time, e.g. {\"price\": {{$randomPrice(5, 50)}}}).",
+        "items": obj(json!({
+            "event": { "type": "string" },
+            "args": string("Arguments as JSON (an array for several; empty: none)."),
+            "namespace": string("Default /."),
+            "everyMs": { "type": "integer", "description": "At least 10." },
+            "enabled": { "type": "boolean" },
+        }), &["event", "everyMs"]),
     })
 }
 
@@ -82,8 +116,11 @@ pub(super) fn server_schema() -> Value {
                         "matchQuery": key_values("Only match requests with these query parameters (empty value = any value)."),
                         "matchHeaders": key_values("Only match requests with these headers (empty value = any value)."),
                         "matchBody": string("Only match requests whose body contains this text."),
+                        "matchJson": string("Only match requests with a JSON body meeting this condition: $.type == \"admin\", $.items[0].id != 0, or just $.user.id (the value is there)."),
                         "fault": { "type": "string", "enum": ["none", "error", "reset", "hang"], "description": "Instead of the answer: error = 500, reset = close the connection, hang = never answer." },
                         "faultPercent": { "type": "integer", "description": "How often the fault happens, 0-100 (default 100)." },
+                        "sequence": sequence(),
+                        "sequenceRepeat": { "type": "boolean", "description": "After the route's own answer, start the sequence over (fails, fails, works, fails, …)." },
                         "enabled": { "type": "boolean", "description": "Default true." },
                     }), &[]),
                 },
@@ -91,7 +128,20 @@ pub(super) fn server_schema() -> Value {
                 "proxyUrl": string("Base URL of the real backend for fallback proxy, e.g. http://localhost:8080."),
                 "cors": { "type": "boolean", "description": "Answer CORS preflights and add Access-Control-Allow-* headers, so a web app on another origin can call the mock." },
             }), &[]),
-            "websocket": obj(json!({ "mode": mode(), "greeting": string("Sent to each client right after it connects."), "rules": reply_rules() }), &[]),
+            "websocket": obj(json!({
+                "mode": mode(),
+                "greeting": string("Sent to each client right after it connects."),
+                "rules": reply_rules(true),
+                "schedule": {
+                    "type": "array",
+                    "description": "Messages sent to each client on a timer while it is connected (templates allowed and filled in each time, e.g. {\"price\": {{$randomPrice(5, 50)}}}).",
+                    "items": obj(json!({
+                        "message": { "type": "string" },
+                        "everyMs": { "type": "integer", "description": "At least 10." },
+                        "enabled": { "type": "boolean" },
+                    }), &["message", "everyMs"]),
+                },
+            }), &[]),
             "socketio": obj(json!({
                 "mode": { "type": "string", "enum": ["echo", "rules", "manual", "discard"], "description": "echo (default): emit every event back and acknowledge with its arguments; rules: the first matching rule answers; manual: only what the user emits; discard." },
                 "greetingEvent": string("Emitted to each client that joins a namespace (empty: none)."),
@@ -101,7 +151,7 @@ pub(super) fn server_schema() -> Value {
                     "description": "Answers can use {{event.name}}, {{event.args}}, {{event.arg0}}… (the client's values as JSON), dynamic variables and environment variables.",
                     "items": obj(json!({
                         "event": string("Event name, or * for any."),
-                        "match": { "type": "string", "enum": ["any", "contains", "exact", "regex"], "description": "How the arguments (as JSON, or one text argument as text) must match pattern. Default any." },
+                        "match": { "type": "string", "enum": ["any", "contains", "exact", "regex", "json"], "description": "How the arguments (as JSON, or one text argument as text) must match pattern. Default any. json: a condition on the arguments array, like $[0].type == \"join\"." },
                         "pattern": { "type": "string" },
                         "ack": string("Acknowledgement arguments (JSON) when the client asks for one; empty = no arguments."),
                         "replyEvent": string("Event to emit back (empty: none)."),
@@ -111,6 +161,7 @@ pub(super) fn server_schema() -> Value {
                         "enabled": { "type": "boolean" },
                     }), &[]),
                 },
+                "schedule": socketio_schedule(),
                 "path": string("Where the server answers (default /socket.io/)."),
                 "cors": { "type": "boolean", "description": "Allow browsers on other origins (long-polling)." },
             }), &[]),
@@ -167,11 +218,13 @@ pub(super) fn server_schema() -> Value {
                 },
                 "intervalMs": { "type": "integer", "description": "Pause between events (0: all at once)." },
                 "repeat": { "type": "boolean", "description": "Start over after the last event." },
+                "retryMs": { "type": "integer", "description": "Sent first as retry: how long clients wait before reconnecting (0: not sent)." },
+                "closeAfterLast": { "type": "boolean", "description": "End the stream after the last event (without repeat), so clients reconnect; one that sends Last-Event-ID continues after it, and one that has every event gets 204 (stop reconnecting)." },
             }), &[]),
             "socket": obj(json!({
                 "mode": mode(),
                 "greeting": string("TCP: sent to each client right after it connects."),
-                "rules": reply_rules(),
+                "rules": reply_rules(false),
                 "encoding": { "type": "string", "enum": ["text", "hex"], "description": "Of greeting, patterns and replies." },
                 "framing": { "type": "string", "enum": ["raw", "line", "lengthPrefixed"], "description": "TCP: how incoming bytes split into messages." },
                 "lengthBytes": { "type": "integer", "enum": [1, 2, 4], "description": "lengthPrefixed: size of the big-endian length (default 2)." },
@@ -193,6 +246,10 @@ pub(super) fn server_schema() -> Value {
             "proxy": obj(json!({
                 "target": string("host:port every client connection is relayed to."),
                 "upstreamTls": { "type": "boolean", "description": "Connect to the target with TLS." },
+                "delayMs": { "type": "integer", "description": "Fault: each chunk of data waits this long before it is passed on (both directions)." },
+                "bytesPerSecond": { "type": "integer", "description": "Fault: most bytes per second passed on in each direction (0: no limit)." },
+                "dropAfterMs": { "type": "integer", "description": "Fault: close both connections this long after the target connected (0: never)." },
+                "dropAfterBytes": { "type": "integer", "description": "Fault: close both connections once this many bytes were passed on, both directions together (0: never)." },
             }), &[]),
         }),
         &[],
@@ -324,6 +381,42 @@ fn check_server(server: &Server) -> Result<(), String> {
         }
         if route.fault_percent > 100 {
             return Err(format!("{at}.faultPercent must be 0-100"));
+        }
+        if !route.match_json.trim().is_empty()
+            && let Err(e) = zorvik_workspace::formats::matching::MessageMatcher::new(
+                zorvik_workspace::formats::MatchKind::Json,
+                route.match_json.as_bytes(),
+            )
+        {
+            return Err(format!("{at}.matchJson: {e}"));
+        }
+        if route.sequence.len() > zorvik_workspace::formats::MAX_SEQUENCE {
+            return Err(format!("{at}.sequence has more than {} answers", zorvik_workspace::formats::MAX_SEQUENCE));
+        }
+        for (j, step) in route.sequence.iter().enumerate() {
+            if !(100..=599).contains(&step.status) {
+                return Err(format!("{at}.sequence[{j}].status must be 100-599 (got {})", step.status));
+            }
+        }
+    }
+    for (i, rule) in server.websocket.rules.iter().enumerate() {
+        if let Some(code) = rule.close
+            && !(code == 1000 || (3000..=4999).contains(&code))
+        {
+            return Err(format!("websocket.rules[{i}].close must be 1000 or 3000-4999 (got {code})"));
+        }
+    }
+    for (i, m) in server.websocket.schedule.iter().enumerate() {
+        if m.every_ms < zorvik_workspace::formats::MIN_SCHEDULE_MS {
+            return Err(format!("websocket.schedule[{i}].everyMs must be at least 10"));
+        }
+    }
+    for (i, m) in server.socketio.schedule.iter().enumerate() {
+        if m.every_ms < zorvik_workspace::formats::MIN_SCHEDULE_MS {
+            return Err(format!("socketio.schedule[{i}].everyMs must be at least 10"));
+        }
+        if m.event.trim().is_empty() {
+            return Err(format!("socketio.schedule[{i}].event is empty"));
         }
     }
     if server.kind == ServerKind::TcpProxy && server.proxy.target.trim().is_empty() {
@@ -749,6 +842,13 @@ mod tests {
         assert!(check_server(&s).is_err());
         s.http.routes[0].method = "*".into();
         assert!(check_server(&s).is_ok());
+        s.http.routes[0].match_json = "$..id == 1".into();
+        assert!(check_server(&s).unwrap_err().contains("matchJson"));
+        s.http.routes[0].match_json = "$.user.id == {{userId}}".into();
+        s.http.routes[0].sequence = vec![serde_json::from_value(json!({ "status": 9 })).unwrap()];
+        assert!(check_server(&s).unwrap_err().contains("sequence[0].status"));
+        s.http.routes[0].sequence[0].status = 503;
+        assert!(check_server(&s).is_ok());
     }
 
     #[test]
@@ -759,13 +859,13 @@ mod tests {
         let full = json!({
             "name": "x", "kind": "http", "host": "127.0.0.1", "port": 1, "autoStart": true, "docs": "",
             "tls": { "enabled": true, "certPath": "", "keyPath": "" },
-            "http": { "routes": [{ "name": "", "method": "*", "path": "/", "status": 200, "headers": [{ "key": "a", "value": "b", "enabled": true }], "body": "", "delayMs": 0, "matchQuery": [], "matchHeaders": [], "matchBody": "", "fault": "none", "faultPercent": 100, "enabled": true }], "fallback": "proxy", "proxyUrl": "", "cors": true },
-            "websocket": { "mode": "rules", "greeting": "", "rules": [{ "match": "regex", "pattern": "", "reply": "", "delayMs": 0, "enabled": true }] },
-            "socketio": { "mode": "rules", "greetingEvent": "", "greetingArgs": "", "path": "/io/", "cors": true, "rules": [{ "event": "*", "match": "contains", "pattern": "", "ack": "", "replyEvent": "", "replyArgs": "", "broadcast": true, "delayMs": 0, "enabled": true }] },
-            "sse": { "events": [{ "event": "", "data": "", "id": "" }], "intervalMs": 0, "repeat": true },
+            "http": { "routes": [{ "name": "", "method": "*", "path": "/", "status": 200, "headers": [{ "key": "a", "value": "b", "enabled": true }], "body": "", "delayMs": 0, "matchQuery": [], "matchHeaders": [], "matchBody": "", "matchJson": "$.id", "fault": "none", "faultPercent": 100, "sequence": [{ "status": 503, "headers": [], "body": "", "delayMs": 0, "fault": "reset" }], "sequenceRepeat": true, "enabled": true }], "fallback": "proxy", "proxyUrl": "", "cors": true },
+            "websocket": { "mode": "rules", "greeting": "", "rules": [{ "match": "json", "pattern": "", "reply": "", "delayMs": 0, "enabled": true, "close": 4000 }], "schedule": [{ "message": "tick", "everyMs": 1000, "enabled": true }] },
+            "socketio": { "mode": "rules", "greetingEvent": "", "greetingArgs": "", "path": "/io/", "cors": true, "schedule": [{ "event": "tick", "args": "[1]", "namespace": "/", "everyMs": 1000, "enabled": true }], "rules": [{ "event": "*", "match": "contains", "pattern": "", "ack": "", "replyEvent": "", "replyArgs": "", "broadcast": true, "delayMs": 0, "enabled": true }] },
+            "sse": { "events": [{ "event": "", "data": "", "id": "" }], "intervalMs": 0, "repeat": true, "retryMs": 1000, "closeAfterLast": true },
             "socket": { "mode": "echo", "greeting": "", "rules": [], "encoding": "hex", "framing": "lengthPrefixed", "lengthBytes": 4, "lineEnding": "crLf" },
             "dns": { "records": [{ "name": "a", "type": "A", "value": "1.2.3.4", "ttl": 60, "enabled": true }], "upstream": "" },
-            "proxy": { "target": "a:1", "upstreamTls": true },
+            "proxy": { "target": "a:1", "upstreamTls": true, "delayMs": 1, "bytesPerSecond": 1, "dropAfterMs": 1, "dropAfterBytes": 1 },
             "mcp": {
                 "serverName": "x", "version": "1", "instructions": "", "path": "/mcp", "cors": true,
                 "tools": [{ "name": "t", "title": "", "description": "", "inputSchema": "{}", "outputSchema": "", "result": "", "isError": false, "delayMs": 0, "enabled": true }],

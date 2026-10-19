@@ -176,6 +176,23 @@ pub fn parse_hex(text: &str) -> Result<Vec<u8>, String> {
 }
 
 /// Payload for display: UTF-8 text when it decodes, otherwise base64.
+/// How much of a message the app keeps of what it sent (it has the rest): the log of a fast
+/// stream would otherwise hold, and pass to the UI, everything twice.
+pub const SENT_PREVIEW: usize = 16 * 1024;
+
+/// The start of a sent message, cut at a character boundary when it is text.
+pub fn sent_preview(bytes: &[u8]) -> &[u8] {
+    if bytes.len() <= SENT_PREVIEW {
+        return bytes;
+    }
+    let cut = &bytes[..SENT_PREVIEW];
+    match std::str::from_utf8(cut) {
+        // Cut inside a character: keep the whole characters before it.
+        Err(e) if e.error_len().is_none() => &cut[..e.valid_up_to()],
+        _ => cut,
+    }
+}
+
 pub fn display_payload(bytes: &[u8]) -> (Option<String>, Option<String>) {
     use base64::Engine as _;
     match std::str::from_utf8(bytes) {
@@ -187,6 +204,21 @@ pub fn display_payload(bytes: &[u8]) -> (Option<String>, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sent_previews_keep_whole_characters() {
+        let small = b"hello";
+        assert_eq!(sent_preview(small), small);
+        let text = "é".repeat(SENT_PREVIEW);
+        let preview = sent_preview(text.as_bytes());
+        assert_eq!(preview.len(), SENT_PREVIEW);
+        assert!(std::str::from_utf8(preview).is_ok());
+        let odd = format!("a{text}");
+        let preview = sent_preview(odd.as_bytes());
+        assert_eq!(preview.len(), SENT_PREVIEW - 1);
+        assert!(std::str::from_utf8(preview).is_ok());
+        assert_eq!(sent_preview(&vec![0xff; SENT_PREVIEW * 2]).len(), SENT_PREVIEW);
+    }
 
     #[test]
     fn lines_across_chunks() {

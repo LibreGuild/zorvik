@@ -19,10 +19,6 @@
 </p>
 
 <p align="center">
-  <a href="https://devhunt.org/tool/zorvik"><img alt="zorvik on DevHunt" src="https://devhunt.org/badge/zorvik.svg"></a>
-</p>
-
-<p align="center">
   <a href="https://github.com/LibreGuild/zorvik/releases/latest"><b>Download</b></a> ·
   <a href="https://libreguild.github.io/zorvik/">Website</a> ·
   <a href="https://libreguild.github.io/zorvik/docs/">Docs</a> ·
@@ -68,7 +64,7 @@ AI apps and agents reach tools and data through the **Model Context Protocol**. 
 ## AI agents
 **Zorvik is built to be driven by coding agents.** Its MCP server ships in every install, so Claude Code, Codex, Gemini CLI, Cursor or any MCP client can work with your APIs the way you do in the app:
 - **Map your code to a collection:** the agent reads your routes and saves them as requests, with path and query parameters, bodies and auth.
-- **Send and test:** it sends requests (HTTP, GraphQL, gRPC, DNS, event streams, MCP calls), writes tests, runs folders and collections, and reads the results and history.
+- **Send and test:** it sends requests (HTTP, GraphQL, gRPC, DNS, event streams, MCP calls), talks over live connections (WebSocket, Socket.IO, TCP, UDP, MQTT), writes tests, runs folders and collections, and reads the results and history.
 - **Mock and serve:** it builds mock APIs and servers (MCP servers too), starts them and reads the traffic they received.
 - **Load test:** it plans and runs load tests and reads the latency and errors.
 - **Hand you code:** it exports requests as cURL or code in 16 languages, from JavaScript and Python to Go, Java, C# and Rust.
@@ -95,7 +91,7 @@ Then ask things like *"map the API routes in this repo to a Zorvik collection"* 
 - **Bodies of every kind:** JSON, text, XML, forms, multipart, binary files and GraphQL, with syntax highlighting, search and pretty printing.
 - **GraphQL:** schema from introspection, autocomplete, a schema explorer and variables; subscriptions over WebSocket (graphql-transport-ws and the legacy protocol) or SSE.
 - **gRPC:** server reflection or `.proto` files; unary, server, client and bidirectional streaming; metadata; TLS.
-- **Realtime and sockets:** WebSocket, Socket.IO 3 and 4 (events, acknowledgements, namespaces), Server-Sent Events, TCP, UDP, MQTT 3.1.1 and 5, and DNS queries over UDP, TCP, TLS or HTTPS.
+- **Realtime and sockets:** WebSocket, Socket.IO 3 and 4 (events, acknowledgements, namespaces), Server-Sent Events, TCP, UDP, MQTT 3.1.1 and 5, and DNS queries over UDP, TCP, TLS or HTTPS. WebSocket and Socket.IO requests keep saved messages and on-connect steps that also run as tests.
 - **Responses you can dig into:** filter with JSONPath, jq or XPath, and save responses as examples that document the request and feed your mocks.
 - **Environments and variables:** Local, Staging, Production; secret values that never enter the workspace files; 170 dynamic values (every one of Postman's and more: `{{$randomFullName}}`, `{{$randomInt(1, 100)}}`, `{{$isoDate(+3d)}}`, valid test card numbers and IBANs); auth and headers inherited from folders.
 - **Auth:** Basic, Bearer, API keys, OAuth 2.0 (client credentials, password, authorization code with PKCE, implicit, refresh) and OAuth 1.0; JWT, AWS Signature v4, Hawk, Akamai EdgeGrid and Atlassian ASAP signed fresh for every send; Digest and NTLM.
@@ -111,8 +107,8 @@ Then ask things like *"map the API routes in this repo to a Zorvik collection"* 
 - **CI:** `zorvik run` runs the same collections in any pipeline.
 
 ### Mock and serve
-- **Mock APIs** from scratch, from a folder of requests (answering with their saved examples), from an OpenAPI spec, or from a response you just received. Routes with `:params`, templated bodies, delays, fault injection, CORS, and forwarding to a real backend.
-- **Servers:** MCP, WebSocket, Socket.IO, SSE, TCP, UDP and DNS servers, plus a TCP relay that shows both directions. Every server logs its traffic live.
+- **Mock APIs** from scratch, from a folder of requests (answering with their saved examples), from an OpenAPI spec, from a response you just received, or recorded from a real backend. Routes with `:params`, JSON body conditions, templated bodies, answer sequences for retry tests, delays, fault injection, CORS, and forwarding to a real backend.
+- **Servers:** MCP, WebSocket, Socket.IO, SSE, TCP, UDP and DNS servers, plus a TCP relay that shows both directions and can add delays, bandwidth limits and dropped connections. Every server logs its traffic live.
 - **Headless:** `zorvik serve` runs any of them in CI next to your tests, and serves MCP servers over stdio for AI apps.
 - **Busy port?** The error names the program holding it.
 
@@ -122,9 +118,9 @@ Then ask things like *"map the API routes in this repo to a Zorvik collection"* 
 </picture>
 
 ### Load test
-- **Virtual users or arrival rate,** with stages (ramp up, hold, spike), weighted requests and think time.
+- **Virtual users or arrival rate,** with stages (ramp up, hold, spike), weighted requests, a fixed or random think time, and a warm-up left out of the numbers.
 - **Live dashboard:** requests per second, latency percentiles up to p99.9, errors, status codes and the load generator's own CPU.
-- **Thresholds** such as "p95 under 200 ms" pass or fail a run; run history and HTML/JSON reports.
+- **Thresholds** such as "p95 under 200 ms" pass or fail a run, and can stop it early when they keep failing; run history and HTML, JSON and CSV reports.
 - **Realistic traffic:** a data file gives each virtual user its own row, and captures pass values from one response (a new order's id) to that user's next requests.
 - **Where the time goes:** time to first byte, transfer and connect per request, the server's own time from `Server-Timing`, and a side-by-side comparison with an earlier run.
 - **In CI:** `zorvik load` exits with an error when a threshold fails.
@@ -146,7 +142,7 @@ Then ask things like *"map the API routes in this repo to a Zorvik collection"* 
 </picture>
 
 ### Inspect the network
-TLS inspector (chain, expiry, protocol versions, cipher suites), DNS lookup, port check, ping, network interfaces, HTTP/3 check, and encoders for Base64, URL, hex, JWT, hashes and timestamps.
+TLS inspector (chain, expiry, protocol versions, cipher suites), DNS lookup, port check, ping, network interfaces, HTTP/3 check, a certificate decoder (chains, CSRs, which certificate a key belongs to), JSON compare (by path, ignoring key order), a filter playground (JSONPath, jq, XPath), a regex tester with the syntax rules and captures use, and encoders for Base64, URL, hex, JWT, hashes and timestamps.
 
 ### Work your way
 - **Import** Postman collections and environments, OpenAPI 3 and Swagger 2 (realistic examples, path parameters as variables), and cURL commands. When the API changes, **update from the spec**: new operations come in, your edits stay.

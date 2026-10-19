@@ -79,10 +79,11 @@ async fn websocket_echo_text_binary_and_server_close() {
     conn.session.send(WsOutgoing::Text { text: "close".into() }).unwrap();
     let _sent = next_event(&mut conn.events).await;
     match next_event(&mut conn.events).await {
-        WsEvent::Closed { code, reason, by_client } => {
+        WsEvent::Closed { code, reason, by_client, meaning } => {
             assert_eq!(code, Some(4000));
             assert_eq!(reason, "bye");
             assert!(!by_client);
+            assert_eq!(meaning.as_deref(), Some("Defined by the application"));
         }
         other => panic!("unexpected {other:?}"),
     }

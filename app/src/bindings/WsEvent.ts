@@ -14,4 +14,8 @@ base64: string | null, size: number,
 /**
  * Unix epoch milliseconds.
  */
-timestamp: number, } | { "type": "closed", code: number | null, reason: string, byClient: boolean, } | { "type": "error", message: string, };
+timestamp: number, } | { "type": "closed", code: number | null, reason: string, byClient: boolean, 
+/**
+ * What the close code means, e.g. "Policy violation" for 1008.
+ */
+meaning?: string, } | { "type": "error", message: string, } | { "type": "info", text: string, timestamp: number, };

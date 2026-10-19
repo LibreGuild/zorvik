@@ -5,4 +5,8 @@ import type { MatchKind } from "./MatchKind";
  * "When a message matches `pattern`, reply with `reply`." Pattern and reply
  * are text or hex (see the server's `encoding`).
  */
-export type ReplyRule = { match: MatchKind, pattern: string, reply: string, delayMs?: number, enabled?: boolean, };
+export type ReplyRule = { match: MatchKind, pattern: string, reply: string, delayMs?: number, enabled?: boolean, 
+/**
+ * WebSocket servers: close the connection after the reply (if any), with this close code.
+ */
+close?: number, };

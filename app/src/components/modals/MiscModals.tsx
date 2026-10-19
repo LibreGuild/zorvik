@@ -21,6 +21,7 @@ import { openAcademy } from "../../store/academy";
 import { closeModal, toggleExpanded } from "../../store/ui";
 import { refreshEnvironments, refreshTree, reloadWorkspace, useWorkspace } from "../../store/workspace";
 import { CodeEditor } from "../CodeEditor";
+import { DocsEditor } from "../DocsEditor";
 import { KeyValueEditor } from "../KeyValueEditor";
 import { AuthEditor } from "../request/AuthEditor";
 import { ScriptsEditor, ScriptsTabLabel } from "../request/ScriptsEditor";
@@ -592,7 +593,7 @@ export function WorkspaceSettingsModal() {
   const info = useWorkspace((s) => s.info)!;
   const [meta, setMeta] = useState<WorkspaceMeta>(info.meta);
   const dirty = useMemo(() => JSON.stringify(meta) !== JSON.stringify(info.meta), [meta, info.meta]);
-  const [tab, setTab] = useState<"general" | "auth" | "headers" | "scripts">("general");
+  const [tab, setTab] = useState<"general" | "auth" | "headers" | "scripts" | "docs">("general");
   const [busy, setBusy] = useState(false);
   const save = async () => {
     setBusy(true);
@@ -633,11 +634,21 @@ export function WorkspaceSettingsModal() {
           { id: "auth", label: "Default auth" },
           { id: "headers", label: "Default headers" },
           { id: "scripts", label: <ScriptsTabLabel scripts={meta.scripts} /> },
+          { id: "docs", label: "Docs" },
         ]}
         value={tab}
         onChange={setTab}
       />
       <div className="h-[380px] overflow-auto">
+        {tab === "docs" && (
+          <DocsEditor
+            value={meta.docs ?? ""}
+            onChange={(docs) => setMeta({ ...meta, docs })}
+            placeholder="Notes about this workspace, in Markdown"
+            emptyText="No docs for this workspace yet."
+            autoFocus
+          />
+        )}
         {tab === "general" && (
           <div className="flex flex-col gap-4 p-5">
             <Field label="Name">
@@ -756,7 +767,15 @@ export function FolderSettingsModal({ path }: { path: string }) {
           </div>
         )}
         {tab === "scripts" && <ScriptsEditor where="folder" scripts={meta.scripts ?? {}} onChange={(scripts) => setMeta({ ...meta, scripts })} />}
-        {tab === "docs" && <CodeEditor value={meta.docs ?? ""} onChange={(docs) => setMeta({ ...meta, docs })} placeholder="Notes about this folder" lineNumbers={false} />}
+        {tab === "docs" && (
+          <DocsEditor
+            value={meta.docs ?? ""}
+            onChange={(docs) => setMeta({ ...meta, docs })}
+            placeholder="Notes about this folder, in Markdown"
+            emptyText="No docs for this folder yet."
+            autoFocus
+          />
+        )}
       </div>
     </Modal>
   );

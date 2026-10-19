@@ -11,7 +11,7 @@ vi.mock("../lib/rpc", async (importOriginal) => {
 });
 
 const { api } = await import("../lib/rpc");
-const { exampleHeaders, exampleName, saveAsExample } = await import("./examples");
+const { exampleHeaders, exampleName, isJsonExample, saveAsExample } = await import("./examples");
 const { isDirty, openRequest, resetTabs, updateDraft, useTabs } = await import("./tabs");
 type Tab = import("./tabs").Tab;
 const mocked = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
@@ -40,6 +40,15 @@ describe("examples", () => {
     expect(exampleName("200 OK", [])).toBe("200 OK");
     expect(exampleName("200 OK", ["200 OK", "200 OK (2)"])).toBe("200 OK (3)");
   });
+
+  it("knows a JSON body by its Content-Type or its first character", () => {
+    const json = { key: "Content-Type", value: "application/problem+json" };
+    expect(isJsonExample({ name: "a", status: 200, headers: [json], body: "" })).toBe(true);
+    expect(isJsonExample({ name: "a", status: 200, body: '  [{"id": 1}]' })).toBe(true);
+    expect(isJsonExample({ name: "a", status: 200, headers: [{ key: "content-type", value: "text/plain" }], body: "ok" })).toBe(false);
+    // A switched-off header doesn't count.
+    expect(isJsonExample({ name: "a", status: 200, headers: [{ ...json, enabled: false }], body: "ok" })).toBe(false);
+  });
 });
 
 describe("save as example", () => {
@@ -58,6 +67,8 @@ describe("save as example", () => {
     mocked.responseText.mockResolvedValueOnce({ text: "{}" });
     expect(await saveAsExample(id, result)).toBe(true);
     expect(mocked.saveRequest).toHaveBeenCalledWith("a.yaml", expect.objectContaining({ examples: [expect.objectContaining({ name: "200 OK", body: "{}" })] }));
+    // JSON bodies come back indented (numbers exactly as sent): see response.text.
+    expect(mocked.responseText).toHaveBeenCalledWith("resp", true);
   });
 
   it("does not save edits typed while the response body loads", async () => {

@@ -4,10 +4,14 @@
 //! sides are done, on an error, or when you disconnect it. Sends from the UI
 //! go to the client, as if the target had sent them. The target is connected
 //! directly (no proxy).
+//!
+//! Faults for resilience tests: a delay per chunk, a bandwidth limit per direction,
+//! and dropping the pair after a time or a number of bytes.
 
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -23,6 +27,64 @@ use crate::{Control, Ctx, StartOptions, message_bytes};
 
 /// Time to reach the target (DNS, TCP and TLS).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Longest delay per chunk and longest time before a drop (a typo like 9999999999 still ends).
+const MAX_FAULT_TIME: Duration = Duration::from_secs(24 * 3600);
+/// A bandwidth limit sends this many slices a second, so data flows evenly.
+const SLICES_PER_SECOND: u64 = 20;
+
+/// The faults of one relayed pair (see [`TcpProxyConfig`]).
+#[derive(Clone, Copy, Default)]
+struct Faults {
+    delay: Duration,
+    bytes_per_second: u64,
+    drop_after_bytes: u64,
+}
+
+impl Faults {
+    fn of(config: &TcpProxyConfig) -> Self {
+        Self {
+            delay: Duration::from_millis(config.delay_ms).min(MAX_FAULT_TIME),
+            bytes_per_second: config.bytes_per_second,
+            drop_after_bytes: config.drop_after_bytes,
+        }
+    }
+}
+
+/// The bytes a pair may pass on before it is dropped (`dropAfterBytes`), shared by both
+/// directions. Bytes are taken before they are written, so the two directions together
+/// never pass on more than the limit, even while one of them waits to write.
+#[derive(Default)]
+struct ByteBudget {
+    /// 0: no limit.
+    limit: u64,
+    taken: AtomicU64,
+    sent: AtomicU64,
+}
+
+impl ByteBudget {
+    fn new(limit: u64) -> Self {
+        Self { limit, ..Default::default() }
+    }
+
+    /// Take up to `n` bytes of what is left (all `n` without a limit).
+    fn take(&self, n: usize) -> usize {
+        if self.limit == 0 {
+            return n;
+        }
+        let left = |taken: u64| self.limit.saturating_sub(taken).min(n as u64);
+        // Rust 1.99 deprecates this for `try_update`, which the minimum Rust version (`rust-version`) lacks.
+        #[allow(deprecated)]
+        let before = match self.taken.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |t| Some(t + left(t))) {
+            Ok(before) | Err(before) => before,
+        };
+        left(before) as usize
+    }
+
+    /// Count `n` bytes passed on; whether the limit is reached.
+    fn sent(&self, n: usize) -> bool {
+        self.limit > 0 && self.sent.fetch_add(n as u64, Ordering::Relaxed) + n as u64 >= self.limit
+    }
+}
 
 pub(crate) struct Target {
     host: String,
@@ -220,14 +282,31 @@ async fn relay(
     let (target_read, target_write) = tokio::io::split(upstream.stream);
     // Sends from the UI go to the client, between chunks from the target.
     let (inject, injected) = mpsc::channel::<Vec<u8>>(MAX_QUEUED);
-    let up = pump(client_read, target_write, None, TrafficDirection::ToTarget, ("client", "target"), link);
-    let down =
-        pump(target_read, client_write, Some(injected), TrafficDirection::FromTarget, ("target", "client"), link);
+    let faults = Faults::of(config);
+    let budget = ByteBudget::new(faults.drop_after_bytes);
+    let up =
+        pump(client_read, target_write, None, TrafficDirection::ToTarget, ("client", "target"), link, faults, &budget);
+    let down = pump(
+        target_read,
+        client_write,
+        Some(injected),
+        TrafficDirection::FromTarget,
+        ("target", "client"),
+        link,
+        faults,
+        &budget,
+    );
     tokio::pin!(up, down);
+    let drop_after = Duration::from_millis(config.drop_after_ms).min(MAX_FAULT_TIME);
+    let drop_timer = tokio::time::sleep(drop_after);
+    tokio::pin!(drop_timer);
     let (mut up_done, mut down_done) = (false, false);
     let mut first_closed = None;
     loop {
         tokio::select! {
+            _ = &mut drop_timer, if config.drop_after_ms > 0 => {
+                return format!("dropped by the relay after {} ms", config.drop_after_ms);
+            }
             result = &mut up, if !up_done => match result {
                 Ok(()) => {
                     up_done = true;
@@ -266,8 +345,9 @@ async fn relay(
 }
 
 /// Copy `from` to `to` (plus `injected` bytes, reported as sent by the relay),
-/// reporting each chunk. At EOF the write side of `to` is shut down (a
-/// half-close) and `Ok` is returned; errors end the pair.
+/// reporting each chunk, with the configured faults. At EOF the write side of `to`
+/// is shut down (a half-close) and `Ok` is returned; errors and drops end the pair.
+#[allow(clippy::too_many_arguments)]
 async fn pump<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     mut from: R,
     mut to: W,
@@ -275,9 +355,13 @@ async fn pump<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     direction: TrafficDirection,
     (from_side, to_side): (&str, &str),
     link: &Link<'_>,
+    faults: Faults,
+    budget: &ByteBudget,
 ) -> Result<(), String> {
     let mut buf = vec![0u8; 64 * 1024];
     let write_failed = |e: io::Error| format!("{to_side} connection failed: {e}");
+    // When the bandwidth limit lets the next slice go.
+    let mut next_slice = tokio::time::Instant::now();
     loop {
         tokio::select! {
             read = from.read(&mut buf) => {
@@ -291,10 +375,34 @@ async fn pump<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
                     let _ = to.shutdown().await;
                     return Ok(());
                 }
-                // Flushed per chunk: TLS on either side must not hold data back.
-                to.write_all(&buf[..n]).await.map_err(write_failed)?;
-                to.flush().await.map_err(write_failed)?;
-                link.data(direction, &buf[..n]);
+                if !faults.delay.is_zero() {
+                    tokio::time::sleep(faults.delay).await;
+                }
+                // Only what is left of the byte limit goes on; then the pair is dropped.
+                let allowed = budget.take(n);
+                if allowed == 0 {
+                    // The other direction took the rest: it drops the pair once that is through.
+                    std::future::pending::<()>().await;
+                }
+                let chunk = &buf[..allowed];
+                if faults.bytes_per_second > 0 {
+                    let slice = (faults.bytes_per_second / SLICES_PER_SECOND).max(1) as usize;
+                    for part in chunk.chunks(slice) {
+                        tokio::time::sleep_until(next_slice).await;
+                        to.write_all(part).await.map_err(write_failed)?;
+                        to.flush().await.map_err(write_failed)?;
+                        let took = Duration::from_secs_f64(part.len() as f64 / faults.bytes_per_second as f64);
+                        next_slice = next_slice.max(tokio::time::Instant::now()) + took;
+                    }
+                } else {
+                    // Flushed per chunk: TLS on either side must not hold data back.
+                    to.write_all(chunk).await.map_err(write_failed)?;
+                    to.flush().await.map_err(write_failed)?;
+                }
+                link.data(direction, chunk);
+                if budget.sent(allowed) {
+                    return Err(format!("dropped by the relay after {} bytes", budget.limit));
+                }
             }
             Some(bytes) = recv(&mut injected) => {
                 to.write_all(&bytes).await.map_err(write_failed)?;
@@ -309,5 +417,22 @@ async fn recv(rx: &mut Option<mpsc::Receiver<Vec<u8>>>) -> Option<Vec<u8>> {
     match rx {
         Some(rx) => rx.recv().await,
         None => std::future::pending().await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn byte_budget_is_shared_and_never_passed() {
+        let budget = ByteBudget::new(100);
+        // Both directions take before either has written: together they get the limit.
+        assert_eq!((budget.take(80), budget.take(80), budget.take(5)), (80, 20, 0));
+        assert!(!budget.sent(20));
+        assert!(budget.sent(80), "the last bytes through reach the limit");
+        let unlimited = ByteBudget::new(0);
+        assert_eq!(unlimited.take(1 << 20), 1 << 20);
+        assert!(!unlimited.sent(1 << 20));
     }
 }

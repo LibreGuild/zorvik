@@ -98,6 +98,115 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
   );
 });
 
+/** Whole numbers in the files are mostly u32 (a larger one would make the save fail). */
+const MAX_WHOLE = 4_294_967_295;
+
+export interface NumberBounds {
+  min?: number;
+  /** Values above it are lowered to it (unless `softMax`). Whole numbers stop at 4294967295 without one. */
+  max?: number;
+  integer?: boolean;
+  /** Values above `max` are kept and shown as invalid (the caller says why) instead of lowered. */
+  softMax?: boolean;
+  /** Empty is a value (`undefined`); otherwise emptying the field changes nothing. */
+  optional?: boolean;
+}
+
+function limits(b: NumberBounds): [number, number] {
+  const ceiling = b.integer === false ? Number.MAX_SAFE_INTEGER : MAX_WHOLE;
+  return [b.min ?? 0, b.softMax || b.max === undefined ? ceiling : b.max];
+}
+
+function clampNumber(n: number, b: NumberBounds): number {
+  const [lo, hi] = limits(b);
+  return Math.min(hi, Math.max(lo, b.integer === false ? n : Math.trunc(n)));
+}
+
+/**
+ * The number typed in a NumberInput, or null for nothing to report. While typing (`live`) only
+ * a value already allowed counts, so "1" on the way to "100" in a field of at least 10 changes
+ * nothing; when the field is left (or Enter pressed) the text becomes the nearest allowed value.
+ */
+export function typedNumber(text: string, b: NumberBounds, live: boolean): number | undefined | null {
+  const t = text.trim();
+  if (!t) return b.optional ? undefined : null;
+  const n = Number(t);
+  if (!Number.isFinite(n)) return null;
+  if (!live) return clampNumber(n, b);
+  const [lo, hi] = limits(b);
+  return n >= lo && n <= hi && (b.integer === false || Number.isInteger(n)) ? n : null;
+}
+
+/**
+ * A number field whose text can be edited freely (empty, "1." …). Allowed values are reported as
+ * they are typed; anything else becomes the nearest allowed value when the field is left or Enter
+ * is pressed, and the field then shows the value. Arrow up and down step it. `bare` is a plain
+ * input styled only by `className` (table cells).
+ */
+export function NumberInput({
+  value,
+  onChange,
+  min = 0,
+  max,
+  integer = true,
+  softMax,
+  optional,
+  step = 1,
+  bare,
+  invalid,
+  className,
+  ...rest
+}: Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "min" | "max" | "step"> &
+  NumberBounds & {
+    value: number | undefined;
+    onChange: (v: number | undefined) => void;
+    step?: number;
+    bare?: boolean;
+    invalid?: boolean;
+  }) {
+  // The text while it's being edited; null shows the value.
+  const [text, setText] = useState<string | null>(null);
+  const bounds: NumberBounds = { min, max, integer, softMax, optional };
+  const report = (v: number | undefined | null) => {
+    if (v !== null && v !== value) onChange(v);
+  };
+  const commit = () => {
+    if (text !== null) report(typedNumber(text, bounds, false));
+    setText(null);
+  };
+  const over = !!softMax && max !== undefined && value !== undefined && value > max;
+  const bad = !!invalid || over || rest["aria-invalid"] === true;
+  const props: InputHTMLAttributes<HTMLInputElement> = {
+    ...rest,
+    inputMode: integer ? "numeric" : "decimal",
+    "aria-invalid": bad || undefined,
+    value: text ?? (value === undefined ? "" : String(value)),
+    onChange: (e) => {
+      setText(e.target.value);
+      report(typedNumber(e.target.value, bounds, true));
+    },
+    onBlur: (e) => {
+      commit();
+      rest.onBlur?.(e);
+    },
+    onKeyDown: (e) => {
+      if (e.key === "Enter") commit();
+      else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+        e.preventDefault();
+        const current = (text !== null ? typedNumber(text, bounds, false) : null) ?? value;
+        report(current === undefined ? min : clampNumber(current + (e.key === "ArrowUp" ? step : -step), bounds));
+        setText(null);
+      }
+      rest.onKeyDown?.(e);
+    },
+  };
+  return bare ? (
+    <input {...props} spellCheck={false} autoComplete="off" className={cx("tabular-nums", className, bad && "text-danger")} />
+  ) : (
+    <Input {...props} invalid={bad} className={cx("font-mono tabular-nums", className)} />
+  );
+}
+
 export function Select({ className, children, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
     <div className={cx("relative inline-flex", className)}>

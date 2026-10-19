@@ -1,6 +1,6 @@
 ---
 title: Results and reports
-description: The run history of a load test, the timing phases and Server-Timing, comparing two runs, and HTML and JSON reports.
+description: The run history of a load test, the timing phases and Server-Timing, comparing two runs, and HTML, JSON and CSV reports.
 sidebar:
   order: 5
 ---
@@ -27,7 +27,7 @@ With no run open, the results side shows the latest run of the test, from this s
 
 ### The verdict card
 
-A finished run starts with a card: **PASSED**, **FAILED** or **ERROR**, a line such as "1 of 3 thresholds failed" (or the error message), the start date, the duration, and **Stopped early** when it was stopped. See [Thresholds](../thresholds/#verdicts).
+A finished run starts with a card: **PASSED**, **FAILED** or **ERROR**, a line such as "1 of 3 thresholds failed" (or the error message), the start date, the duration, and **Stopped early** when it was stopped (**Stopped by a threshold** when a threshold [stopped it](../thresholds/#stopping-a-run-early), with the threshold named below). When the test has a [warm-up](../models-and-stages/#warm-up), the card says how long it was. See [Thresholds](../thresholds/#verdicts).
 
 ## Timing phases
 
@@ -79,7 +79,7 @@ The change is shown in percent against the earlier run ("+12%", "−3.4%"), gree
 
 Compare runs with the same settings: a different model, stage plan or data file changes the numbers for reasons that have nothing to do with the server.
 
-## Export: HTML and JSON
+## Export: HTML, JSON and CSV
 
 **Export** in the results header saves the run on screen:
 
@@ -87,26 +87,28 @@ Compare runs with the same settings: a different model, stage plan or data file 
 |---|---|
 | **HTML report…** | One self-contained page: inline styles, SVG charts and a small script for their tooltips, no external files. Open it in any browser, attach it to a pull request, or archive it as a CI artifact. |
 | **JSON…** | The full summary as JSON, for your own tools. |
+| **CSV, one row per second…** | The data of the charts, for a spreadsheet or a notebook. See [CSV files](#csv-files). |
+| **CSV, one row per request…** | A row for all requests, then one per request, with status codes and network errors. |
 
-The suggested file name is the test's name with the run's start date and time, for example `Checkout smoke 2026-09-28 14-05.html`.
+The suggested file name is the test's name with the run's start date and time, for example `Checkout smoke 2026-09-28 14-05.html` or `Checkout smoke 2026-09-28 14-05 per second.csv`.
 
-`zorvik load` writes the same files with `--html <file>` and `--json <file>`:
+`zorvik load` writes the same files with `--html <file>`, `--json <file>`, `--csv-seconds <file>` and `--csv-requests <file>`:
 
 ```bash
-zorvik load ./api "Checkout smoke" --html report.html --json summary.json
+zorvik load ./api "Checkout smoke" --html report.html --json summary.json --csv-requests requests.csv
 ```
 
 ### The HTML report
 
 | Section | Contents |
 |---|---|
-| Header | Test name, "Load test · Started *2026-09-28 12:05:00 UTC* · ran *duration*", "stopped early" when stopped, and the verdict: ✓ Passed, ✓ Passed (no thresholds), ✗ Failed (*n* of *m* thresholds) or ✗ Failed (error). |
-| Tiles | Requests and req/s, error rate, p95 and p99 latency, p95 first byte, data in and out, connections, and when they apply: capture misses, dropped requests, peak generator CPU. |
+| Header | Test name, "Load test · Started *2026-09-28 12:05:00 UTC* · ran *duration*", "stopped early" when stopped, and the verdict: ✓ Passed, ✓ Passed (no thresholds), ✗ Failed (*n* of *m* thresholds), ✗ Failed (stopped by a threshold) or ✗ Failed (error). A run stopped by a threshold names it below the header. |
+| Tiles | Requests and req/s, error rate, p95 and p99 latency, p95 first byte, data in and out, connections, and when they apply: capture misses, dropped requests, peak generator CPU. With a warm-up, a line below says how long it was. |
 | Thresholds | Each threshold, its actual value ("no data" when there was none) and ✓ Passed / ✗ Failed. |
 | Over time | Charts of requests per second (completed and failed), latency (p50, p95, p99) and users or requests in flight. Point at a chart, tap it, or focus it with Tab and move with the arrow keys to see the time and every value at that moment. Runs longer than 600 seconds are shown in up to 600 columns: counts and p50 are averaged per column, p95 and p99 take the column's highest value. |
 | Latency | min, avg, p50, p90, p95, p99, p99.9 and max of all requests. |
 | Timing | The phases above, with a note when no response had `Server-Timing`. |
-| Requests | Per request: requests, req/s, error rate, p50, p95, p99, max, p95 first byte, capture misses (when any), data in. |
+| Requests | Per request: requests, req/s, error rate, p50, p95, p99, max, p95 first byte, capture misses (when any), data in, and its status codes (the four most frequent, then "other") and network errors, for example `200 × 950, 503 × 12, timeout × 3`. |
 | Status codes | Each status with its count and share. |
 | Network errors | Each kind of network error with its count. |
 
@@ -150,7 +152,8 @@ Latencies are in milliseconds, times since the epoch in milliseconds, rates in r
   "passed": true,
   "stoppedEarly": false,
   "error": null,
-  "peakCpuPercent": 142.0
+  "peakCpuPercent": 142.0,
+  "warmUpMs": 10000
 }
 ```
 
@@ -162,8 +165,10 @@ Latencies are in milliseconds, times since the epoch in milliseconds, rates in r
 | `targets[]` | The same numbers per request: `name`, `request` (path) and `metrics`. |
 | `points[]` | One entry per full second: `second` (from 0), `rps` (requests completed in that second), `errors`, `p50`, `p95`, `p99`, `active` (users, or requests in flight, at the end of the second) and `target` (the stage target: users at the end of the second, or the average rate over the second). The last, partial second is in the totals but not in `points`. |
 | `thresholds[]` | Each enabled threshold: `label`, `metric`, `op`, `value`, `target`, `actual` (`null` without data) and `passed`. |
-| `passed` | Every threshold passed and there was no error. |
+| `passed` | Every threshold passed, there was no error, and no threshold stopped the run. |
 | `stoppedEarly` | Stopped before the planned end. |
+| `stoppedByThreshold` | The label of the threshold that [stopped the run](../thresholds/#stopping-a-run-early), such as `errorRate < 5 %`. Left out when none did. |
+| `warmUpMs` | The [warm-up](../models-and-stages/#warm-up): requests that finished this early are in `points` but not in `totals`, `targets` or `thresholds`. Left out when there was none. |
 | `error` | Why the run could not continue, or `null`. |
 | `peakCpuPercent` | Highest CPU used by Zorvik, in percent of one core summed over cores (200 = two full cores), or `null` when not measured. |
 
@@ -174,7 +179,7 @@ Latencies are in milliseconds, times since the epoch in milliseconds, rates in r
 | `requests` | Completed requests (answered or failed). |
 | `errors` | Network errors plus HTTP status ≥ 400. |
 | `errorRate` | `errors` as a percent of `requests` (0 to 100). |
-| `rps` | `requests` divided by the elapsed seconds. |
+| `rps` | `requests` divided by the seconds requests were being started (after the warm-up, when there is one). |
 | `bytesIn`, `bytesOut` | Bytes received and sent over the wire. |
 | `latency` | `min`, `avg`, `p50`, `p90`, `p95`, `p99`, `p999`, `max` in ms (all 0 without data). |
 | `statusCodes` | `[status, count]` pairs, most frequent first. |
@@ -199,6 +204,39 @@ Latencies are in milliseconds, times since the epoch in milliseconds, rates in r
 | `invalidRequest` | The request could not be built (for example, a rendered URL that isn't valid). |
 | `notAllowed` | The request went to a host the run was not started for (a captured host), or one an AI agent was not allowed to reach. |
 | `tooManyRedirects` | Listed for completeness; load tests don't follow redirects. |
+
+## CSV files
+
+Both CSV files have a header row, use commas and `.` for decimals, and quote text that holds a comma, quote or line break. Request names come from workspace files: a name that a spreadsheet would run as a formula (it starts with `=`, `+`, `-` or `@`) gets a leading `'`.
+
+**One row per second** (`--csv-seconds`): one row for each full second of the run, the same data as the charts.
+
+```csv
+second,requests,errors,p50_ms,p95_ms,p99_ms,active,target,warm_up
+0,180,0,7.9,15,22.4,2,2,true
+1,410,1,8.2,16.1,25,4,4,false
+```
+
+| Column | Meaning |
+|---|---|
+| `second` | Seconds since the start (0 is the first second). |
+| `requests`, `errors` | Requests completed, and failed, in that second. |
+| `p50_ms`, `p95_ms`, `p99_ms` | Latency percentiles of that second. |
+| `active` | Users (virtual users) or requests in flight (request rate) at the end of the second. |
+| `target` | The stage target: users at the end of the second, or the average rate over the second. |
+| `warm_up` | `true` for seconds in the [warm-up](../models-and-stages/#warm-up), which the totals leave out. |
+
+**One row per request** (`--csv-requests`): `All requests` first (with an empty `path`), then each request.
+
+| Columns | Meaning |
+|---|---|
+| `request`, `path` | The request's name and its path under `requests/`. |
+| `requests`, `errors`, `error_rate_pct`, `dropped`, `rps` | As in the [JSON summary](#the-json-summary). |
+| `min_ms` … `max_ms` | `min`, `avg`, `p50`, `p90`, `p95`, `p99`, `p999` and `max` latency; empty without data. |
+| `first_byte_p95_ms`, `connect_p95_ms` | p95 of the [timing phases](#timing-phases); empty without data. |
+| `bytes_in`, `bytes_out`, `connections`, `capture_misses` | As in the JSON summary. |
+| `status_codes` | `status:count` pairs, most frequent first: `200:950 503:12`. |
+| `network_errors` | `kind:count` pairs ([kinds](#network-error-kinds)): `timeout:3 connect:1`. |
 
 ## Charts over long runs
 

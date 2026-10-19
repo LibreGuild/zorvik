@@ -19,15 +19,16 @@ Agents are off until you allow them (**Settings → AI agents → Allow AI agent
 
 | Action | Tools | Default | Setting |
 |---|---|---|---|
-| **Reading** the workspace, variables, history, server traffic, run and load test status | `get_workspace`, `list_*`, `read_*`, `get_variables`, `read_history`, `get_server_traffic`, `get_run_status`, `get_load_test_status`, `export_request`, `open_in_app` | Allowed | none |
+| **Reading** the workspace, variables, history, server traffic, run and load test status, the messages of the agent's connections | `get_workspace`, `list_*`, `read_*`, `get_variables`, `read_history`, `get_server_traffic`, `get_run_status`, `get_load_test_status`, `export_request`, `open_in_app`, `wait_for_message` | Allowed | none |
 | **Edits**: requests, folders, environments (and switching the active one), imports, load tests, servers, mocks, files added with `write_file` | `save_requests`, `save_folder_settings`, `move_item`, `save_environment`, `set_active_environment`, `import`, `update_from_openapi`, `save_load_test`, `save_server`, `create_mock`, `write_file` | Allowed | **Edits by agents**: *Allow* or *Ask me* |
-| **Requests** to other systems: sends, collection runs, GraphQL and gRPC schema lookups, MCP catalogs, downloads for imports and mocks | `send_request`, `run_collection`, `graphql_schema`, `grpc_describe`, `mcp_catalog`, and `import` / `update_from_openapi` / `create_mock` with a URL | Asks for outside hosts | **Requests sent by agents**: *Ask for outside hosts*, *Ask every time* or *Allow* |
+| **Requests** to other systems: sends, live connections (WebSocket, Socket.IO, TCP, UDP, MQTT), collection runs, GraphQL and gRPC schema lookups, MCP catalogs, downloads for imports and mocks | `send_request`, `open_connection`, `run_collection`, `graphql_schema`, `grpc_describe`, `mcp_catalog`, and `import` / `update_from_openapi` / `create_mock` with a URL | Asks for outside hosts | **Requests sent by agents**: *Ask for outside hosts*, *Ask every time* or *Allow* |
 | **Deleting** (to the trash) | `delete_items` | Always asks | none |
 | **Running a load test** | `run_load_test` | Always asks | none |
 | **Starting a server** (any port) | `start_server` | Always asks | none |
 | **Starting a program** (an MCP server over stdio) | `send_request` and `mcp_catalog` with an MCP request whose address is a command | Always asks, every time | none |
 | **Opening or creating a workspace** | `open_workspace` | Always asks | none |
 | **Reading a file outside the workspace** | `import`, `update_from_openapi` and `create_mock` with an absolute `file` path | Always asks | none |
+| **Messages on a connection** the agent opened (and allowed) | `send_message`, `close_connection` | Allowed | none |
 | **Stopping** a run, load test or server | `stop_collection_run`, `stop_load_test`, `stop_server` | Allowed | none |
 
 With **Edits by agents** set to *Ask me*, each change shows what will change ("Save 3 requests?", "Update load test “Smoke”?", "Add a file in the workspace?") and offers **Allow for this session**: after that, the agent's edits no longer ask until it disconnects.
@@ -101,7 +102,7 @@ What goes back to the agent never contains your credentials:
 - **Secret variables**: the value of every enabled secret variable (of the active environment and the workspace) is replaced by `{{name}}` wherever it appears: response bodies, headers, URLs, test results, console output and error messages. Values shorter than 4 characters are left alone (masking "a" everywhere would ruin the text).
 - **Credential headers**: `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-Api-Key`, `Api-Key`, `Apikey`, `X-Auth-Token`, `X-Access-Token`, `X-Csrf-Token`, `X-Xsrf-Token` and `X-Amz-Security-Token` are shown as `••••••`. Their values (and the parts of them 8 characters or longer, such as the token of `Bearer <token>` or a cookie's value) are also hidden anywhere else in the result, URL-encoded forms included.
 - **Variables**: `list_environments` and `get_variables` show secret values as `••••••`. `export_request` returns secret values as `••••••`; you can copy the full command in Zorvik (**Copy as cURL or code…**).
-- **History** returned by `read_history` is redacted the same way.
+- **History** returned by `read_history`, and the messages of the agent's connections, are redacted the same way.
 
 The redaction runs last, on the finished result and on errors, as a safety net over each tool's own care.
 
@@ -118,7 +119,7 @@ Agents never see Zorvik's settings, the cookie jar, OAuth tokens or the secret s
 
 ## Disconnecting and the connection itself
 
-- **Disconnect** (AI agents panel or the title bar pill) cancels the agent's calls in progress, closes its open questions, ends its session approvals and refuses every later call until the agent restarts its MCP server.
+- **Disconnect** (AI agents panel or the title bar pill) cancels the agent's calls in progress, closes its open questions and its connections, ends its session approvals and refuses every later call until the agent restarts its MCP server.
 - The app listens for `zorvik mcp` on `127.0.0.1` only, on a random port, and writes the port and a random token to `agent.json` in its data folder, readable only by your user (on macOS and Linux). A connection must prove it knows the token within 10 seconds, without sending it; at most 16 connections may be proving themselves at once. The app proves itself back, so a stale port reused by another program learns nothing.
 - `agent.json` is removed when the app quits.
 

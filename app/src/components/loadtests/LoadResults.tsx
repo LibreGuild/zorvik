@@ -22,8 +22,13 @@ import { toast } from "../../store/toasts";
 import { useWorkspace } from "../../store/workspace";
 import { Banner, cx, EmptyState, IconButton, Menu } from "../ui";
 import {
+  breakdownFor,
   CPU_WARNING,
   cpuShare,
+  errorKindLabel,
+  type ExportFormat,
+  exportFileName,
+  EXPORTS,
   flattenRequests,
   formatCount,
   formatDuration,
@@ -34,6 +39,9 @@ import {
   formatRate,
   MODELS,
   nameFromPath,
+  runNotes,
+  statusClasses,
+  verdictText,
 } from "./model";
 import { CompareMenu, ComparePanel } from "./CompareRuns";
 import { Panel, Stat, useTicker, Verdict } from "./parts";
@@ -57,6 +65,10 @@ interface ViewData {
   plannedSecs: number;
   /** CPU (percent of one core, summed) now or at its peak. */
   cpu: number | null;
+  /** Seconds at the start left out of the numbers (charted). */
+  warmUpSecs: number;
+  /** The threshold that stopped (or is stopping) the run. */
+  stoppedBy: string | null;
 }
 
 function liveData(run: LiveRun): ViewData {
@@ -72,6 +84,8 @@ function liveData(run: LiveRun): ViewData {
     elapsedSecs: elapsed / 1000,
     plannedSecs: (s?.plannedMs || run.plannedMs) / 1000,
     cpu: s?.cpuPercent ?? null,
+    warmUpSecs: (s?.warmUpMs ?? 0) / 1000,
+    stoppedBy: s?.stoppedByThreshold ?? null,
   };
 }
 
@@ -86,6 +100,8 @@ function summaryData(summary: Summary): ViewData {
     elapsedSecs: summary.durationMs / 1000,
     plannedSecs: summary.durationMs / 1000,
     cpu: summary.peakCpuPercent,
+    warmUpSecs: (summary.warmUpMs ?? 0) / 1000,
+    stoppedBy: summary.stoppedByThreshold ?? null,
   };
 }
 
@@ -199,10 +215,7 @@ export function LoadResults({ tab }: { tab: LoadTestTab }) {
                   <Download size={13} /> Export
                 </button>
               }
-              entries={[
-                { label: "HTML report…", onSelect: () => void exportRun(testId, shownRunId, tab.draft.name, data.summary!, "html") },
-                { label: "JSON…", onSelect: () => void exportRun(testId, shownRunId, tab.draft.name, data.summary!, "json") },
-              ]}
+              entries={EXPORTS.map((e) => ({ label: e.label, onSelect: () => void exportRun(testId, shownRunId, tab.draft.name, data.summary!, e.format) }))}
             />
             <IconButton label="Delete this run" onClick={() => void removeRun(shownRunId)}>
               <Trash2 size={13} />
@@ -308,12 +321,9 @@ function RunsMenu({ runs, selected, live, onSelect }: { runs: LoadRunRecord[] | 
   );
 }
 
-async function exportRun(testId: string, runId: string, name: string, summary: Summary, format: "json" | "html") {
-  const d = new Date(summary.startedAt);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}-${pad(d.getMinutes())}`;
-  const safe = name.replace(/[\\/:*?"<>|]+/g, "-").trim() || "load test";
-  const path = await pickSavePath(format === "html" ? "Save the HTML report" : "Save the results as JSON", `${safe} ${stamp}.${format}`);
+async function exportRun(testId: string, runId: string, name: string, summary: Summary, format: ExportFormat) {
+  const kind = EXPORTS.find((e) => e.format === format) ?? EXPORTS[0];
+  const path = await pickSavePath(kind.title, exportFileName(name, summary.startedAt, kind.suffix));
   if (!path) return;
   try {
     await api.exportLoadRun(testId, runId, path, format);
@@ -334,8 +344,20 @@ const Dashboard = memo(function Dashboard({ data, model, testId, compareId }: { 
   return (
     <div className="flex flex-col gap-3 p-4">
       {data.summary && <VerdictCard summary={data.summary} />}
-      {data.live?.stopping && <Banner tone="info">Stopping: no new requests start; waiting briefly for the ones in flight.</Banner>}
+      {data.live?.stopping && (
+        <Banner tone={data.stoppedBy ? "warning" : "info"}>
+          {data.stoppedBy ? `Stopping: ${data.stoppedBy} failed for longer than it allows. ` : "Stopping: "}
+          No new requests start; waiting briefly for the ones in flight.
+        </Banner>
+      )}
       <Stats data={data} model={model} share={share} />
+      {data.warmUpSecs > 0 && !data.summary && (
+        <p className="-mt-1 text-[11.5px] text-faint" data-testid="load-warm-up-note">
+          {data.elapsedSecs < data.warmUpSecs
+            ? `Warming up: requests in the first ${formatDuration(data.warmUpSecs)} are charted but not counted.`
+            : `The first ${formatDuration(data.warmUpSecs)} (warm-up) are charted but not counted.`}
+        </p>
+      )}
       {hot && (
         <div className="flex items-start gap-2 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-[12.5px] text-warning" role="status">
           <Cpu size={14} className="mt-0.5 shrink-0" />
@@ -346,23 +368,18 @@ const Dashboard = memo(function Dashboard({ data, model, testId, compareId }: { 
         </div>
       )}
       {compareId && current && <ComparePanel testId={testId} runId={compareId} current={current} onClose={() => setCompareRun(testId, null)} />}
-      {data.thresholds.length > 0 && <ThresholdsPanel thresholds={data.thresholds} live={!!data.live} />}
-      <Charts points={data.points} plannedSecs={data.plannedSecs} model={model} />
+      {data.thresholds.length > 0 && <ThresholdsPanel thresholds={data.thresholds} live={!!data.live} stoppedBy={data.stoppedBy} />}
+      <Charts points={data.points} plannedSecs={data.plannedSecs} model={model} warmUpSecs={data.warmUpSecs} />
       {data.totals && timing && (timing.ttfb.count > 0 || timing.connect.count > 0) && <TimingPanel totals={data.totals} />}
       {data.targets.length > 0 && <TargetsTable targets={data.targets} tree={tree} />}
-      {data.totals && (
-        <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-3">
-          <StatusCodes totals={data.totals} />
-          <Errors totals={data.totals} model={model} />
-        </div>
-      )}
+      {data.totals && <Breakdown totals={data.totals} targets={data.targets} model={model} tree={tree} />}
     </div>
   );
 });
 
 function VerdictCard({ summary }: { summary: Summary }) {
-  const failed = summary.thresholds.filter((t) => !t.passed).length;
   const ok = summary.passed && !summary.error;
+  const notes = runNotes(summary);
   return (
     <div
       className={cx("flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border px-4 py-3", ok ? "border-success/35 bg-success/8" : "border-danger/35 bg-danger/7")}
@@ -373,23 +390,20 @@ function VerdictCard({ summary }: { summary: Summary }) {
         {summary.error ? "ERROR" : ok ? "PASSED" : "FAILED"}
       </div>
       <div className="min-w-0 flex-1 text-[12.5px] text-muted">
-        {summary.error ? (
-          <span className="selectable text-danger">{summary.error}</span>
-        ) : summary.thresholds.length === 0 ? (
-          "No thresholds set: the run passes when it completes."
-        ) : failed ? (
-          `${failed} of ${summary.thresholds.length} thresholds failed.`
-        ) : summary.thresholds.length === 1 ? (
-          "The threshold passed."
-        ) : (
-          `All ${summary.thresholds.length} thresholds passed.`
-        )}
+        {summary.error ? <span className="selectable text-danger">{summary.error}</span> : verdictText(summary)}
+        {notes.map((note) => (
+          <div key={note} className={cx("mt-0.5", note.startsWith("Stopped") ? "text-danger" : "text-faint")} data-testid="load-run-note">
+            {note}
+          </div>
+        ))}
       </div>
       <div className="flex flex-wrap items-center gap-2 text-[11.5px] text-muted">
         <span>{runDate(summary.startedAt)}</span>
         <span>·</span>
         <span>{formatDuration(summary.durationMs / 1000)}</span>
-        {summary.stoppedEarly && <span className="rounded-md bg-hover px-1.5 py-px font-medium text-muted">Stopped early</span>}
+        {summary.stoppedEarly && (
+          <span className="rounded-md bg-hover px-1.5 py-px font-medium text-muted">{summary.stoppedByThreshold ? "Stopped by a threshold" : "Stopped early"}</span>
+        )}
       </div>
     </div>
   );
@@ -459,7 +473,7 @@ function Stats({ data, model, share }: { data: ViewData; model: LoadModel; share
   );
 }
 
-function ThresholdsPanel({ thresholds, live }: { thresholds: ThresholdResult[]; live: boolean }) {
+function ThresholdsPanel({ thresholds, live, stoppedBy }: { thresholds: ThresholdResult[]; live: boolean; stoppedBy: string | null }) {
   // Without data a threshold is pending while live, and failed once the run is over.
   const failed = thresholds.filter((t) => (t.actual != null || !live) && !t.passed).length;
   return (
@@ -487,6 +501,11 @@ function ThresholdsPanel({ thresholds, live }: { thresholds: ThresholdResult[]; 
               <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-fg" title={t.label}>
                 {t.label}
               </span>
+              {stoppedBy === t.label && (
+                <span className="shrink-0 rounded-md bg-danger/14 px-1.5 py-px text-[10.5px] font-semibold text-danger" data-testid="load-threshold-stopped">
+                  Stopped the run
+                </span>
+              )}
               <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted">
                 {t.actual == null ? (live ? "no data yet" : "no data") : formatMetricValue(t.metric, t.actual)}
               </span>
@@ -514,7 +533,7 @@ const C = {
 const fmtRate = (v: number) => `${formatRate(v)}/s`;
 const fmtCount = (v: number) => formatCount(v);
 
-const Charts = memo(function Charts({ points, plannedSecs, model }: { points: TimePoint[]; plannedSecs: number; model: LoadModel }) {
+const Charts = memo(function Charts({ points, plannedSecs, model, warmUpSecs }: { points: TimePoint[]; plannedSecs: number; model: LoadModel; warmUpSecs: number }) {
   const [hover, setHover] = useState<number | null>(null);
   const cols = useMemo(() => {
     const n = points.length;
@@ -577,7 +596,7 @@ const Charts = memo(function Charts({ points, plannedSecs, model }: { points: Ti
           />
         }
       >
-        {empty ? <NoPoints /> : <TimeChart label="Requests per second over time" xs={cols.xs} series={throughput} xMax={xMax} format={fmtRate} hover={hover} onHover={setHover} />}
+        {empty ? <NoPoints /> : <TimeChart label="Requests per second over time" xs={cols.xs} series={throughput} xMax={xMax} format={fmtRate} hover={hover} onHover={setHover} shadeUntil={warmUpSecs} />}
       </Panel>
       <Panel
         title="Latency (ms)"
@@ -591,7 +610,7 @@ const Charts = memo(function Charts({ points, plannedSecs, model }: { points: Ti
           />
         }
       >
-        {empty ? <NoPoints /> : <TimeChart label="Latency percentiles over time" xs={cols.xs} series={latency} xMax={xMax} format={formatLatency} hover={hover} onHover={setHover} />}
+        {empty ? <NoPoints /> : <TimeChart label="Latency percentiles over time" xs={cols.xs} series={latency} xMax={xMax} format={formatLatency} hover={hover} onHover={setHover} shadeUntil={warmUpSecs} />}
       </Panel>
       <Panel
         title={rate ? "In flight" : "Users"}
@@ -604,7 +623,7 @@ const Charts = memo(function Charts({ points, plannedSecs, model }: { points: Ti
           />
         }
       >
-        {empty ? <NoPoints /> : <TimeChart label={rate ? "Requests in flight over time" : "Active and target users over time"} xs={cols.xs} series={load} xMax={xMax} format={fmtCount} hover={hover} onHover={setHover} />}
+        {empty ? <NoPoints /> : <TimeChart label={rate ? "Requests in flight over time" : "Active and target users over time"} xs={cols.xs} series={load} xMax={xMax} format={fmtCount} hover={hover} onHover={setHover} shadeUntil={warmUpSecs} />}
       </Panel>
     </div>
   );
@@ -683,14 +702,61 @@ function TargetsTable({ targets, tree }: { targets: TargetSummary[]; tree: TreeN
   );
 }
 
+/** Status codes and errors of all requests, or of one request picked above them. */
+function Breakdown({ totals, targets, model, tree }: { totals: MetricsSummary; targets: TargetSummary[]; model: LoadModel; tree: TreeNode[] }) {
+  const [request, setRequest] = useState<string | null>(null);
+  const names = useMemo(() => new Map(flattenRequests(tree).map((r) => [r.path, r.name])), [tree]);
+  // A request not in these results (another run on screen) falls back to all requests.
+  const picked = request != null && targets.some((t) => t.request === request) ? request : null;
+  const metrics = breakdownFor(totals, targets, picked);
+  const name = (t: TargetSummary) => t.name || names.get(t.request) || nameFromPath(t.request);
+  return (
+    <div className="flex flex-col gap-2" data-testid="load-breakdown">
+      {targets.length > 1 && (
+        <label className="flex items-center gap-2 text-[12px] text-muted">
+          Status codes and errors of
+          <select
+            aria-label="Status codes and errors of"
+            value={picked ?? ""}
+            onChange={(e) => setRequest(e.target.value || null)}
+            className="h-7 min-w-0 max-w-[260px] rounded-lg border border-line bg-input px-1.5 text-[12px] text-fg outline-none hover:border-line-strong focus:border-accent focus:ring-2 focus:ring-accent-soft"
+          >
+            <option value="">All requests</option>
+            {targets.map((t) => (
+              <option key={t.request} value={t.request}>
+                {name(t)}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-3">
+        <StatusCodes totals={metrics} />
+        <Errors totals={metrics} model={model} />
+      </div>
+    </div>
+  );
+}
+
 function StatusCodes({ totals }: { totals: MetricsSummary }) {
   const total = totals.statusCodes.reduce((s, [, n]) => s + n, 0);
   const shown = totals.statusCodes.slice(0, 8);
   const rest = totals.statusCodes.slice(8).reduce((s, [, n]) => s + n, 0);
+  const classes = statusClasses(totals.statusCodes);
   return (
-    <Panel title="Status codes" testId="load-status-codes">
+    <Panel
+      title="Status codes"
+      testId="load-status-codes"
+      right={
+        classes.length > 1 ? (
+          <span className="text-[11px] tabular-nums text-muted" data-testid="load-status-classes">
+            {classes.map(([c, n]) => `${c} ${formatPercent((n * 100) / total)}`).join(" · ")}
+          </span>
+        ) : undefined
+      }
+    >
       {total === 0 ? (
-        <div className="py-3 text-[12px] text-faint">No responses yet</div>
+        <div className="py-3 text-[12px] text-faint">No responses{totals.requests ? "" : " yet"}</div>
       ) : (
         <div className="flex flex-col gap-1.5">
           {shown.map(([code, n]) => (
@@ -708,19 +774,6 @@ const toneVar = (code: number) => {
   return t === "muted" ? "faint" : t;
 };
 
-const ERROR_KINDS: Record<string, string> = {
-  timeout: "Timed out",
-  connect: "Could not connect",
-  refused: "Connection refused",
-  reset: "Connection reset",
-  dns: "DNS lookup failed",
-  tls: "TLS handshake failed",
-  proxy: "Proxy error",
-  protocol: "Protocol error",
-  body: "Response body error",
-  closed: "Connection closed",
-};
-
 function Errors({ totals, model }: { totals: MetricsSummary; model: LoadModel }) {
   const network = totals.errorKinds.reduce((s, [, n]) => s + n, 0);
   const http = Math.max(0, totals.errors - network);
@@ -735,7 +788,7 @@ function Errors({ totals, model }: { totals: MetricsSummary; model: LoadModel })
         <div className="flex flex-col gap-1.5">
           {http > 0 && <Bar label="HTTP status ≥ 400" labelClass="text-fg" count={http} total={denominator} color="var(--warning)" />}
           {totals.errorKinds.map(([kind, n]) => (
-            <Bar key={kind} label={ERROR_KINDS[kind] ?? kind.charAt(0).toUpperCase() + kind.slice(1)} labelClass="text-fg" count={n} total={denominator} color="var(--danger)" />
+            <Bar key={kind} label={errorKindLabel(kind)} labelClass="text-fg" count={n} total={denominator} color="var(--danger)" />
           ))}
           {totals.dropped > 0 && (
             <div className="mt-1 flex items-start gap-1.5 text-[11.5px] text-warning">

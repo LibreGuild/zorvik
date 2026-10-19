@@ -145,6 +145,25 @@ pub struct SocketIoOptions {
     #[serde(default, skip_serializing_if = "is_false")]
     #[ts(optional, as = "Option<bool>")]
     pub ack: bool,
+    /// Saved emits: an event, its arguments and whether to ask for an acknowledgement.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<SavedMessage>>")]
+    pub messages: Vec<SavedMessage>,
+    /// What happens right after connecting (as for WebSocket requests).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<ConnectStep>>")]
+    pub on_connect: Vec<ConnectStep>,
+    /// When set, events from the server that ask for an acknowledgement get one with these
+    /// arguments (JSON: an array for several, else one; may contain `{{variables}}`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub auto_ack: String,
+}
+
+impl SocketIoOptions {
+    pub fn message(&self, name: &str) -> Option<&SavedMessage> {
+        self.messages.iter().find(|m| m.name == name)
+    }
 }
 
 impl Default for SocketIoOptions {
@@ -155,7 +174,135 @@ impl Default for SocketIoOptions {
             transport: SocketIoTransport::Auto,
             event: String::new(),
             ack: false,
+            messages: Vec::new(),
+            on_connect: Vec::new(),
+            auto_ack: String::new(),
         }
+    }
+}
+
+/// How a saved message's text is sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum MessageFormat {
+    /// A text message.
+    #[default]
+    Text,
+    /// A text message holding JSON.
+    Json,
+    /// A binary message, written as hex bytes (`48 65 6c 6c 6f`).
+    Binary,
+}
+
+/// A message kept with a WebSocket request, sent from the composer or by an on-connect step.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SavedMessage {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "is_default")]
+    #[ts(optional, as = "Option<MessageFormat>")]
+    pub format: MessageFormat,
+    /// The message (may contain `{{variables}}`); hex bytes for binary messages. Socket.IO:
+    /// the arguments (JSON: an array for several, else one; text: one string).
+    #[serde(default)]
+    pub text: String,
+    /// Socket.IO: the event to emit.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub event: String,
+    /// Socket.IO: ask the server to acknowledge.
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional, as = "Option<bool>")]
+    pub ack: bool,
+}
+
+fn wait_timeout() -> u64 {
+    5000
+}
+fn is_wait_timeout(v: &u64) -> bool {
+    *v == 5000
+}
+
+/// "Wait until a received message matches", with a time limit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct WaitStep {
+    #[serde(default, rename = "match")]
+    pub matcher: crate::server::MatchKind,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub pattern: String,
+    #[serde(default = "wait_timeout", skip_serializing_if = "is_wait_timeout")]
+    #[ts(optional, as = "Option<u32>")]
+    pub timeout_ms: u64,
+    /// Socket.IO: only this event (its arguments are what `pattern` is matched against).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub event: String,
+}
+
+impl Default for WaitStep {
+    fn default() -> Self {
+        Self {
+            matcher: crate::server::MatchKind::Contains,
+            pattern: String::new(),
+            timeout_ms: wait_timeout(),
+            event: String::new(),
+        }
+    }
+}
+
+/// "Keep sending a saved message every so often" (a heartbeat), until the connection closes.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RepeatStep {
+    /// The saved message's name.
+    pub message: String,
+    #[ts(type = "number")]
+    pub every_ms: u64,
+}
+
+/// What a WebSocket request does right after connecting, in order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(export)]
+pub enum ConnectStep {
+    /// Send the saved message with this name.
+    Send { message: String },
+    /// Wait for a received message that matches (a test in collection runs).
+    Wait(WaitStep),
+    /// Keep sending a saved message (not in collection runs, which close when the steps end).
+    Repeat(RepeatStep),
+}
+
+/// Options of WebSocket requests.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct WebSocketOptions {
+    /// Subprotocols to ask for (`Sec-WebSocket-Protocol`), the preferred first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<String>>")]
+    pub subprotocols: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<SavedMessage>>")]
+    pub messages: Vec<SavedMessage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<ConnectStep>>")]
+    pub on_connect: Vec<ConnectStep>,
+    /// The JSON path whose value pairs a reply with the message it answers (empty: `$.id`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub reply_key: String,
+}
+
+impl WebSocketOptions {
+    pub fn message(&self, name: &str) -> Option<&SavedMessage> {
+        self.messages.iter().find(|m| m.name == name)
     }
 }
 
@@ -1107,6 +1254,9 @@ pub struct Request {
     #[ts(optional, as = "Option<SocketIoOptions>")]
     pub socketio: SocketIoOptions,
     #[serde(default, skip_serializing_if = "is_default")]
+    #[ts(optional, as = "Option<WebSocketOptions>")]
+    pub websocket: WebSocketOptions,
+    #[serde(default, skip_serializing_if = "is_default")]
     #[ts(optional, as = "Option<McpOptions>")]
     pub mcp: McpOptions,
     #[serde(default, skip_serializing_if = "is_default")]
@@ -1219,6 +1369,7 @@ impl Request {
             mqtt: MqttOptions::default(),
             grpc: GrpcOptions::default(),
             socketio: SocketIoOptions::default(),
+            websocket: WebSocketOptions::default(),
             mcp: McpOptions::default(),
             scripts: Scripts::default(),
             docs: String::new(),

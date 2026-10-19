@@ -1,14 +1,28 @@
-// Pass/fail rules: "p95 < 500 ms", "error rate < 1 %" (for the whole test or one request).
+// Pass/fail rules: "p95 < 500 ms", "error rate < 1 %" (for the whole test or one request),
+// each optionally stopping the run early when it keeps failing.
 import { memo, useMemo } from "react";
-import { Plus, X } from "lucide-react";
+import { OctagonX, Plus, X } from "lucide-react";
 import type { LoadTarget } from "../../bindings/LoadTarget";
 import type { Threshold } from "../../bindings/Threshold";
 import type { ThresholdMetric } from "../../bindings/ThresholdMetric";
 import type { ThresholdOp } from "../../bindings/ThresholdOp";
 import type { TreeNode } from "../../bindings/TreeNode";
-import { Button, Checkbox, cx, IconButton } from "../ui";
-import { changeMetric, defaultThreshold, flattenRequests, metricInfo, METRICS, nameFromPath, OP_LABELS, OPS, sendingTargets, thresholdLabel } from "./model";
-import { NumberInput } from "./parts";
+import { Button, Checkbox, cx, IconButton, NumberInput } from "../ui";
+import {
+  abortLabel,
+  changeMetric,
+  DEFAULT_ABORT_SECS,
+  defaultThreshold,
+  flattenRequests,
+  MAX_ABORT_SECS,
+  metricInfo,
+  METRICS,
+  nameFromPath,
+  OP_LABELS,
+  OPS,
+  sendingTargets,
+  thresholdLabel,
+} from "./model";
 
 const selectClass =
   "h-7 min-w-0 rounded-lg border border-line bg-input px-1.5 text-[12px] text-fg outline-none hover:border-line-strong focus:border-accent focus:ring-2 focus:ring-accent-soft";
@@ -48,7 +62,7 @@ export const ThresholdsEditor = memo(function ThresholdsEditor({
                 key={i}
                 className="flex flex-wrap items-center gap-1.5 border-b border-line/60 px-2.5 py-1.5 last:border-b-0"
                 data-testid="load-threshold"
-                title={`${thresholdLabel(t, t.target ? targetName(t.target) : null)}${unsent && enabled ? "\nThat request isn't sent: turn it on, pick another or uncheck this threshold." : ""}`}
+                title={`${thresholdLabel(t, t.target ? targetName(t.target) : null)}${abortLabel(t) ? `\n${abortLabel(t)}` : ""}${unsent && enabled ? "\nThat request isn't sent: turn it on, pick another or uncheck this threshold." : ""}`}
               >
                 <Checkbox checked={enabled} onChange={(v) => update(i, (x) => ({ ...x, enabled: v }))} label="Check this threshold" />
                 <div className={cx("flex min-w-0 flex-1 flex-wrap items-center gap-1.5", !enabled && "opacity-50")}>
@@ -94,6 +108,7 @@ export const ThresholdsEditor = memo(function ThresholdsEditor({
                     ))}
                     {missingTarget && <option value={t.target}>{targetName(t.target!)} (not in this test)</option>}
                   </select>
+                  <StopEarly value={t.abortAfterSecs} onChange={(abortAfterSecs) => update(i, (x) => ({ ...x, abortAfterSecs }))} />
                 </div>
                 <IconButton label="Remove threshold" onClick={() => onChange((list) => list.filter((_, j) => j !== i))} size={24}>
                   <X size={13} />
@@ -111,6 +126,39 @@ export const ThresholdsEditor = memo(function ThresholdsEditor({
     </div>
   );
 });
+
+/** "Stop early": stop the run when this threshold has failed for some seconds in a row. */
+function StopEarly({ value, onChange }: { value: number | undefined; onChange: (secs: number | undefined) => void }) {
+  const on = value != null;
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        aria-pressed={on}
+        aria-label="Stop the run early when this threshold keeps failing"
+        title={on ? "Stops the run once this has failed for that long (the run then fails). Click to run to the end instead." : "Stop the run when this threshold keeps failing, instead of running to the end"}
+        onClick={() => onChange(on ? undefined : DEFAULT_ABORT_SECS)}
+        className={cx("flex h-7 items-center gap-1 rounded-lg px-1.5 text-[11.5px] outline-none focus-visible:ring-2 focus-visible:ring-accent-soft", on ? "bg-danger/12 text-danger" : "text-muted hover:bg-hover hover:text-fg")}
+      >
+        <OctagonX size={13} />
+        {on ? "Stop after" : "Stop early"}
+      </button>
+      {on && (
+        <>
+          <NumberInput
+            aria-label="Seconds failing before the run stops"
+            value={value}
+            min={0}
+            max={MAX_ABORT_SECS}
+            onChange={(v) => onChange(Math.min(MAX_ABORT_SECS, v ?? 0))}
+            className="h-7 w-[52px] text-right"
+          />
+          <span className="text-[11.5px] text-faint">s failing</span>
+        </>
+      )}
+    </div>
+  );
+}
 
 /** A threshold on a metric not checked yet (p95, then errors, p99, throughput…). */
 function nextThreshold(list: Threshold[]): Threshold {

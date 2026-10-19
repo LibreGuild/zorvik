@@ -1,8 +1,14 @@
 // Pure helpers for mock routes: paths from request URLs, a route from a
-// response, labels and list moves. Kept free of React for unit tests.
+// response or from a proxied answer in the traffic, labels and list moves.
+// Kept free of React for unit tests.
+import type { Header } from "../../bindings/Header";
+import type { HttpExchange } from "../../bindings/HttpExchange";
+import type { KeyValue } from "../../bindings/KeyValue";
 import type { MockRoute } from "../../bindings/MockRoute";
 import type { Request } from "../../bindings/Request";
 import type { SendResult } from "../../bindings/SendResult";
+import type { TrafficEntry } from "../../bindings/TrafficEntry";
+import { parseCondition } from "../../lib/messageMatch";
 import type { EditorLanguage } from "../CodeEditor";
 
 /** Common answers offered in the status field. */
@@ -109,10 +115,16 @@ export function pathParams(path: string): string[] {
 
 /** `{{request.…}}` names a route's templates can use (for autocomplete and highlighting). */
 export function requestPlaceholders(route: MockRoute): string[] {
-  const names = ["request.method", "request.path", "request.url", "request.body"];
+  const names = ["request.method", "request.path", "request.url", "request.body", "request.json"];
   for (const p of pathParams(route.path)) names.push(`request.params.${p}`);
   for (const q of route.matchQuery ?? []) if (q.key.trim()) names.push(`request.query.${q.key.trim()}`);
   for (const h of route.matchHeaders ?? []) if (h.key.trim()) names.push(`request.headers.${h.key.trim().toLowerCase()}`);
+  // The value the JSON condition looks at: `$.user.id == 7` offers `request.json.user.id`.
+  const condition = route.matchJson?.trim() ? parseCondition(route.matchJson) : null;
+  if (condition && typeof condition !== "string" && condition.steps.length) {
+    const path = condition.steps.map((s) => (typeof s === "number" ? `[${s}]` : /^[A-Za-z_][\w-]*$/.test(s) ? `.${s}` : `['${s}']`)).join("");
+    names.push(`request.json${path}`);
+  }
   return [...new Set(names)];
 }
 
@@ -158,17 +170,121 @@ const SKIPPED_HEADERS = new Set([
   "nel",
 ]);
 
+// Recorded answers go into server files that are shared with the workspace (Git), so
+// values that are often credentials are left out of them.
+
+/** Words in a name (`api_key`, `accessToken`, `X-Auth-Token`) that mark its value as a credential. */
+const SECRET_WORDS = new Set([
+  "token",
+  "secret",
+  "password",
+  "passwd",
+  "pwd",
+  "pass",
+  "passphrase",
+  "apikey",
+  "signature",
+  "sig",
+  "credential",
+  "credentials",
+  "auth",
+  "authorization",
+  "jwt",
+  "bearer",
+  "session",
+  "sessionid",
+  "sid",
+  "jsessionid",
+  "phpsessid",
+  "otp",
+  "hmac",
+  "verifier",
+  "cookie",
+]);
+/** Words before `token` that make it a place in a list (`pageToken`, `next_token`), not a credential. */
+const PAGE_WORDS = new Set(["page", "next", "continuation", "sync", "cursor"]);
+/** Words before `key` that make it a credential (`api_key`, `X-Functions-Key`); a lone `key` is one too. */
+const KEY_WORDS = new Set(["api", "access", "secret", "private", "client", "consumer", "app", "auth", "license", "subscription", "master", "signing", "sas", "function", "functions"]);
+/** Words before `code` that make it a credential (`auth_code`); a lone `code` (OAuth) is one too. */
+const CODE_WORDS = new Set(["auth", "oauth", "authorization", "access", "verification", "verify", "reset", "login", "confirmation", "otp", "mfa", "2fa"]);
+/** Last words of names that describe a credential rather than hold one (`token_type`, `oauth_signature_method`). */
+const ABOUT_WORDS = new Set(["type", "method", "mode", "url", "uri", "endpoint", "ttl", "expires", "expiry", "expiration", "lifetime", "length", "format", "kind", "name", "version", "hint"]);
+
+/** Whether a query parameter or header name usually carries a credential: `api_key`, `access_token`, `code`, `X-Auth-Token`. */
+export function credentialName(name: string): boolean {
+  const words = name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  if (words.length > 1 && ABOUT_WORDS.has(words[words.length - 1])) return false;
+  return words.some((w, i) => {
+    if (w === "token") return !PAGE_WORDS.has(words[i - 1]);
+    if (SECRET_WORDS.has(w)) return true;
+    if (w === "key") return words.length === 1 || KEY_WORDS.has(words[i - 1]);
+    if (w === "code") return words.length === 1 || CODE_WORDS.has(words[i - 1]);
+    return false;
+  });
+}
+
+const decodeName = (name: string) => {
+  try {
+    return decodeURIComponent(name.replace(/\+/g, " "));
+  } catch {
+    return name;
+  }
+};
+
+/** `url` with the values of its credential-like query and fragment parameters left empty (`?code=&state=x`). */
+function withoutCredentials(url: string): string {
+  const start = url.search(/[?#]/);
+  if (start < 0) return url;
+  const parts = url.slice(start + 1).split(/([&#])/);
+  for (let k = 0; k < parts.length; k += 2) {
+    const eq = parts[k].indexOf("=");
+    if (eq >= 0 && eq < parts[k].length - 1 && credentialName(decodeName(parts[k].slice(0, eq)))) parts[k] = parts[k].slice(0, eq + 1);
+  }
+  return url.slice(0, start + 1) + parts.join("");
+}
+
+const SECRET_HEADERS_NOTE = "Headers that look like credentials (Authorization, tokens, keys) were left out. Add them to the route if the mock needs them.";
+const LOCATION_NOTE = "Values that look like credentials (tokens, keys, codes) were left out of Location headers.";
+const QUERY_NOTE = "Query values that look like credentials (tokens, keys, signatures, codes) were left out: those routes match any value there.";
+const TEMPLATE_NOTE = "Some answers contain {{…}}: the mock fills these in (from variables or the request) when it answers.";
+
+/** Response headers a route keeps from a recorded answer (cookies are left to the caller's note), and notes on what changed. */
+function recordedHeaders(headers: Header[]): { headers: KeyValue[]; notes: string[] } {
+  const kept: KeyValue[] = [];
+  const notes = new Set<string>();
+  for (const h of headers) {
+    const name = h.name.trim().toLowerCase();
+    if (SKIPPED_HEADERS.has(name) || name === "set-cookie") continue;
+    // `Access-Control-Allow-Credentials` and the like say how to send credentials; they hold none.
+    if (!name.startsWith("access-control-") && credentialName(name)) {
+      notes.add(SECRET_HEADERS_NOTE);
+      continue;
+    }
+    const value = name === "location" || name === "content-location" ? withoutCredentials(h.value) : h.value;
+    if (value !== h.value) notes.add(LOCATION_NOTE);
+    kept.push({ key: h.name, value });
+  }
+  return { headers: kept, notes: [...notes] };
+}
+
+/** Whether a recorded answer has text the mock would read as a template. */
+const hasTemplate = (route: MockRoute) => !!route.body?.includes("{{") || !!route.headers?.some((h) => h.key.includes("{{") || h.value.includes("{{"));
+
 /** A route answering like `result` did to `request`, plus notes on what could not be kept. */
 export function routeFromResponse(request: Request, result: SendResult): { route: MockRoute; notes: string[] } {
   const method = (request.method || "GET").toUpperCase();
   const notes: string[] = [];
-  const headers = result.meta.headers
-    .filter((h) => !SKIPPED_HEADERS.has(h.name.toLowerCase()) && h.name.toLowerCase() !== "set-cookie")
-    .map((h) => ({ key: h.name, value: h.value }));
   // Cookies are often sessions: not copied into a server file that is shared with the workspace.
   if (result.meta.headers.some((h) => h.name.toLowerCase() === "set-cookie")) {
     notes.push("Set-Cookie headers were left out: they often hold a session. Add them to the route if the mock needs them.");
   }
+  const recorded = recordedHeaders(result.meta.headers);
+  const headers = recorded.headers;
+  notes.push(...recorded.notes);
   let body = "";
   if (method !== "HEAD" && result.body.size > 0) {
     if (result.body.kind === "text") {
@@ -180,7 +296,77 @@ export function routeFromResponse(request: Request, result: SendResult): { route
   }
   const route: MockRoute = { method, path: routePathFromUrl(request.url), status: result.meta.status, headers, body };
   if (request.name.trim()) route.name = request.name.trim();
+  if (hasTemplate(route)) notes.push(TEMPLATE_NOTE);
   return { route, notes };
+}
+
+/** A route answering like a proxied answer in the traffic: the request's method, path and
+ * query (as conditions), the backend's status, headers and body. `null` when the answer can't be
+ * replayed (no answer, or a cut, binary or compressed body). */
+export function routeFromExchange(x: HttpExchange): { route: MockRoute; notes: string[] } | null {
+  if (!x.status || !x.responseBodyComplete) return null;
+  const [path, query = ""] = splitTarget(x.path);
+  const notes: string[] = [];
+  if (x.responseHeaders.some((h) => h.name.toLowerCase() === "set-cookie")) {
+    notes.push("Set-Cookie headers were left out: they often hold a session.");
+  }
+  const recorded = recordedHeaders(x.responseHeaders);
+  notes.push(...recorded.notes);
+  const route: MockRoute = { method: x.method.toUpperCase(), path, status: x.status, headers: recorded.headers, body: x.responseBody };
+  // The client's credentials (`?api_key=…`) aren't saved: an empty value matches any value.
+  let leftOut = false;
+  const matchQuery = queryPairs(query).map((q) => {
+    if (!q.value || !credentialName(q.key)) return q;
+    leftOut = true;
+    return { key: q.key, value: "" };
+  });
+  if (leftOut) notes.push(QUERY_NOTE);
+  if (matchQuery.length) route.matchQuery = matchQuery;
+  if (hasTemplate(route)) notes.push(TEMPLATE_NOTE);
+  return { route, notes };
+}
+
+/** Routes for the proxied answers in `entries` (oldest first), one per method, path and query,
+ * leaving out ones `existing` routes already answer the same way. */
+export function routesFromTraffic(entries: TrafficEntry[], existing: MockRoute[]): { routes: MockRoute[]; skipped: number; notes: string[] } {
+  const key = (r: MockRoute) =>
+    `${r.method.trim().toUpperCase()} ${r.path.trim()}?${(r.matchQuery ?? [])
+      .filter((q) => q.enabled !== false)
+      .map((q) => `${q.key}=${q.value}`)
+      .sort()
+      .join("&")}`;
+  const seen = new Set(existing.filter((r) => r.enabled !== false).map(key));
+  const routes: MockRoute[] = [];
+  const notes = new Set<string>();
+  let skipped = 0;
+  for (const e of entries) {
+    if (e.http?.note !== "proxy" || !e.http.status) continue;
+    const made = routeFromExchange(e.http);
+    if (!made) {
+      skipped++;
+      continue;
+    }
+    const k = key(made.route);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    routes.push(made.route);
+    for (const n of made.notes) notes.add(n);
+  }
+  // A route with query conditions first, so the one without them doesn't answer its requests.
+  routes.sort((a, b) => Number(!!b.matchQuery?.length) - Number(!!a.matchQuery?.length));
+  return { routes, skipped, notes: [...notes] };
+}
+
+function splitTarget(target: string): [string, string?] {
+  const q = target.indexOf("?");
+  return q < 0 ? [target || "/"] : [target.slice(0, q) || "/", target.slice(q + 1)];
+}
+
+function queryPairs(query: string): KeyValue[] {
+  if (!query) return [];
+  const pairs: KeyValue[] = [];
+  for (const [key, value] of new URLSearchParams(query)) pairs.push({ key, value });
+  return pairs;
 }
 
 /** Move an item (drag and drop). */

@@ -20,7 +20,7 @@ TCP and UDP servers share the **Replies** setting with the WebSocket server:
 | **Manual** | Nothing is sent automatically: reply from the traffic panel. |
 | **Discard** | It is read and dropped. |
 
-Reply rules (**When**: **Contains**, **Is exactly**, **Matches regex**, **Any message**; the **Reply**; a **Delay ms**) work as described in [Reply rules](../websocket-and-sse-servers/#reply-rules). What TCP and UDP add is a choice of **encoding** and, for TCP, **framing**.
+Reply rules (**When**: **Contains**, **Is exactly**, **Matches regex**, **JSON where**, **Any message**; the **Reply**; a **Delay ms**) work as described in [Reply rules](../websocket-and-sse-servers/#reply-rules). What TCP and UDP add is a choice of **encoding** and, for TCP, **framing**.
 
 ## Text or hex
 
@@ -28,10 +28,10 @@ The **Messages** section sets how the greeting, rule patterns and replies are wr
 
 | Encoding | Patterns and replies | Templates |
 |---|---|---|
-| **Text** (default) | Text (UTF-8). | Replies and the greeting may use `{{message}}`, dynamic values and variables. See [Templates](../templates/). |
+| **Text** (default) | Text (UTF-8). | Replies and the greeting may use `{{message}}`, values of a JSON message (`{{message.id}}`), dynamic values and variables. See [Templates](../templates/). |
 | **Hex bytes** | Hex, for example `48 65 6c 6c 6f`, `0x48,0x65` or `48:65:6c`. **Contains** and **Is exactly** patterns are hex too. | None: hex is sent as written. |
 
-In hex mode, **Matches regex** and **Any message** still use the pattern as a regular expression, matched against the raw bytes (write `\x01` for a byte; for bytes from `\x80` up, use `(?-u:\xff)`). A pattern or reply that isn't valid hex skips the rule, and the traffic log says why, for example **Rule 2: reply Hex needs two digits per byte**.
+In hex mode, a **JSON where** pattern is still a condition written as text, and **Matches regex** and **Any message** still use the pattern as a regular expression, matched against the raw bytes (write `\x01` for a byte; for bytes from `\x80` up, use `(?-u:\xff)`). A pattern or reply that isn't valid hex skips the rule, and the traffic log says why, for example **Rule 2: reply Hex needs two digits per byte**.
 
 Incoming messages are always shown as text when they are valid UTF-8, otherwise as hex.
 

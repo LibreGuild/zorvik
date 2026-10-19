@@ -1,6 +1,6 @@
 ---
 title: Faults, delays & CORS
-description: Make mock routes slow or unreliable on purpose, delay rule replies, and let browsers call your mocks from other origins.
+description: Make mock routes slow or unreliable on purpose, fail the first calls to test retries, slow down or cut relayed connections, delay rule replies, and let browsers call your mocks from other origins.
 sidebar:
   order: 3
 ---
@@ -26,6 +26,10 @@ WebSocket, TCP and UDP [reply rules](../websocket-and-sse-servers/#reply-rules) 
 
 An [event stream server](../websocket-and-sse-servers/#event-stream-sse-server) sends its events with the pause set in **Interval (ms)**.
 
+### Relayed connections
+
+A [TCP relay](../relay/#faults) can hold each chunk of data back, limit the bandwidth, and drop connections after a time or a number of bytes, for any protocol that runs over TCP (a database, Redis, SMTP, your own).
+
 ## Faults
 
 A route's **Fault** replaces its normal answer:
@@ -39,6 +43,8 @@ A route's **Fault** replaces its normal answer:
 
 **How often (%)** decides how many requests get the fault: `100` (the default) for every request, `25` for about one in four, picked at random for each request, `0` for none. The route's row shows a lightning bolt with the fault and its percentage.
 
+For faults in a fixed order instead of at random (the first call fails, the second is dropped, the third works), use the route's [answer sequence](../mock-api/#answer-sequences): each answer in it can be **Error (500)**, **Drop the connection** or **Never answer**.
+
 Faults apply to routes only. Requests that no route matches get the 404 or the forwarded answer as usual.
 
 ### What to test with faults
@@ -46,7 +52,8 @@ Faults apply to routes only. Requests that no route matches get the 404 or the f
 | Goal | Route setup |
 |---|---|
 | A client's timeout | **Never answer**, or a **Delay** longer than the timeout. |
-| Retries | **Error (500)** at 30–50 %, and watch the traffic log for the retries. |
+| Retries | An [answer sequence](../mock-api/#answer-sequences) of `503`, `503` (with `Retry-After`), then the route's `200`: the client must get through on its third try. Or **Error (500)** at 30–50 % for a random mix. |
+| Retries that give up | An answer sequence of a few `503` answers with **Start over after the route's answer** off and a route status of `503` too. |
 | Handling of a dropped connection | **Drop the connection** at 100 %. |
 | A slow, flaky dependency | **Delay** 2000 plus **Error (500)** at 20 %. |
 | A specific error body or status (`429`, `503` with `Retry-After`) | No fault: set the **Status**, headers and body of a route instead, possibly with [conditions](../mock-api/#conditions). |

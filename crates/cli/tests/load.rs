@@ -26,6 +26,7 @@ fn load_test(name: &str, target: &str) -> LoadTest {
         value: 1.0,
         target: None,
         enabled: true,
+        abort_after_secs: None,
     }];
     test
 }
@@ -198,4 +199,42 @@ async fn ctrl_c_stops_the_run_and_reports() {
     .unwrap();
     assert_eq!(code, Some(0), "{out}");
     assert!(out.contains("(stopped early)") && out.contains("PASSED") && out.contains("Stopping"), "{out}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn load_command_stops_on_a_failing_threshold_and_saves_csv() {
+    let server = TestServer::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let ws = Workspace::create(dir.path(), "Load").unwrap();
+    let broken = ws.create_request("", request("Broken", &server.url("/status/503"))).unwrap();
+    let mut test = load_test("Outage", &broken);
+    test.stages = vec![LoadStage { duration_secs: 0, target: 2 }, LoadStage { duration_secs: 30, target: 2 }];
+    test.warm_up_secs = 1;
+    test.thresholds[0].abort_after_secs = Some(1);
+    ws.create_load_test(&test).unwrap();
+    let path = dir.path().to_string_lossy().into_owned();
+    let seconds = dir.path().join("seconds.csv");
+    let requests = dir.path().join("requests.csv");
+
+    let (s, r) = (seconds.to_string_lossy().into_owned(), requests.to_string_lossy().into_owned());
+    let started = std::time::Instant::now();
+    let (code, out) = tokio::task::spawn_blocking(move || {
+        zorvik(&["load", &path, "Outage", "--quiet", "--csv-seconds", &s, "--csv-requests", &r])
+    })
+    .await
+    .unwrap();
+    assert_eq!(code, 1, "{out}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(15), "{:?}", started.elapsed());
+    assert!(out.contains("(stopped early)") && out.contains("Stopped by the threshold errorRate < 1 %"), "{out}");
+    assert_eq!(out.matches("Stopping: errorRate < 1 % failed for longer than it allows").count(), 1, "{out}");
+    assert!(out.contains("Warm-up    the first 1 s are left out"), "{out}");
+    let seconds = std::fs::read_to_string(&seconds).unwrap();
+    assert!(seconds.starts_with("second,requests,errors,p50_ms,p95_ms,p99_ms,active,target,warm_up\n0,"), "{seconds}");
+    assert!(seconds.lines().nth(1).unwrap().ends_with(",true"), "{seconds}");
+    let requests = std::fs::read_to_string(&requests).unwrap();
+    assert!(requests.lines().nth(1).unwrap().starts_with("All requests,,"), "{requests}");
+    assert!(
+        requests.lines().nth(2).unwrap().starts_with("Broken,Broken.yaml,") && requests.contains("503:"),
+        "{requests}"
+    );
 }

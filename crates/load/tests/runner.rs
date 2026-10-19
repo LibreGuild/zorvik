@@ -58,6 +58,8 @@ fn plan(model: LoadModel, stages: &[(u32, u32)], targets: Vec<PlanTarget>) -> Pl
         model,
         stages: stages.iter().map(|&(duration_secs, target)| LoadStage { duration_secs, target }).collect(),
         think_time: Duration::ZERO,
+        think_time_max: None,
+        warm_up: Duration::ZERO,
         max_in_flight: 1000,
         keep_alive: true,
         options: RequestOptions::default(),
@@ -67,7 +69,7 @@ fn plan(model: LoadModel, stages: &[(u32, u32)], targets: Vec<PlanTarget>) -> Pl
 }
 
 fn threshold(metric: ThresholdMetric, op: ThresholdOp, value: f64, target: Option<&str>) -> Threshold {
-    Threshold { metric, op, value, target: target.map(str::to_string), enabled: true }
+    Threshold { metric, op, value, target: target.map(str::to_string), enabled: true, abort_after_secs: None }
 }
 
 /// Run to the end (calling `stop` after `stop_after`), checking the event
@@ -633,6 +635,72 @@ fn plans_are_checked_before_starting() {
     p.max_in_flight = 10;
     p.targets[0].captures = vec![capture("id", CaptureFrom::Regex, "(")];
     assert!(validate(&p).unwrap_err().starts_with("Bad: capture 'id': invalid regular expression"));
+    p.targets[0].captures.clear();
+    p.think_time = Duration::from_millis(200);
+    p.think_time_max = Some(Duration::from_millis(100));
+    // Only virtual users think.
+    assert!(validate(&p).is_ok());
+    p.model = LoadModel::VirtualUsers;
+    assert_eq!(validate(&p).unwrap_err(), "The longest think time (100 ms) is shorter than the shortest (200 ms)");
+    p.think_time_max = Some(Duration::from_millis(200));
+    assert!(validate(&p).is_ok());
+    p.warm_up = Duration::from_secs(1);
+    assert!(validate(&p).unwrap_err().starts_with("The warm-up (1 s) must end before the run does (1 s)"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn think_time_can_be_a_random_range() {
+    let server = TestServer::start().await;
+    let mut p = plan(LoadModel::VirtualUsers, &[(0, 5), (2, 5)], vec![target("Ok", server.url("/status/200"), 1)]);
+    p.think_time = Duration::from_millis(50);
+    p.think_time_max = Some(Duration::from_millis(150));
+    let summary = run(p, None).await;
+    // 5 users × 2 s / (100 ms average think + ~1 ms answer) ≈ 100; at most 200 (all 50 ms), at least 66 (all 150 ms).
+    let n = summary.totals.requests;
+    assert!((70..=140).contains(&n), "{n} requests");
+    assert!(summary.passed && summary.totals.errors == 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failing_threshold_can_stop_the_run_early() {
+    let server = TestServer::start().await;
+    let targets = vec![target("Ok", server.url("/status/200"), 1), target("Broken", server.url("/status/503"), 1)];
+    let mut p = plan(LoadModel::VirtualUsers, &[(0, 2), (20, 2)], targets);
+    p.think_time = Duration::from_millis(20);
+    p.thresholds = vec![
+        threshold(ThresholdMetric::P95, ThresholdOp::Lt, 5000.0, None),
+        Threshold { abort_after_secs: Some(1), ..threshold(ThresholdMetric::ErrorRate, ThresholdOp::Lt, 1.0, None) },
+    ];
+    let started = Instant::now();
+    let summary = run(p.clone(), None).await;
+    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    assert!(summary.stopped_early && !summary.passed);
+    assert_eq!(summary.stopped_by_threshold.as_deref(), Some("errorRate < 1 %"));
+    assert!((1000..4000).contains(&summary.duration_ms), "{}", summary.duration_ms);
+    assert!(summary.thresholds[0].passed && !summary.thresholds[1].passed);
+
+    // Without abortAfterSecs the same failure runs to the end.
+    p.stages = vec![LoadStage { duration_secs: 0, target: 2 }, LoadStage { duration_secs: 2, target: 2 }];
+    p.thresholds[1].abort_after_secs = None;
+    let summary = run(p, None).await;
+    assert!(!summary.stopped_early && summary.stopped_by_threshold.is_none() && !summary.passed);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_warm_up_is_charted_but_left_out_of_the_numbers() {
+    let server = TestServer::start().await;
+    let mut p = plan(LoadModel::ArrivalRate, &[(0, 100), (3, 100)], vec![target("Ok", server.url("/status/200"), 1)]);
+    p.warm_up = Duration::from_secs(1);
+    p.thresholds = vec![threshold(ThresholdMetric::Rps, ThresholdOp::Gte, 80.0, None)];
+    let summary = run(p, None).await;
+    assert_eq!(summary.warm_up_ms, 1000);
+    let charted: f64 = summary.points.iter().map(|p| p.rps).sum();
+    let n = summary.totals.requests;
+    // About 200 of the 300 requests are counted; the chart has them all.
+    assert!((170..=230).contains(&n), "{n} counted");
+    assert!(charted >= 270.0 && (charted as u64) > n, "{charted} charted");
+    assert!((85.0..=115.0).contains(&summary.totals.rps), "{} req/s", summary.totals.rps);
+    assert!(summary.passed, "{:?}", summary.thresholds);
 }
 
 #[test]
@@ -681,6 +749,8 @@ fn html_report_is_self_contained_and_escapes_text() {
         stopped_early: false,
         error: None,
         peak_cpu_percent: Some(42.0),
+        warm_up_ms: 0,
+        stopped_by_threshold: None,
     };
     let html = html_report("<script>alert(1)</script>", &summary);
     // The only scripts are the chart tooltips and their data (one block per chart).

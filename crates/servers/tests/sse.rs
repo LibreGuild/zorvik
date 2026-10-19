@@ -1,5 +1,6 @@
-//! SSE server: configured events (templates, interval, repeat, resume), sends
-//! from the UI, disconnects both ways, wrong methods and stop.
+//! SSE server: configured events (templates, interval, repeat, resume), retry
+//! and ending after the last event, sends from the UI, disconnects both ways,
+//! wrong methods and stop.
 
 mod common;
 
@@ -111,6 +112,50 @@ async fn plays_configured_events_with_templates() {
     // A reconnecting client continues after the last id it saw.
     let mut resumed = open(&running.url, &[("Last-Event-ID", "1")]).await;
     assert_eq!(resumed.next().await.data, "line one\nline two");
+}
+
+#[tokio::test]
+async fn retry_and_ending_after_the_last_event() {
+    let mut server = sse(vec![event("", "one", "1"), event("", "two", "2")], 0, false);
+    server.sse.retry_ms = 1500;
+    server.sse.close_after_last = true;
+    let (running, events) = start(server).await;
+
+    let mut stream = open(&running.url, &[]).await;
+    let first = stream.next().await;
+    assert_eq!((first.data.as_str(), first.retry), ("one", Some(1500)));
+    assert_eq!(stream.next().await.data, "two");
+    assert!(stream.ended().await, "the stream ends after the last event");
+    let close = events.wait("close", |e| e.kind == TrafficKind::Close).await;
+    assert!(close.summary.contains("ended after the last event"), "{}", close.summary);
+
+    // A client reconnecting in the middle continues; one that has everything is told to stop.
+    let mut resumed = open(&running.url, &[("Last-Event-ID", "1")]).await;
+    assert_eq!(resumed.next().await.data, "two");
+    assert!(resumed.ended().await);
+    let request = HttpRequest {
+        method: "GET".into(),
+        url: running.url.clone(),
+        headers: vec![zorvik_engine::Header::new("Last-Event-ID", "2")],
+        body: Default::default(),
+    };
+    let done = Client::new().send(request, &RequestOptions::default(), None).await.unwrap();
+    assert_eq!(done.meta.status, 204);
+    events.wait("204", |e| e.kind == TrafficKind::Info && e.summary.contains("→ 204")).await;
+}
+
+#[tokio::test]
+async fn ending_after_events_without_ids_is_reported() {
+    let mut server = sse(vec![event("", "one", ""), event("", "two", "")], 0, false);
+    server.sse.close_after_last = true;
+    let (running, events) = start(server.clone()).await;
+    let problem = events.wait_kind(TrafficKind::Error).await;
+    assert!(problem.summary.contains("give the events an id"), "{}", problem.summary);
+    // With ids, clients that come back are told to stop: nothing more to report.
+    server.sse.events[1].id = "2".into();
+    assert!(running.update(server, VarContext::new()));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(events.traffic().iter().filter(|e| e.kind == TrafficKind::Error).count(), 1);
 }
 
 #[tokio::test]

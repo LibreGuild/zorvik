@@ -347,11 +347,11 @@ async fn relay_ws(
                 Some(WsEvent::Message { direction: Direction::Received, .. }) => {
                     let _ = events.send(SocketEvent::Error { message: "Ignored a binary message (GraphQL messages are text)".into() });
                 }
-                Some(WsEvent::Message { .. }) => {}
+                Some(WsEvent::Message { .. } | WsEvent::Info { .. }) => {}
                 Some(WsEvent::Error { message }) => {
                     let _ = events.send(SocketEvent::Error { message });
                 }
-                Some(WsEvent::Closed { code, reason, by_client }) => {
+                Some(WsEvent::Closed { code, reason, by_client, .. }) => {
                     let _ = events.send(SocketEvent::Closed { reason: close_reason(code, &reason), by_client });
                     return;
                 }

@@ -156,4 +156,4 @@ Zorvik implements the parts of Postman's sandbox that collections use most, so a
 | `pm.request` in pre-request scripts | Only the request's own headers; inherited headers and auth are added after the script |
 | Unknown `pm.expect` words | A chai word Zorvik doesn't have reads as `undefined` and asserts nothing |
 | Scripts on SSE requests | Only in collection runs, with `pm.response.events` (a Zorvik addition) |
-| Protocols | Scripts run for HTTP (and GraphQL) requests, and SSE requests in runs; not for WebSocket, gRPC or the other socket kinds |
+| Protocols | Scripts run for HTTP (and GraphQL) requests, and SSE and WebSocket requests in runs; not for gRPC or the other socket kinds |

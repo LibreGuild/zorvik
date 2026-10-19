@@ -99,6 +99,12 @@ struct LoadArgs {
     /// Save an HTML report to this file.
     #[arg(long, value_name = "FILE")]
     html: Option<PathBuf>,
+    /// Save one CSV row per second (requests, errors, latency percentiles, users) to this file.
+    #[arg(long, value_name = "FILE")]
+    csv_seconds: Option<PathBuf>,
+    /// Save one CSV row per request (and one for all requests) to this file.
+    #[arg(long, value_name = "FILE")]
+    csv_requests: Option<PathBuf>,
     /// Print only the summary (no progress line every second).
     #[arg(short, long)]
     quiet: bool,
@@ -634,6 +640,8 @@ async fn load_plan(
         model: test.model,
         stages: test.stages.clone(),
         think_time: Duration::from_millis(test.think_time_ms),
+        think_time_max: test.think_time_max_ms.map(Duration::from_millis),
+        warm_up: Duration::from_secs(u64::from(test.warm_up_secs)),
         max_in_flight: test.max_in_flight,
         keep_alive: test.keep_alive,
         options,
@@ -701,11 +709,23 @@ async fn load(args: LoadArgs) -> ExitCode {
     let (interrupt_tx, mut interrupts) = tokio::sync::mpsc::unbounded_channel();
     tokio::spawn(async move { while tokio::signal::ctrl_c().await.is_ok() && interrupt_tx.send(()).is_ok() {} });
     let mut stopping = false;
+    // A threshold stopping the run is told once.
+    let mut announced = false;
     let summary = loop {
         tokio::select! {
             event = rx.recv() => match event {
                 // One line per finished second of the run.
-                Some(LoadEvent::Snapshot { snapshot }) if !args.quiet => {
+                Some(LoadEvent::Snapshot { snapshot }) => {
+                    if let Some(label) = snapshot.stopped_by_threshold.as_deref().filter(|_| !announced) {
+                        announced = true;
+                        eprintln!(
+                            "Stopping: {} failed for longer than it allows (waiting for requests in flight)…",
+                            printable(label)
+                        );
+                    }
+                    if args.quiet {
+                        continue;
+                    }
                     for point in &snapshot.points {
                         let mut line = format!(
                             "{:>6}  {:>9} req/s  p95 {:>10}  p99 {:>10}  errors {:<6}  {active_label} {}",
@@ -722,7 +742,6 @@ async fn load(args: LoadArgs) -> ExitCode {
                         out(&paint("2", &line));
                     }
                 }
-                Some(LoadEvent::Snapshot { .. }) => {}
                 Some(LoadEvent::Finished { summary }) => break summary,
                 None => return fail("the load generator stopped without a result".into()),
             },
@@ -747,11 +766,18 @@ async fn load(args: LoadArgs) -> ExitCode {
             code = ExitCode::from(2);
         }
     }
-    if let Some(path) = &args.html
-        && let Err(e) = std::fs::write(path, zorvik_load::html_report(&test.name, &summary))
-    {
-        eprintln!("error: could not save {}: {e}", path.display());
-        code = ExitCode::from(2);
+    let reports = [
+        (&args.html, zorvik_load::html_report as fn(&str, &Summary) -> String),
+        (&args.csv_seconds, |_: &str, s: &Summary| zorvik_load::seconds_csv(s)),
+        (&args.csv_requests, |_: &str, s: &Summary| zorvik_load::requests_csv(s)),
+    ];
+    for (path, render) in reports {
+        if let Some(path) = path
+            && let Err(e) = std::fs::write(path, render(&test.name, &summary))
+        {
+            eprintln!("error: could not save {}: {e}", path.display());
+            code = ExitCode::from(2);
+        }
     }
     code
 }
@@ -776,6 +802,18 @@ fn print_load_summary(name: &str, s: &Summary, paint: &dyn Fn(&str, &str) -> Str
     out(&format!("\"{}\" ran {duration}", printable(name)));
     if let Some(error) = &s.error {
         out(&paint("31", &format!("  error: {}", printable(error))));
+    }
+    if let Some(label) = &s.stopped_by_threshold {
+        out(&paint(
+            "31",
+            &format!("  Stopped by the threshold {}: it failed for longer than it allows", printable(label)),
+        ));
+    }
+    if s.warm_up_ms > 0 {
+        out(&paint(
+            "2",
+            &format!("  Warm-up    the first {} s are left out of these numbers", s.warm_up_ms.div_ceil(1000)),
+        ));
     }
     out(&format!("  Requests   {} ({} req/s)", thousands(t.requests), fixed1(t.rps)));
     out(&format!("  Errors     {} ({} %)", thousands(t.errors), fixed2(t.error_rate)));
@@ -1160,6 +1198,8 @@ mod tests {
             stopped_early: false,
             error: error.map(str::to_string),
             peak_cpu_percent: None,
+            warm_up_ms: 0,
+            stopped_by_threshold: None,
         };
         assert_eq!(load_exit_code(&summary(true, None)), 0);
         assert_eq!(load_exit_code(&summary(false, None)), 1);

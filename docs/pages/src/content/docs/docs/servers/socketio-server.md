@@ -1,6 +1,6 @@
 ---
 title: Socket.IO servers
-description: Run a Socket.IO server that socket.io-client apps connect to, over long-polling or WebSocket, and answer their events by echo, by rules with acknowledgements and broadcasts, or by hand.
+description: Run a Socket.IO server that socket.io-client apps connect to, over long-polling or WebSocket, answer their events by echo, by rules with acknowledgements and broadcasts, or by hand, and emit events on a timer.
 sidebar:
   order: 6
 ---
@@ -36,7 +36,7 @@ Each rule reads: **when a client emits** *event* **with** *arguments* → **ackn
 | Part | In the file | Description |
 |---|---|---|
 | Event | `event` | The event name, or `*` for any. |
-| With | `match`, `pattern` | **any arguments** (default), **arguments contain**, **are exactly** or **match regex**. The pattern is checked against the arguments as JSON (`["hi",{"n":1}]`) and, when there is a single text argument, against that text (so **are exactly** `hi` matches `emit("x", "hi")`). |
+| With | `match`, `pattern` | **any arguments** (default), **arguments contain**, **are exactly**, **match regex** or **arguments (JSON) where** (`json`). The pattern is checked against the arguments as JSON (`["hi",{"n":1}]`) and, when there is a single text argument, against that text (so **are exactly** `hi` matches `emit("x", "hi")`). A **JSON where** condition looks into the arguments array: `$[0].type == join` matches `emit("x", {"type": "join"})`; see [JSON where](../websocket-and-sse-servers/#json-where). |
 | Acknowledge with | `ack` | Arguments (JSON) of the acknowledgement, when the client asks for one. Empty: an acknowledgement without arguments. |
 | Then emit | `replyEvent`, `replyArgs` | An event to emit back and its arguments (JSON). Empty event: none. |
 | To every client of the namespace | `broadcast` | Emit the reply to everyone who joined the namespace, the sender included. |
@@ -68,11 +68,25 @@ The client's values go in after variables are filled in, so a client sending `{{
   replyArgs: "{{event.name}}"
 ```
 
-A rule with an invalid regex is skipped, and the traffic log says so once.
+A rule with an invalid regex is skipped, and the traffic log says so once. A JSON condition that isn't valid matches nothing.
 
 ## Greeting
 
 **Event on joining** is emitted to each client that joins a namespace, with **Arguments** (JSON, templates allowed). Leave the event empty for none.
+
+## Scheduled events
+
+**Scheduled events** are emitted on a timer to every client of a namespace, whatever the answer mode: a price ticker, a notification every minute, a presence update. Click **Add scheduled event** and fill in a row:
+
+| Column | In the file | Description |
+|---|---|---|
+| Checkbox | `enabled` | Turn the event off without removing it. |
+| Event | `event` | The event name. |
+| Arguments | `args` | JSON, an array for several arguments; empty: none. [Templates](../templates/) are filled in for each emit, so `{"price": {{$randomPrice(5, 50)}}, "at": "{{$isoTimestamp}}"}` changes every time. |
+| Namespace | `namespace` | Who gets it: every client that joined this namespace (default `/`). |
+| Every (ms) | `everyMs` | How often, at least 10 ms. |
+
+The timers run from the moment the server starts; a client that joins gets the next emit, with everyone else. Changing the server's settings starts the timers again. Arguments that aren't valid JSON are reported once in the traffic log (**Scheduled event 1: The arguments are not valid JSON: …**) and that event isn't emitted until the settings change.
 
 ## Emitting by hand
 
@@ -103,6 +117,11 @@ socketio:
   rules:
     - event: join
       ack: '{"ok": true}'
+  schedule:
+    - event: price
+      args: '{"symbol": "ACME", "price": {{$randomPrice(5, 50)}}}'
+      namespace: /prices
+      everyMs: 1000
   cors: true
 ```
 

@@ -56,9 +56,12 @@ test("saves a response as an example of the request", async ({ page }) => {
   await page.getByRole("tab", { name: /^Examples/ }).click();
   const examples = page.getByTestId("examples");
   await expect(examples.getByLabel("Example name")).toHaveValue("200 OK");
-  await expect(examples).toContainText("Content-Type");
-  await expect(examples).not.toContainText("Date:");
-  await expect(examples).toContainText('"name":"Zorvik"');
+  // A JSON body is kept indented.
+  await expect(examples).toContainText('"name": "Zorvik"');
+  await examples.getByRole("button", { name: /^Headers/ }).click();
+  const headers = examples.getByTestId("example-headers");
+  await expect(headers.getByPlaceholder("Header").first()).toHaveValue("Content-Type");
+  await expect(headers).not.toContainText("Date");
 });
 
 test("the auth editor has every auth type", async ({ page }) => {

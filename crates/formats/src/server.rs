@@ -121,6 +121,9 @@ pub enum MatchKind {
     Contains,
     Exact,
     Regex,
+    /// A JSON message meeting a condition: `$.type == "ping"`, `$.id != 0`, or
+    /// just `$.id` (the value is there). See [`crate::matching`].
+    Json,
 }
 
 /// "When a message matches `pattern`, reply with `reply`." Pattern and reply
@@ -141,11 +144,22 @@ pub struct ReplyRule {
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     #[ts(optional, as = "Option<bool>")]
     pub enabled: bool,
+    /// WebSocket servers: close the connection after the reply (if any), with this close code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub close: Option<u16>,
 }
 
 impl Default for ReplyRule {
     fn default() -> Self {
-        Self { matcher: MatchKind::Contains, pattern: String::new(), reply: String::new(), delay_ms: 0, enabled: true }
+        Self {
+            matcher: MatchKind::Contains,
+            pattern: String::new(),
+            reply: String::new(),
+            delay_ms: 0,
+            enabled: true,
+            close: None,
+        }
     }
 }
 
@@ -170,11 +184,45 @@ pub enum MockFault {
     Hang,
 }
 
+/// One answer of a route's [`MockRoute::sequence`]: the status, body and extra headers of
+/// one call (templates allowed, like the route's own answer).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MockStep {
+    #[serde(default = "status_ok")]
+    pub status: u16,
+    /// Added to the route's headers (a header of the same name replaces the route's).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<KeyValue>>")]
+    pub headers: Vec<KeyValue>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub body: String,
+    /// Wait before this answer; `None`: the route's delay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, as = "Option<u32>")]
+    pub delay_ms: Option<u64>,
+    /// Instead of this answer (every time; the route's `faultPercent` is not used).
+    #[serde(default, skip_serializing_if = "is_default")]
+    #[ts(optional, as = "Option<MockFault>")]
+    pub fault: MockFault,
+}
+
+impl Default for MockStep {
+    fn default() -> Self {
+        Self { status: 200, headers: Vec::new(), body: String::new(), delay_ms: None, fault: MockFault::None }
+    }
+}
+
+/// Most answers a route's sequence may have.
+pub const MAX_SEQUENCE: usize = 100;
+
 /// One mock route. `path` supports `:name` segments and a trailing `*`.
 /// Status, headers and body may use `{{request.params.id}}`,
 /// `{{request.query.x}}`, `{{request.headers.x}}`, `{{request.body}}`,
-/// `{{request.method}}`, `{{request.path}}`, dynamic variables (`{{$uuid}}`)
-/// and the active environment's variables.
+/// `{{request.json.path}}`, `{{request.method}}`, `{{request.path}}`, dynamic
+/// variables (`{{$uuid}}`) and the active environment's variables.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -210,6 +258,11 @@ pub struct MockRoute {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     #[ts(optional, as = "Option<String>")]
     pub match_body: String,
+    /// Only match requests with a JSON body meeting this condition: `$.type == "admin"`,
+    /// `$.items[0].id != 0`, or just `$.user.id` (the value is there). See [`crate::matching`].
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub match_json: String,
     #[serde(default, skip_serializing_if = "is_default")]
     #[ts(optional, as = "Option<MockFault>")]
     pub fault: MockFault,
@@ -217,6 +270,16 @@ pub struct MockRoute {
     #[serde(default = "hundred", skip_serializing_if = "is_hundred")]
     #[ts(optional, as = "Option<u8>")]
     pub fault_percent: u8,
+    /// Answers for the first calls, in order (e.g. 503, 503 to test a client's retries);
+    /// later calls get the route's own answer. Counting starts again when the server
+    /// starts or the route changes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<MockStep>>")]
+    pub sequence: Vec<MockStep>,
+    /// After the route's own answer, start the sequence over (fails, fails, works, fails, …).
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional, as = "Option<bool>")]
+    pub sequence_repeat: bool,
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     #[ts(optional, as = "Option<bool>")]
     pub enabled: bool,
@@ -235,10 +298,26 @@ impl Default for MockRoute {
             match_query: Vec::new(),
             match_headers: Vec::new(),
             match_body: String::new(),
+            match_json: String::new(),
             fault: MockFault::None,
             fault_percent: 100,
+            sequence: Vec::new(),
+            sequence_repeat: false,
             enabled: true,
         }
+    }
+}
+
+impl MockRoute {
+    /// Which answer call number `call` (0 for the first) gets: `Some(i)` for step `i` of the
+    /// sequence, `None` for the route's own answer.
+    pub fn sequence_step(&self, call: u64) -> Option<usize> {
+        let steps = self.sequence.len() as u64;
+        if steps == 0 {
+            return None;
+        }
+        let at = if self.sequence_repeat { call % (steps + 1) } else { call };
+        (at < steps).then_some(at as usize)
     }
 }
 
@@ -289,7 +368,29 @@ pub struct WsServerConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(optional, as = "Option<Vec<ReplyRule>>")]
     pub rules: Vec<ReplyRule>,
+    /// Sent to each client on a timer while it is connected.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<ScheduledMessage>>")]
+    pub schedule: Vec<ScheduledMessage>,
 }
+
+/// A message a WebSocket server sends every `every_ms` to each client (rendered each time,
+/// so `{{$isoTimestamp}}` or `{{$randomInt(1, 9)}}` change).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ScheduledMessage {
+    #[serde(default)]
+    pub message: String,
+    #[ts(type = "number")]
+    pub every_ms: u64,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    #[ts(optional, as = "Option<bool>")]
+    pub enabled: bool,
+}
+
+/// The shortest pause between scheduled messages.
+pub const MIN_SCHEDULE_MS: u64 = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -322,6 +423,15 @@ pub struct SseServerConfig {
     #[serde(default, skip_serializing_if = "is_false")]
     #[ts(optional, as = "Option<bool>")]
     pub repeat: bool,
+    /// Sent first as `retry:`: how long a client waits before reconnecting (0: not sent).
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    #[ts(optional, as = "Option<u32>")]
+    pub retry_ms: u64,
+    /// Close the stream after the last event (without `repeat`), so clients reconnect;
+    /// a client that sends `Last-Event-ID` continues after that event.
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional, as = "Option<bool>")]
+    pub close_after_last: bool,
 }
 
 // ---- Socket.IO ---------------------------------------------------------------
@@ -396,6 +506,41 @@ impl Default for SocketIoRule {
     }
 }
 
+fn root_namespace() -> String {
+    "/".to_string()
+}
+fn is_root_namespace(v: &String) -> bool {
+    v == "/"
+}
+
+/// An event a Socket.IO server emits every `every_ms` to every client of `namespace`. Its
+/// arguments are rendered for each emit, so `{{$isoTimestamp}}` or `{{$randomInt(1, 9)}}` change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SocketIoScheduled {
+    #[serde(default)]
+    pub event: String,
+    /// Arguments as JSON (an array for several; empty: none).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub args: String,
+    #[serde(default = "root_namespace", skip_serializing_if = "is_root_namespace")]
+    #[ts(optional, as = "Option<String>")]
+    pub namespace: String,
+    #[ts(type = "number")]
+    pub every_ms: u64,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    #[ts(optional, as = "Option<bool>")]
+    pub enabled: bool,
+}
+
+impl Default for SocketIoScheduled {
+    fn default() -> Self {
+        Self { event: String::new(), args: String::new(), namespace: root_namespace(), every_ms: 1000, enabled: true }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -414,6 +559,10 @@ pub struct SocketIoServerConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(optional, as = "Option<Vec<SocketIoRule>>")]
     pub rules: Vec<SocketIoRule>,
+    /// Events emitted on a timer to every client of a namespace.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<SocketIoScheduled>>")]
+    pub schedule: Vec<SocketIoScheduled>,
     /// Where the server answers (socket.io's `path` option).
     #[serde(default = "socketio_path", skip_serializing_if = "is_socketio_path")]
     #[ts(optional, as = "Option<String>")]
@@ -431,6 +580,7 @@ impl Default for SocketIoServerConfig {
             greeting_event: String::new(),
             greeting_args: String::new(),
             rules: Vec::new(),
+            schedule: Vec::new(),
             path: socketio_path(),
             cors: false,
         }
@@ -802,6 +952,22 @@ pub struct TcpProxyConfig {
     #[serde(default, skip_serializing_if = "is_false")]
     #[ts(optional, as = "Option<bool>")]
     pub upstream_tls: bool,
+    /// Faults for resilience tests: each chunk of data waits this long before it is passed on.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    #[ts(optional, as = "Option<u32>")]
+    pub delay_ms: u64,
+    /// Most bytes per second passed on in each direction (0: no limit).
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    #[ts(optional, as = "Option<u32>")]
+    pub bytes_per_second: u64,
+    /// Close both connections this long after the target answered the connect (0: never).
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    #[ts(optional, as = "Option<u32>")]
+    pub drop_after_ms: u64,
+    /// Close both connections once this many bytes were passed on, both directions together (0: never).
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    #[ts(optional, as = "Option<u32>")]
+    pub drop_after_bytes: u64,
 }
 
 // ---- server -----------------------------------------------------------------
@@ -935,6 +1101,31 @@ mod tests {
         assert!(!yaml.contains("http:") && !yaml.contains("dns:"), "{yaml}");
         assert!(yaml.contains("match: contains"), "{yaml}");
         assert_eq!(serde_yaml_ng::from_str::<Server>(&yaml).unwrap(), s);
+    }
+
+    #[test]
+    fn sequence_steps() {
+        let step = |status| MockStep { status, ..Default::default() };
+        let mut route = MockRoute { sequence: vec![step(503), step(429)], ..Default::default() };
+        let calls: Vec<Option<usize>> = (0..5).map(|n| route.sequence_step(n)).collect();
+        assert_eq!(calls, [Some(0), Some(1), None, None, None]);
+        route.sequence_repeat = true;
+        let calls: Vec<Option<usize>> = (0..7).map(|n| route.sequence_step(n)).collect();
+        assert_eq!(calls, [Some(0), Some(1), None, Some(0), Some(1), None, Some(0)]);
+        assert_eq!(MockRoute::default().sequence_step(0), None);
+        // Old files load; new fields stay out of the file when unused.
+        let yaml =
+            "path: /a\nsequence:\n  - status: 503\n    delayMs: 0\n  - {}\nsequenceRepeat: true\nmatchJson: $.id\n";
+        let route: MockRoute = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(
+            (route.sequence[0].delay_ms, route.sequence[1].status, route.sequence[1].delay_ms),
+            (Some(0), 200, None)
+        );
+        assert_eq!(serde_yaml_ng::from_str::<MockRoute>(&serde_yaml_ng::to_string(&route).unwrap()).unwrap(), route);
+        let plain = serde_yaml_ng::to_string(&MockRoute::default()).unwrap();
+        assert!(!plain.contains("sequence") && !plain.contains("matchJson"), "{plain}");
+        let relay = serde_yaml_ng::to_string(&TcpProxyConfig { target: "a:1".into(), ..Default::default() }).unwrap();
+        assert_eq!(relay.trim(), "target: a:1");
     }
 
     #[test]

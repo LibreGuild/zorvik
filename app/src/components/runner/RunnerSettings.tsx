@@ -8,9 +8,8 @@ import { type DataState, MAX_DELAY_MS, MAX_ITERATIONS, moveInOrder, orderRequest
 import type { RunnerTab } from "../../store/tabs";
 import { openModal } from "../../store/ui";
 import { useWorkspace } from "../../store/workspace";
-import { NumberInput } from "../loadtests/parts";
 import { EditorSection } from "../servers/ServerView";
-import { Button, Checkbox, cx, IconButton, Switch } from "../ui";
+import { Button, Checkbox, cx, IconButton, NumberInput, Switch } from "../ui";
 
 export const RunnerSettingsPane = memo(function RunnerSettingsPane({ tab, entries, running }: { tab: RunnerTab; entries: RequestEntry[]; running: boolean }) {
   const settings = useRunner((s) => settingsOf(tab.id, s));
@@ -44,7 +43,7 @@ export const RunnerSettingsPane = memo(function RunnerSettingsPane({ tab, entrie
           <RequestList tabId={tab.id} ordered={ordered} excluded={excluded} />
         ) : (
           <p className="rounded-xl border border-dashed border-line-strong px-4 py-5 text-center text-[12.5px] text-muted">
-            No HTTP requests here. WebSocket, gRPC and other kinds don't run in the runner.
+            Nothing to run here. The runner sends HTTP, GraphQL, SSE, WebSocket, Socket.IO and MCP requests; gRPC, TCP, UDP, MQTT and DNS don't run in it.
           </p>
         )}
       </EditorSection>

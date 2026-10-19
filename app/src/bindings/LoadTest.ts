@@ -18,6 +18,17 @@ seq: number, targets: Array<LoadTarget>, model: LoadModel, stages: Array<LoadSta
  */
 thinkTimeMs?: number, 
 /**
+ * Closed model: each pause is random between `think_time_ms` and this, so
+ * users don't send in lock-step. A fixed pause when missing.
+ */
+thinkTimeMaxMs?: number, 
+/**
+ * Requests that finish in the first seconds of the run are left out of the
+ * numbers and thresholds (they are still charted): caches, JIT and
+ * connection pools warm up first.
+ */
+warmUpSecs?: number, 
+/**
  * Open model: most requests in flight at once; more are counted as dropped.
  */
 maxInFlight?: number, 

@@ -8,4 +8,20 @@ target: string,
 /**
  * Connect to the target with TLS (clients still talk plain TCP to the relay).
  */
-upstreamTls?: boolean, };
+upstreamTls?: boolean, 
+/**
+ * Faults for resilience tests: each chunk of data waits this long before it is passed on.
+ */
+delayMs?: number, 
+/**
+ * Most bytes per second passed on in each direction (0: no limit).
+ */
+bytesPerSecond?: number, 
+/**
+ * Close both connections this long after the target answered the connect (0: never).
+ */
+dropAfterMs?: number, 
+/**
+ * Close both connections once this many bytes were passed on, both directions together (0: never).
+ */
+dropAfterBytes?: number, };

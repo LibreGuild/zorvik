@@ -32,6 +32,7 @@ url.workspace = true
 time.workspace = true
 serde_ignored.workspace = true
 strsim.workspace = true
+memchr.workspace = true
 
 [dev-dependencies]
 zorvik-engine.workspace = true
