@@ -531,6 +531,39 @@ async fn import_postman_and_export_curl() {
 }
 
 #[tokio::test]
+async fn google_discovery_and_aws_models_import_from_a_file() {
+    let h = Harness::new().await;
+    let discovery = json!({
+        "kind": "discovery#restDescription", "discoveryVersion": "v1", "name": "demo", "version": "v1",
+        "title": "Demo API", "rootUrl": "https://demo.googleapis.com/", "servicePath": "",
+        "resources": {"items": {"methods": {"list": {
+            "id": "demo.items.list", "httpMethod": "GET", "path": "v1/items", "flatPath": "v1/items"
+        }}}}
+    });
+    let imported = h.ok("import.file", json!({ "text": discovery.to_string(), "parent": "" })).await;
+    assert_eq!(imported["requests"], 1, "{imported}");
+    // Kept like any OpenAPI document, so it can be updated and responses checked.
+    let folder = imported["folderPath"].as_str().unwrap();
+    let meta = h.ok("folder.read", json!({ "path": folder })).await;
+    assert!(meta["openapi"]["spec"].as_str().unwrap().starts_with("specs/"), "{meta}");
+
+    let smithy = json!({
+        "smithy": "2.0",
+        "shapes": {
+            "com.example#Queue": {
+                "type": "service", "version": "2012-11-05", "operations": [{"target": "com.example#ListQueues"}],
+                "traits": {"aws.api#service": {"sdkId": "Queue", "endpointPrefix": "queue"},
+                           "aws.auth#sigv4": {"name": "queue"}, "aws.protocols#awsJson1_0": {}}
+            },
+            "com.example#ListQueues": {"type": "operation"}
+        }
+    });
+    let imported = h.ok("import.file", json!({ "text": smithy.to_string(), "parent": "" })).await;
+    assert_eq!(imported["requests"], 1, "{imported}");
+    assert_eq!(imported["environments"], 1, "awsRegion and the keys: {imported}");
+}
+
+#[tokio::test]
 async fn settings_round_trip_and_validation() {
     let h = Harness::new().await;
     let mut settings = h.ok("settings.get", json!({})).await;

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Cookie, FileJson, Globe, GraduationCap, ListChecks, Search, Terminal, Trash2 } from "lucide-react";
+import { Cookie, FileJson, Globe, GraduationCap, KeyRound, ListChecks, Search, Terminal, Trash2 } from "lucide-react";
+import type { CatalogImport } from "../../bindings/CatalogImport";
 import type { CookieInfo } from "../../bindings/CookieInfo";
 import type { SpecUpdate } from "../../bindings/SpecUpdate";
 import type { FolderMeta } from "../../bindings/FolderMeta";
@@ -18,11 +19,13 @@ import { SERVER_KINDS } from "../servers/kinds";
 import { TOOLS } from "../tools/registry";
 import { toast } from "../../store/toasts";
 import { openAcademy } from "../../store/academy";
-import { closeModal, toggleExpanded } from "../../store/ui";
+import { closeModal, openModal, toggleExpanded, useUi } from "../../store/ui";
 import { refreshEnvironments, refreshTree, reloadWorkspace, useWorkspace } from "../../store/workspace";
 import { CodeEditor } from "../CodeEditor";
 import { DocsEditor } from "../DocsEditor";
 import { KeyValueEditor } from "../KeyValueEditor";
+import { CatalogTab } from "../catalog/CatalogTab";
+import { foldersTo } from "../catalog/model";
 import { AuthEditor } from "../request/AuthEditor";
 import { ScriptsEditor, ScriptsTabLabel } from "../request/ScriptsEditor";
 import { moveItem } from "../sidebar/Sidebar";
@@ -38,11 +41,11 @@ function folderOptions(nodes: TreeNode[], depth = 0): { path: string; label: str
     .flatMap((n) => [{ path: n.path, label: `${"  ".repeat(depth)}${n.name}` }, ...folderOptions(n.children, depth + 1)]);
 }
 
-function FolderSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function FolderSelect({ value, onChange, disabled }: { value: string; onChange: (v: string) => void; disabled?: boolean }) {
   const tree = useWorkspace((s) => s.info?.tree ?? NO_NODES);
   const options = useMemo(() => folderOptions(tree), [tree]);
   return (
-    <Select value={value} onChange={(e) => onChange(e.target.value)} className="w-full">
+    <Select value={value} onChange={(e) => onChange(e.target.value)} className="w-full" disabled={disabled}>
       <option value="">Workspace root</option>
       {options.map((o) => (
         <option key={o.path} value={o.path}>
@@ -55,23 +58,55 @@ function FolderSelect({ value, onChange }: { value: string; onChange: (v: string
 
 // ---- Import --------------------------------------------------------------------
 
-export function ImportModal({ parent: initialParent }: { parent?: string }) {
-  const [tab, setTab] = useState<"file" | "curl" | "url">("file");
+/** Show an imported folder in the sidebar: the collection, with it and the folders above it open. */
+function reveal(folderPath: string | null) {
+  if (!folderPath) return;
+  useUi.setState({ sidebarTab: "collection" });
+  for (const folder of foldersTo(folderPath)) toggleExpanded(folder, true);
+}
+
+export function ImportModal({ parent: initialParent, tab: initialTab }: { parent?: string; tab?: "catalog" }) {
+  // On the welcome screen there is no workspace yet: only the catalog, which offers to make one.
+  const hasWorkspace = useWorkspace((s) => !!s.info);
+  const [tab, setTab] = useState<"catalog" | "file" | "curl" | "url">(initialTab ?? (hasWorkspace ? "file" : "catalog"));
   const [parent, setParent] = useState(initialParent ?? "");
   const [curl, setCurl] = useState("");
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
+  // An import from the catalog is running: the window's other imports wait for it (one at a time).
+  const [catalogBusy, setCatalogBusy] = useState(false);
   const [summary, setSummary] = useState<ImportSummary | null>(null);
+  // An API from the catalog: its environment (now active) is where the API key goes.
+  const [fromCatalog, setFromCatalog] = useState(false);
   const [dragging, setDragging] = useState(false);
   // An OpenAPI document without a full server URL: the import again, once the user gives one.
   const [needsBase, setNeedsBase] = useState<{ message: string; retry: (baseUrl: string) => Promise<ImportSummary> } | null>(null);
   const [baseUrl, setBaseUrl] = useState("");
+  const environment = useWorkspace((s) => (summary?.environmentId ? s.info?.environments.find((e) => e.id === summary.environmentId) : undefined));
+  const needsKey = fromCatalog && !!environment?.environment.variables.some((v) => v.secret);
 
   const finish = async (s: ImportSummary) => {
     setSummary(s);
-    if (s.folderPath) toggleExpanded(s.folderPath, true);
+    reveal(s.folderPath);
     await refreshTree();
     if (s.environments) await refreshEnvironments();
+  };
+
+  const finishCatalog = async ({ summary: s, open }: CatalogImport) => {
+    setFromCatalog(true);
+    setSummary(s);
+    reveal(s.folderPath);
+    // The tree, the new environment and which one is active (the import made it active).
+    try {
+      await reloadWorkspace();
+    } catch (e) {
+      // The import itself worked (its summary shows): say why the sidebar may not show it yet.
+      toast("error", `Imported ${s.name}, but couldn't reload the workspace`, errorMessage(e));
+    }
+    if (open) {
+      reveal(open.includes("/") ? open.slice(0, open.lastIndexOf("/")) : null);
+      await openRequest(open);
+    }
   };
 
   const run = async (fn: () => Promise<void>) => {
@@ -104,16 +139,36 @@ export function ImportModal({ parent: initialParent }: { parent?: string }) {
       open
       onClose={closeModal}
       title="Import"
-      description="Postman collections & environments, OpenAPI 3 / Swagger 2 (JSON or YAML), or a cURL command."
-      width={640}
-      bodyClassName="p-0"
+      description="Postman collections & environments, OpenAPI 3 / Swagger 2, Google and AWS API descriptions, a cURL command, or well-known APIs from the catalog."
+      width={860}
+      // The catalog's list takes the height left in the window.
+      bodyClassName={summary || tab !== "catalog" ? "p-0" : "flex flex-col p-0"}
       footer={
         summary ? (
-          <Button variant="primary" onClick={closeModal}>
-            Done
-          </Button>
+          needsKey && environment ? (
+            <>
+              <Button variant="ghost" onClick={closeModal}>
+                Done
+              </Button>
+              <Button variant="primary" icon={<KeyRound size={14} />} onClick={() => openModal({ type: "environments", focus: environment.id })}>
+                Add your API key
+              </Button>
+            </>
+          ) : (
+            <Button variant="primary" onClick={closeModal}>
+              Done
+            </Button>
+          )
         ) : (
           <>
+            {tab === "catalog" && hasWorkspace && (
+              <label className="mr-auto flex items-center gap-2 text-[12px] text-muted">
+                Import into
+                <span className="w-56">
+                  <FolderSelect value={parent} onChange={setParent} disabled={catalogBusy} />
+                </span>
+              </label>
+            )}
             <Button variant="ghost" onClick={closeModal}>
               Cancel
             </Button>
@@ -121,7 +176,7 @@ export function ImportModal({ parent: initialParent }: { parent?: string }) {
               <Button
                 variant="primary"
                 loading={busy}
-                disabled={!curl.trim()}
+                disabled={!curl.trim() || catalogBusy}
                 onClick={() =>
                   run(async () => {
                     const r = await api.importCurl(curl);
@@ -134,11 +189,11 @@ export function ImportModal({ parent: initialParent }: { parent?: string }) {
                 Open as new request
               </Button>
             )}
-            {needsBase ? (
+            {needsBase && tab !== "catalog" ? (
               <Button
                 variant="primary"
                 loading={busy}
-                disabled={!baseUrl.trim().includes("://")}
+                disabled={!baseUrl.trim().includes("://") || catalogBusy}
                 onClick={() =>
                   run(async () => {
                     await finish(await needsBase.retry(baseUrl.trim()));
@@ -150,7 +205,7 @@ export function ImportModal({ parent: initialParent }: { parent?: string }) {
               </Button>
             ) : (
               tab === "url" && (
-                <Button variant="primary" loading={busy} disabled={!url.trim()} onClick={() => importing((b) => api.importUrl(url.trim(), parent, b))}>
+                <Button variant="primary" loading={busy} disabled={!url.trim() || catalogBusy} onClick={() => importing((b) => api.importUrl(url.trim(), parent, b))}>
                   Import
                 </Button>
               )
@@ -160,12 +215,18 @@ export function ImportModal({ parent: initialParent }: { parent?: string }) {
       }
     >
       {summary ? (
-        <div className="p-5">
+        <div className="p-5" data-testid="import-summary">
           <div className="text-[14px] font-semibold text-fg">Imported “{summary.name}”</div>
           <div className="mt-1 text-[13px] text-muted">
             {summary.requests} requests · {summary.folders} folders{summary.environments ? ` · ${summary.environments} environment` : ""}
             {summary.workspaceVariables ? ` · ${summary.workspaceVariables} workspace variable${summary.workspaceVariables === 1 ? "" : "s"}` : ""}
           </div>
+          {fromCatalog && environment && (
+            <p className="mt-3 text-[12.5px] text-muted">
+              The environment “{environment.environment.name}” is now active
+              {needsKey ? ". Add your API key to it, and your requests are ready to send." : "."}
+            </p>
+          )}
           {summary.warnings.length > 0 && (
             <div className="mt-4">
               <div className="mb-1.5 text-[12px] font-medium text-warning">{summary.warnings.length} note{summary.warnings.length > 1 ? "s" : ""}</div>
@@ -181,75 +242,98 @@ export function ImportModal({ parent: initialParent }: { parent?: string }) {
         <>
           <Tabs
             items={[
-              { id: "file", label: "File" },
-              { id: "curl", label: "cURL" },
-              { id: "url", label: "OpenAPI URL" },
+              ...(hasWorkspace
+                ? [
+                    { id: "file" as const, label: "File" },
+                    { id: "curl" as const, label: "cURL" },
+                    { id: "url" as const, label: "OpenAPI URL" },
+                  ]
+                : []),
+              { id: "catalog", label: "API catalog" },
             ]}
             value={tab}
             onChange={setTab}
           />
-          <div className="flex flex-col gap-4 p-5">
-            {needsBase && (
-              <div className="rounded-lg border border-warning/30 bg-warning/10 p-3" data-testid="import-base-url">
-                <p className="text-[12.5px] text-fg">{needsBase.message}</p>
-                <div className="mt-2.5">
-                  <Input
-                    value={baseUrl}
-                    onChange={(e) => setBaseUrl(e.target.value)}
-                    placeholder="https://api.example.com"
-                    aria-label="Base URL"
-                    autoFocus
-                  />
-                </div>
-                <p className="mt-1.5 text-[11.5px] text-faint">It goes into the new environment as baseUrl; you can change it there later.</p>
-              </div>
-            )}
-            {tab !== "curl" && (
-              <Field label="Import into">
-                <FolderSelect value={parent} onChange={setParent} />
-              </Field>
-            )}
-            {tab === "file" && (
-              <button
-                disabled={busy}
-                onClick={() =>
-                  run(async () => {
-                    const path = await pickFile("Choose a file to import", ["json", "yaml", "yml", "txt", "sh"]);
-                    if (path) await importing((b) => api.importFile(path, parent, b));
-                  })
-                }
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setDragging(true);
-                }}
-                onDragLeave={() => setDragging(false)}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setDragging(false);
-                  const file = e.dataTransfer.files[0];
-                  if (file) void file.text().then((text) => importing((b) => api.importText(text, parent, b)));
-                }}
-                className={cx(
-                  "flex h-36 flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed text-muted transition-colors hover:border-accent hover:text-fg",
-                  dragging ? "border-accent bg-accent-soft text-fg" : "border-line-strong",
-                )}
-              >
-                {busy ? <Spinner size={20} /> : <FileJson size={24} />}
-                <span className="text-[13px] font-medium">Choose a file, or drop it here</span>
-                <span className="text-[11.5px] text-faint">Postman, OpenAPI / Swagger (JSON or YAML) — detected automatically</span>
-              </button>
-            )}
-            {tab === "curl" && (
-              <div className="h-56 overflow-hidden rounded-md border border-line bg-input">
-                <CodeEditor value={curl} onChange={setCurl} placeholder="curl 'https://api.example.com' -H 'Accept: application/json'" lineNumbers={false} autoFocus />
-              </div>
-            )}
-            {tab === "url" && (
-              <Field label="OpenAPI / Swagger URL">
-                <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://petstore3.swagger.io/api/v3/openapi.json" autoFocus />
-              </Field>
-            )}
+          {(tab === "catalog" ? busy : catalogBusy) && (
+            <p role="status" className="mx-5 mt-3 rounded-lg border border-line bg-panel-2 px-3 py-2 text-[12.5px] text-muted" data-testid="import-waiting">
+              {tab === "catalog" ? "Another import is running" : "An API from the catalog is being imported"}. This one can start when it finishes.
+            </p>
+          )}
+          {/* Kept while another tab shows: the search, the API picked and an import under way stay. */}
+          <div className={tab === "catalog" ? "contents" : "hidden"}>
+            <CatalogTab
+              parent={hasWorkspace ? parent : ""}
+              blocked={busy}
+              onBusyChange={setCatalogBusy}
+              onImported={finishCatalog}
+              onImportFile={() => setTab("file")}
+            />
           </div>
+          {tab !== "catalog" && (
+            <div className="flex flex-col gap-4 p-5">
+              {needsBase && (
+                <div className="rounded-lg border border-warning/30 bg-warning/10 p-3" data-testid="import-base-url">
+                  <p className="text-[12.5px] text-fg">{needsBase.message}</p>
+                  <div className="mt-2.5">
+                    <Input
+                      value={baseUrl}
+                      onChange={(e) => setBaseUrl(e.target.value)}
+                      placeholder="https://api.example.com"
+                      aria-label="Base URL"
+                      autoFocus
+                    />
+                  </div>
+                  <p className="mt-1.5 text-[11.5px] text-faint">It goes into the new environment as baseUrl; you can change it there later.</p>
+                </div>
+              )}
+              {tab !== "curl" && (
+                <Field label="Import into">
+                  <FolderSelect value={parent} onChange={setParent} />
+                </Field>
+              )}
+              {tab === "file" && (
+                <button
+                  disabled={busy || catalogBusy}
+                  onClick={() =>
+                    run(async () => {
+                      const path = await pickFile("Choose a file to import", ["json", "yaml", "yml", "txt", "sh"]);
+                      if (path) await importing((b) => api.importFile(path, parent, b));
+                    })
+                  }
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragging(true);
+                  }}
+                  onDragLeave={() => setDragging(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragging(false);
+                    if (busy || catalogBusy) return; // one import at a time
+                    const file = e.dataTransfer.files[0];
+                    if (file) void file.text().then((text) => importing((b) => api.importText(text, parent, b)));
+                  }}
+                  className={cx(
+                    "flex h-36 flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed text-muted transition-colors hover:border-accent hover:text-fg",
+                    dragging ? "border-accent bg-accent-soft text-fg" : "border-line-strong",
+                  )}
+                >
+                  {busy ? <Spinner size={20} /> : <FileJson size={24} />}
+                  <span className="text-[13px] font-medium">Choose a file, or drop it here</span>
+                  <span className="text-[11.5px] text-faint">Postman, OpenAPI / Swagger (JSON or YAML) — detected automatically</span>
+                </button>
+              )}
+              {tab === "curl" && (
+                <div className="h-56 overflow-hidden rounded-md border border-line bg-input">
+                  <CodeEditor value={curl} onChange={setCurl} placeholder="curl 'https://api.example.com' -H 'Accept: application/json'" lineNumbers={false} autoFocus />
+                </div>
+              )}
+              {tab === "url" && (
+                <Field label="OpenAPI / Swagger URL">
+                  <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://petstore3.swagger.io/api/v3/openapi.json" autoFocus />
+                </Field>
+              )}
+            </div>
+          )}
         </>
       )}
     </Modal>

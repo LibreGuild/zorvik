@@ -224,6 +224,7 @@ pub fn router() -> Router {
         .route("/ntlm/{domain}/{user}/{passwd}", any(auth::ntlm))
         .route("/json", get(|| async { axum::Json(sample_json()) }))
         .route("/big-json", get(big_json))
+        .route("/long-json", get(long_json))
         .route("/html", get(|| async { ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], SAMPLE_HTML) }))
         .route("/xml", get(|| async { ([(header::CONTENT_TYPE, "application/xml")], SAMPLE_XML) }))
         .route("/image.png", get(|| async { ([(header::CONTENT_TYPE, "image/png")], PNG_1X1.to_vec()) }))
@@ -445,6 +446,14 @@ async fn big_json(Query(q): Query<HashMap<String, String>>) -> impl IntoResponse
     let items: Vec<Value> =
         (0..n).map(|i| json!({ "index": i, "name": format!("item-{i}"), "active": i % 2 == 0 })).collect();
     axum::Json(json!({ "count": n, "items": items }))
+}
+
+/// One very long string in a small JSON document, like an image an API returns as base64
+/// (`?bytes=` of it, 2.5 MB by default).
+async fn long_json(Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
+    let bytes: usize = q.get("bytes").and_then(|v| v.parse().ok()).unwrap_or(2_500_000).min(50_000_000);
+    let b64: String = "iVBORw0KGgoAAAANSUhEUgAA".chars().cycle().take(bytes).collect();
+    axum::Json(json!({ "created": 1_700_000_000, "data": [{ "b64_json": b64, "revised_prompt": "A lighthouse" }] }))
 }
 
 async fn sse(Query(q): Query<HashMap<String, String>>) -> Response {

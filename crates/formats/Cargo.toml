@@ -1,6 +1,6 @@
 [package]
 name = "zorvik-formats"
-description = "Data model (requests, folders, environments) plus import/export: cURL, Postman, OpenAPI"
+description = "Data model (requests, folders, environments) plus import/export: cURL, Postman, OpenAPI, Google Discovery, AWS Smithy"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -17,7 +17,7 @@ use crate::{Api, ApiError, ApiResult, MAX_IMPORT_FILE, join_err, ok, params};
 /// First port tried for a new mock (ports of other saved servers are skipped).
 const FIRST_PORT: u16 = 3000;
 /// Longest wait for an OpenAPI document download when requests have no timeout.
-const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
+pub(crate) const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// A mock server made from a folder or an OpenAPI document.
 #[derive(Debug, Clone, Serialize, TS)]
@@ -132,7 +132,7 @@ impl Api {
         if response.body_truncated {
             return Err(ApiError::invalid("The download is larger than 50 MB"));
         }
-        Ok(String::from_utf8_lossy(&response.body).into_owned())
+        Ok(crate::document_text(&response.body))
     }
 
     /// A running copy of the server picks up the change right away.
@@ -199,7 +199,7 @@ pub(crate) fn read_document(path: &str) -> ApiResult<String> {
     if bytes.len() as u64 > MAX_IMPORT_FILE {
         return Err(too_big());
     }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    Ok(crate::document_text(&bytes))
 }
 
 /// Save a new mock API with `routes` on a port no other saved server uses.

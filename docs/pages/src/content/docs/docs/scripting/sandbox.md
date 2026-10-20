@@ -68,9 +68,9 @@ The sandbox has no way to reach outside itself.
 | Direct network access | `fetch`, `XMLHttpRequest`, sockets | `undefined`: use [`pm.sendRequest`](../pm-reference/#pmsendrequest) |
 | Modules | npm packages and files other than the [built-in libraries](#libraries), `import()` | `require('x')` throws `Cannot find module 'x'. Scripts can require only these built-in libraries: …`; `import()` rejects |
 | Files and processes | `process`, `std`, `os` | `undefined` |
-| Node.js and web APIs | `Buffer`, `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, `structuredClone`, `crypto.subtle`, `Intl` | `undefined` (`Buffer` is in `require('buffer')`) |
+| Node.js and web APIs | `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, `structuredClone`, `crypto.subtle`, `Intl` | `undefined` |
 
-What is available beyond the language: the `pm` API, `console`, `atob` and `btoa` (Base64 for Latin-1 text), `queueMicrotask`, `crypto.getRandomValues` and `crypto.randomUUID`, and the [libraries](#libraries).
+What is available beyond the language: the `pm` API, `console`, `atob` and `btoa` (Base64 for Latin-1 text), Node's `Buffer` (as in Postman's sandbox), `queueMicrotask`, `crypto.getRandomValues` and `crypto.randomUUID`, [SugarJS](#sugarjs) and the [libraries](#libraries).
 
 Some consequences:
 
@@ -83,7 +83,7 @@ Scripts can `require` the libraries Postman's sandbox has, and a few of Node's m
 
 | `require(…)` | Library | Notes |
 |---|---|---|
-| `"lodash"` | lodash 4.18 | Also the global `_` |
+| `"lodash"` | lodash 4.18 | Also the global `_`, with the lodash 3 names and call forms of Postman's `_` (below) |
 | `"crypto-js"` | crypto-js 4.2 | Also the global `CryptoJS` |
 | `"moment"` | moment 2.31 | English only |
 | `"ajv"` | Ajv 8 (JSON Schema draft-07) | `"ajv/dist/2019"` and `"ajv/dist/2020"` for the newer drafts, `"ajv-formats"`. As in Postman, unknown keywords are ignored and the standard formats (`date-time`, `email`, `uri`, …) are checked; `new Ajv({ strict: true })` is Ajv 8's strict mode |
@@ -94,7 +94,9 @@ Scripts can `require` the libraries Postman's sandbox has, and a few of Node's m
 | `"xml2js"` | xml2js 0.6 | `xml2Json(text)` is Postman's shortcut (synchronous) |
 | `"cheerio"` | cheerio 1.2 | jQuery-style HTML queries; also the global `cheerio` |
 | `"handlebars"` | Handlebars 4.7 | Templates with `Handlebars.compile` |
-| `"buffer"`, `"events"`, `"path"`, `"querystring"`, `"url"`, `"util"` | Browser versions of Node's modules | `"node:path"` and the like work too |
+| `"assert"`, `"buffer"`, `"events"`, `"path"`, `"querystring"`, `"url"`, `"util"` | Browser versions of Node's modules | `"node:path"` and the like work too |
+| `"timers"`, `"atob"`, `"btoa"` | The sandbox's own [timers](../pm-reference/#timers) and Base64 functions | As in Postman |
+| `"sugar"` | SugarJS 1.3.9 | Loaded by itself when a script uses one of its methods; see below |
 
 ```js
 const _ = require("lodash");
@@ -110,50 +112,62 @@ pm.test("Newest order is from today", () => {
 
 Within a run, each library is loaded once: two `require("lodash")` calls return the same object. The next script gets fresh copies.
 
+### Postman's `_`
+
+Postman's sandbox has lodash 3 as its global `_`, so older scripts use lodash 3 names and call forms. Zorvik's lodash 4 understands them too: `_.pluck`, `_.where`, `_.findWhere`, `_.contains`, `_.include`, `_.any`, `_.all`, `_.indexBy`, `_.sortByOrder`, `_.trunc`, `_.padLeft`, `_.padRight`, `_.object`, `_.methods` and the other lodash 3 aliases, and `_.max(list, iteratee)`, `_.min`, `_.sum` and `_.uniq(list, iteratee)` with an iteratee, `_.flatten(list, true)`, `_.clone(value, true)`, `_.pick` and `_.omit` with a function, and `_.rest(list)`. Calls in the lodash 4 way work as in lodash 4. Chained calls (`_(list).pluck(…)`) use lodash 4 only.
+
+### SugarJS
+
+Postman's sandbox loads [SugarJS](https://sugarjs.com) 1.3.9, which adds methods to the built-in objects, and older collections rely on them: `responseBody.has("text")`, `(56).ordinalize()`, `"a-b".camelize()`, `[1, 2, 3].average()`, `Date.create("next week")`, `(function () {}).once()`. They work in Zorvik too. A script that uses one gets SugarJS loaded (a few milliseconds); scripts that don't, don't pay for it.
+
+A script reaches SugarJS's methods by writing their names (`.has(`, `["camelize"]`). A method name built at run time (`text[name]()`) only finds them once another SugarJS method has been used in the script.
+
 ### What scripts can read
 
 Scripts can read every variable of the active environment, the workspace and globals, **including secret values**, and the full request and response. Whatever a script writes with `console.log` shows in the Console tab and in exported run reports. Don't log secrets.
 
 ## Postman compatibility
 
-Zorvik implements the parts of Postman's sandbox that collections use most, so an imported collection usually runs unchanged. When you import a Postman collection, Zorvik lists the scripts that use APIs it doesn't support (`pm.vault`, `pm.execution.runRequest`); they're imported anyway and fail with a clear error when they run. Collection-level scripts are put on the folder the import creates. See [Import and export](../../requests/import-export/).
+Zorvik's sandbox is built to run Postman scripts unchanged: the `pm` API, chai and chai-postman assertions, the older `postman.*` and `tests[…]` API, SugarJS, the libraries, timers and `pm.sendRequest`. When you import a Postman collection, Zorvik lists the scripts that use APIs it doesn't have (`pm.vault`, `pm.execution.runRequest`); they're imported anyway and fail with a clear error when they run. Collection-level scripts are put on the folder the import creates, so they still run for every request of the collection, before the folder's and the request's. See [Import and export](../../requests/import-export/).
 
 ### Supported
 
 | Postman API | In Zorvik |
 |---|---|
 | `pm.test`, `pm.test.skip` | Yes, including async tests and the `done` callback |
-| `pm.expect` | A subset of chai; see [Assertions](../assertions/#differences-from-chai) |
-| `pm.response.to.have.*` / `to.be.*` | Yes, `jsonSchema` too (with the bundled Ajv) |
+| `pm.expect` | chai's BDD API; see [Assertions](../assertions/) |
+| chai-postman: `pm.response.to.have.*` / `to.be.*`, `pm.request.to.have.header`, `jsonSchema`, `statusCode`, `responseTime`, … | Yes (`jsonSchema` with the bundled Ajv) |
 | `pm.variables`, `pm.environment`, `pm.collectionVariables`, `pm.globals`, `pm.iterationData` | Yes (`pm.collectionVariables` are workspace variables) |
-| `pm.request` (URL, method, headers, body, query) | Yes |
-| `pm.response` (`code`, `status`, `headers`, `text()`, `json()`, `responseTime`, `responseSize`) | Yes |
-| `pm.info` | Yes |
+| `pm.request`: URL and query, path variables, method, headers, raw, URL-encoded and form-data bodies, description | Yes; a pre-request script can change them |
+| `pm.response`: `code`, `status`, `headers`, `text()`, `json()`, `stream`, `responseTime`, `responseSize`, `size()`, `details()`, `contentInfo()` | Yes |
+| `pm.info`, `pm.execution.location` | Yes |
 | `pm.execution.setNextRequest`, `postman.setNextRequest` | Yes, in collection runs |
 | `pm.execution.skipRequest` | Yes |
 | `pm.sendRequest` (callback or `await`) | Yes |
 | `pm.cookies`, `pm.cookies.jar()`, `pm.response.cookies` | Yes (the jar for the request's own site) |
 | `pm.visualizer` | Yes, as HTML and CSS: template scripts don't run |
 | `setTimeout`, `setInterval`, `setImmediate` | Yes |
-| Legacy `tests[…]`, `postman.*`, `responseBody`, `responseCode`, … | Yes |
-| `console` | Yes |
-| `atob`, `btoa` | Yes |
+| Legacy `tests[…]`, `postman.*`, `request`, `responseBody`, `responseCode`, `responseHeaders`, `responseCookies`, `environment`, `globals`, `data`, `iteration` | Yes |
+| SugarJS methods on the built-in objects | Yes |
+| `console`, `atob`, `btoa`, `Buffer` | Yes |
 | `require`, `pm.require`, `CryptoJS`, `_`, `tv4`, `cheerio`, `xml2Json` | Yes, the [built-in libraries](#libraries) |
 
 ### Not supported
 
-`pm.vault` (use secret variables), `pm.execution.runRequest` (use `pm.sendRequest`), scripts inside visualizer templates, and npm packages other than the built-in libraries. See the [list with error messages](../pm-reference/#not-supported).
+`pm.vault` (use secret variables), `pm.execution.runRequest` (use `pm.sendRequest`), scripts inside visualizer templates, Postman's team package library in `pm.require`, and npm packages other than the built-in libraries (among Postman's: `postman-collection`, `backbone`, `stream`, `string_decoder` and `punycode`). See the [list with error messages](../pm-reference/#not-supported).
 
 ### Differences
 
 | Topic | Zorvik |
 |---|---|
-| Stored values | Variable values are stored as text. Numbers become `"5"`, objects become JSON. Within one script, `get` returns what you `set`. |
+| Stored values | Variables are text outside of scripts: `{{name}}` and the values kept after a send use the text (`5`, `{"x":1}`). In the scripts of one send or one collection run, a number, boolean, array or object you `set` comes back as it was, as in Postman. |
 | Where values are kept | Values scripts set on the environment, workspace or globals are kept in the app's data folder on this computer, never in the workspace files. `zorvik run` keeps them only until the run ends. |
 | Global variables | Shared by every workspace on this computer. `zorvik run` starts with none. |
 | `pm.variables` in runs | Values last for the whole run, across iterations |
 | `pm.info.requestId` | The request's file path under `requests/`, not an id |
 | `pm.request` in pre-request scripts | Only the request's own headers; inherited headers and auth are added after the script |
-| Unknown `pm.expect` words | A chai word Zorvik doesn't have reads as `undefined` and asserts nothing |
+| JSON Schema messages | Ajv 8's wording (`data/id must be integer`); Postman's Ajv 6 says `data.id should be integer` |
+| CSV data files | Values are text; newman turns unquoted numbers into numbers |
+| Redirects | Zorvik follows redirects as browsers do: a 301 or 302 changes only `POST` to `GET`, and no `Referer` header is added |
 | Scripts on SSE requests | Only in collection runs, with `pm.response.events` (a Zorvik addition) |
 | Protocols | Scripts run for HTTP (and GraphQL) requests, and SSE and WebSocket requests in runs; not for gRPC or the other socket kinds |

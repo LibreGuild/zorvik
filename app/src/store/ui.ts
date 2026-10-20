@@ -4,7 +4,7 @@ export type ModalState =
   | { type: "none" }
   | { type: "settings" }
   | { type: "environments"; focus?: string }
-  | { type: "import"; parent?: string }
+  | { type: "import"; parent?: string; /** The tab to open on (File by default). */ tab?: "catalog" }
   | { type: "cookies" }
   | { type: "workspaceSettings" }
   | { type: "folderSettings"; path: string }

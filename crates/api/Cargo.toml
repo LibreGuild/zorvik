@@ -33,6 +33,7 @@ time.workspace = true
 serde_ignored.workspace = true
 strsim.workspace = true
 memchr.workspace = true
+serde_yaml_ng.workspace = true
 
 [dev-dependencies]
 zorvik-engine.workspace = true

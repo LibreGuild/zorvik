@@ -13,6 +13,10 @@ use crate::dynamic;
 /// must not expand exponentially.
 const MAX_EXPANSION: usize = 16 * 1024 * 1024;
 
+/// How deep variables are expanded inside variables (and names inside names); deeper is
+/// probably a cycle.
+const MAX_DEPTH: usize = 10;
+
 /// Variables in precedence order: earlier layers win.
 #[derive(Debug, Default, Clone)]
 pub struct VarContext {
@@ -66,15 +70,37 @@ impl VarContext {
                 out.push_str(&rest[start..]);
                 return out;
             };
-            let raw_name = &after[..end];
-            // `{{` inside the name means the first braces were literal text. Jump
-            // straight to the last candidate before these `}}`, so long runs of
-            // `{{` are not rescanned once per pair (quadratic time).
-            if let Some(last) = last_open(raw_name) {
-                out.push_str("{{");
-                out.push_str(&after[..last]);
-                rest = &after[last..];
-                continue;
+            let mut raw_name = Cow::Borrowed(&after[..end]);
+            let mut end = end;
+            // The name as written, when it is made of variables.
+            let mut written = None;
+            if let Some(last) = last_open(&raw_name) {
+                // A name made of variables, as Postman resolves them: `{{host.{{env}}}}`
+                // renders `{{env}}` first, then looks up the name that makes. (Not a
+                // dynamic variable's arguments: those stay as written.)
+                let nested = depth < MAX_DEPTH && !raw_name.trim_start().starts_with('$');
+                let Some(close) = nested.then(|| nested_end(after)).flatten() else {
+                    // Otherwise `{{` inside the name means the first braces were literal
+                    // text. Jump straight to the last candidate before these `}}`, so long
+                    // runs of `{{` are not rescanned once per pair (quadratic time).
+                    out.push_str("{{");
+                    out.push_str(&after[..last]);
+                    rest = &after[last..];
+                    continue;
+                };
+                let name = self.render_depth(&after[..close], unresolved, depth + 1, budget);
+                if name.contains("{{") || name.contains('\n') || name.trim().is_empty() {
+                    // Not a name: keep the braces around what the inside rendered to,
+                    // rather than scanning the inside again (exponential when nested).
+                    out.push_str("{{");
+                    out.push_str(&name);
+                    out.push_str("}}");
+                    rest = &after[close + 2..];
+                    continue;
+                }
+                written = Some(after[..close].trim());
+                raw_name = Cow::Owned(name);
+                end = close;
             }
             let name = raw_name.trim();
             if name.is_empty() || raw_name.contains('\n') {
@@ -89,18 +115,22 @@ impl VarContext {
             match value {
                 // Generated values are data: `{{` in them is never expanded.
                 Some((value, Kind::Dynamic)) => out.push_str(&value),
-                Some((value, Kind::Defined)) if depth < 10 => {
+                Some((value, Kind::Defined)) if depth < MAX_DEPTH => {
                     out.push_str(&self.render_depth(&value, unresolved, depth + 1, budget))
                 }
                 Some((value, Kind::Defined)) => {
                     // Too deep: probably a cycle. Leave the rest raw.
-                    unresolved.insert(name.to_string());
+                    unresolved.insert(written.unwrap_or(name).to_string());
                     out.push_str(&value);
                 }
-                // Undefined, or expanding it would exceed the budget.
+                // Undefined, or expanding it would exceed the budget. A name made of
+                // variables is reported as written: the name it made can hold their
+                // values, secret ones included, and reports of names are not redacted.
                 None => {
-                    unresolved.insert(name.to_string());
-                    out.push_str(&rest[start..start + 2 + end + 2]);
+                    unresolved.insert(written.unwrap_or(name).to_string());
+                    out.push_str("{{");
+                    out.push_str(&raw_name);
+                    out.push_str("}}");
                 }
             }
             rest = &after[end + 2..];
@@ -139,6 +169,35 @@ fn last_open(s: &str) -> Option<usize> {
     last
 }
 
+/// Most bytes a name made of variables (`{{a{{b}}}}`) is searched for its closing braces,
+/// which keeps scanning text full of `{{` linear.
+const MAX_NESTED_NAME: usize = 1024;
+
+/// Where the `}}` closing a `{{` is in `s` (the text after it), counting the `{{ }}`
+/// pairs inside; `None` when it isn't within [`MAX_NESTED_NAME`] bytes.
+fn nested_end(s: &str) -> Option<usize> {
+    let bytes = &s.as_bytes()[..s.len().min(MAX_NESTED_NAME)];
+    let mut depth = 1;
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        match &bytes[i..i + 2] {
+            b"{{" => {
+                depth += 1;
+                i += 2;
+            }
+            b"}}" => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+                i += 2;
+            }
+            _ => i += 1,
+        }
+    }
+    None
+}
+
 /// Names of the dynamic variables (with the `$`), for UI autocomplete. The full
 /// catalog with groups, examples and arguments is [`dynamic::catalog_info`].
 pub static DYNAMIC_VARIABLES: LazyLock<Vec<&'static str>> =
@@ -163,6 +222,52 @@ mod tests {
             "https://env.example.com/v2/x?q={{ missing }}"
         );
         assert_eq!(missing.into_iter().collect::<Vec<_>>(), vec!["missing"]);
+    }
+
+    #[test]
+    fn names_made_of_variables() {
+        // Postman resolves the inner variable first, then the name it makes.
+        let mut ctx = VarContext::new();
+        ctx.push_layer(&[var("env", "1"), var("host.1", "api.test"), var("v", "{{env}}")]);
+        let render = |s: &str| {
+            let mut missing = BTreeSet::new();
+            let out = ctx.render(s, &mut missing);
+            (out, missing.into_iter().collect::<Vec<_>>())
+        };
+        assert_eq!(render("https://{{host.{{env}}}}/x"), ("https://api.test/x".into(), vec![]));
+        assert_eq!(render("{{host.{{v}}}}"), ("api.test".into(), vec![]));
+        assert_eq!(render("{{host.{{nope}}}}"), ("{{host.{{nope}}}}".into(), vec!["nope".to_string()]));
+        // Reported as written: the name it made holds variable values (maybe secret ones).
+        assert_eq!(render("{{other.{{env}}}}"), ("{{other.1}}".into(), vec!["other.{{env}}".to_string()]));
+        assert_eq!(render("{{a.{{env}}.{{nope}}}}"), ("{{a.1.{{nope}}}}".into(), vec!["nope".to_string()]));
+        assert_eq!(render("{{ {{env}}"), ("{{ 1".into(), vec![]));
+        // Text full of braces stays fast.
+        let braces = "{{a{{b}}".repeat(20_000);
+        let started = std::time::Instant::now();
+        render(&braces);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn nested_names_render_in_linear_time() {
+        // `{{ {{x}} <the same, one level less> }}`: each level used to render its inside
+        // twice when the name it made was not a variable (2^levels).
+        let mut ctx = VarContext::new();
+        ctx.push_layer(&[var("y", "1")]);
+        for inner in ["{{x}}", "{{y}}"] {
+            let mut text = inner.to_string();
+            for _ in 0..200 {
+                text = format!("{{{{{inner}{text}}}}}");
+            }
+            let mut missing = BTreeSet::new();
+            let started = std::time::Instant::now();
+            let out = ctx.render(&text, &mut missing);
+            assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+            if inner == "{{x}}" {
+                assert_eq!(out, text);
+                assert_eq!(missing.into_iter().collect::<Vec<_>>(), vec!["x"]);
+            }
+        }
     }
 
     #[test]

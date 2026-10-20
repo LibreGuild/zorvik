@@ -1,0 +1,216 @@
+# Written for Zorvik's API catalog from Airtable's Web API reference
+# (https://airtable.com/developers/web/api/introduction), which publishes no machine-readable
+# description.
+openapi: 3.0.3
+info:
+  title: Airtable Web API
+  version: "0"
+  description: >-
+    Bases, their tables and fields, and records. Requests sign in with a personal access
+    token (or an OAuth access token) as a Bearer token. Tables are named by id (`tbl...`)
+    or by name; record requests take up to 10 records at a time.
+servers:
+  - url: https://api.airtable.com
+security:
+  - bearer: []
+tags:
+  - name: Bases
+  - name: Records
+paths:
+  /v0/meta/whoami:
+    get:
+      tags: [Bases]
+      summary: Get user id and scopes
+      description: The token's user id, its email (with the user.email:read scope) and the scopes of an OAuth token.
+      operationId: getUserInfo
+      responses:
+        "200":
+          description: The user.
+  /v0/meta/bases:
+    get:
+      tags: [Bases]
+      summary: List bases
+      description: The bases the token can use, with your permission level in each.
+      operationId: listBases
+      parameters:
+        - name: offset
+          in: query
+          description: The offset from the previous page.
+          schema: { type: string }
+      responses:
+        "200":
+          description: A page of bases.
+  /v0/meta/bases/{baseId}/tables:
+    get:
+      tags: [Bases]
+      summary: Get base schema
+      description: The base's tables, with their fields and views.
+      operationId: getBaseSchema
+      parameters:
+        - $ref: "#/components/parameters/baseId"
+      responses:
+        "200":
+          description: The tables.
+  /v0/{baseId}/{tableIdOrName}:
+    get:
+      tags: [Records]
+      summary: List records
+      description: >-
+        A page of records (up to 100). Pass the `offset` of the answer to get the next page.
+      operationId: listRecords
+      parameters:
+        - $ref: "#/components/parameters/baseId"
+        - $ref: "#/components/parameters/table"
+        - name: pageSize
+          in: query
+          schema: { type: integer, maximum: 100, default: 100 }
+        - name: maxRecords
+          in: query
+          description: The most records to return, across all pages.
+          schema: { type: integer }
+        - name: offset
+          in: query
+          schema: { type: string }
+        - name: view
+          in: query
+          description: A view's name or id; only its records, in its order.
+          schema: { type: string }
+        - name: filterByFormula
+          in: query
+          description: Only records for which the formula is true, e.g. {Status} = 'Done'.
+          schema: { type: string }
+        - name: fields[]
+          in: query
+          description: Only these fields (repeat the parameter for more).
+          schema: { type: string }
+        - name: sort[0][field]
+          in: query
+          schema: { type: string }
+        - name: sort[0][direction]
+          in: query
+          schema: { type: string, enum: [asc, desc] }
+      responses:
+        "200":
+          description: The records, and an offset when there are more.
+    post:
+      tags: [Records]
+      summary: Create records
+      description: Create up to 10 records.
+      operationId: createRecords
+      parameters:
+        - $ref: "#/components/parameters/baseId"
+        - $ref: "#/components/parameters/table"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              records:
+                - fields:
+                    Name: Buy milk
+                    Status: Todo
+              typecast: false
+      responses:
+        "200":
+          description: The created records.
+    patch:
+      tags: [Records]
+      summary: Update records
+      description: >-
+        Update up to 10 records; fields you leave out keep their values (PUT clears them).
+      operationId: updateRecords
+      parameters:
+        - $ref: "#/components/parameters/baseId"
+        - $ref: "#/components/parameters/table"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              records:
+                - id: recXXXXXXXXXXXXXX
+                  fields:
+                    Status: Done
+      responses:
+        "200":
+          description: The updated records.
+    delete:
+      tags: [Records]
+      summary: Delete records
+      description: Delete up to 10 records, named by repeated `records[]` parameters.
+      operationId: deleteRecords
+      parameters:
+        - $ref: "#/components/parameters/baseId"
+        - $ref: "#/components/parameters/table"
+        - name: records[]
+          in: query
+          required: true
+          schema: { type: string, example: recXXXXXXXXXXXXXX }
+      responses:
+        "200":
+          description: The deleted records' ids.
+  /v0/{baseId}/{tableIdOrName}/{recordId}:
+    get:
+      tags: [Records]
+      summary: Get a record
+      operationId: getRecord
+      parameters:
+        - $ref: "#/components/parameters/baseId"
+        - $ref: "#/components/parameters/table"
+        - $ref: "#/components/parameters/recordId"
+      responses:
+        "200":
+          description: The record.
+    patch:
+      tags: [Records]
+      summary: Update a record
+      description: Fields you leave out keep their values (PUT clears them).
+      operationId: updateRecord
+      parameters:
+        - $ref: "#/components/parameters/baseId"
+        - $ref: "#/components/parameters/table"
+        - $ref: "#/components/parameters/recordId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              fields:
+                Status: Done
+      responses:
+        "200":
+          description: The updated record.
+    delete:
+      tags: [Records]
+      summary: Delete a record
+      operationId: deleteRecord
+      parameters:
+        - $ref: "#/components/parameters/baseId"
+        - $ref: "#/components/parameters/table"
+        - $ref: "#/components/parameters/recordId"
+      responses:
+        "200":
+          description: The deleted record's id.
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: A personal access token (pat...) or an OAuth access token.
+  parameters:
+    baseId:
+      name: baseId
+      in: path
+      required: true
+      schema: { type: string, example: appXXXXXXXXXXXXXX }
+    table:
+      name: tableIdOrName
+      in: path
+      required: true
+      description: The table's id (tbl...) or name.
+      schema: { type: string, example: Tasks }
+    recordId:
+      name: recordId
+      in: path
+      required: true
+      schema: { type: string, example: recXXXXXXXXXXXXXX }

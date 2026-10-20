@@ -1,0 +1,261 @@
+# Written for Zorvik's API catalog from Anthropic's public API reference
+# (https://platform.claude.com/docs/en/api/overview), which publishes no machine-readable
+# description.
+openapi: 3.0.3
+info:
+  title: Anthropic API
+  version: "2023-06-01"
+  description: >-
+    Claude models through the Messages API, token counting, models, message batches and
+    files. Every request sends your API key in `x-api-key` and the API version in
+    `anthropic-version`.
+servers:
+  - url: https://api.anthropic.com
+security:
+  - apiKey: []
+tags:
+  - name: Messages
+  - name: Models
+  - name: Message batches
+  - name: Files
+paths:
+  /v1/messages:
+    post:
+      tags: [Messages]
+      summary: Create a message
+      description: Send a conversation and get Claude's next message.
+      operationId: createMessage
+      parameters:
+        - $ref: "#/components/parameters/version"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              model: claude-sonnet-5-5
+              max_tokens: 1024
+              messages:
+                - role: user
+                  content: Hello, Claude
+      responses:
+        "200":
+          description: The message Claude wrote.
+  /v1/messages/count_tokens:
+    post:
+      tags: [Messages]
+      summary: Count tokens
+      description: How many input tokens a message would use, without sending it.
+      operationId: countTokens
+      parameters:
+        - $ref: "#/components/parameters/version"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              model: claude-sonnet-5-5
+              messages:
+                - role: user
+                  content: Hello, Claude
+      responses:
+        "200":
+          description: The token count.
+  /v1/models:
+    get:
+      tags: [Models]
+      summary: List models
+      description: The models you can use, newest first.
+      operationId: listModels
+      parameters:
+        - $ref: "#/components/parameters/version"
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 20 }
+        - name: after_id
+          in: query
+          schema: { type: string }
+        - name: before_id
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: A page of models.
+  /v1/models/{model_id}:
+    get:
+      tags: [Models]
+      summary: Get a model
+      operationId: getModel
+      parameters:
+        - $ref: "#/components/parameters/version"
+        - name: model_id
+          in: path
+          required: true
+          schema: { type: string, example: claude-sonnet-5-5 }
+      responses:
+        "200":
+          description: The model.
+  /v1/messages/batches:
+    post:
+      tags: [Message batches]
+      summary: Create a message batch
+      description: Send many message requests at once; results arrive within 24 hours.
+      operationId: createMessageBatch
+      parameters:
+        - $ref: "#/components/parameters/version"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              requests:
+                - custom_id: request-1
+                  params:
+                    model: claude-sonnet-5-5
+                    max_tokens: 1024
+                    messages:
+                      - role: user
+                        content: Hello, Claude
+      responses:
+        "200":
+          description: The batch.
+    get:
+      tags: [Message batches]
+      summary: List message batches
+      operationId: listMessageBatches
+      parameters:
+        - $ref: "#/components/parameters/version"
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 20 }
+      responses:
+        "200":
+          description: A page of batches.
+  /v1/messages/batches/{message_batch_id}:
+    get:
+      tags: [Message batches]
+      summary: Get a message batch
+      operationId: getMessageBatch
+      parameters:
+        - $ref: "#/components/parameters/version"
+        - $ref: "#/components/parameters/batchId"
+      responses:
+        "200":
+          description: The batch.
+    delete:
+      tags: [Message batches]
+      summary: Delete a message batch
+      description: Delete a batch that has finished.
+      operationId: deleteMessageBatch
+      parameters:
+        - $ref: "#/components/parameters/version"
+        - $ref: "#/components/parameters/batchId"
+      responses:
+        "200":
+          description: The batch was deleted.
+  /v1/messages/batches/{message_batch_id}/cancel:
+    post:
+      tags: [Message batches]
+      summary: Cancel a message batch
+      operationId: cancelMessageBatch
+      parameters:
+        - $ref: "#/components/parameters/version"
+        - $ref: "#/components/parameters/batchId"
+      responses:
+        "200":
+          description: The batch, canceling.
+  /v1/messages/batches/{message_batch_id}/results:
+    get:
+      tags: [Message batches]
+      summary: Get message batch results
+      description: The results of a finished batch, one JSON object per line.
+      operationId: getMessageBatchResults
+      parameters:
+        - $ref: "#/components/parameters/version"
+        - $ref: "#/components/parameters/batchId"
+      responses:
+        "200":
+          description: The results (JSON Lines).
+  /v1/files:
+    get:
+      tags: [Files]
+      summary: List files
+      operationId: listFiles
+      parameters:
+        - $ref: "#/components/parameters/version"
+      responses:
+        "200":
+          description: A page of files.
+    post:
+      tags: [Files]
+      summary: Upload a file
+      operationId: uploadFile
+      parameters:
+        - $ref: "#/components/parameters/version"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: The uploaded file.
+  /v1/files/{file_id}:
+    get:
+      tags: [Files]
+      summary: Get file metadata
+      operationId: getFile
+      parameters:
+        - $ref: "#/components/parameters/version"
+        - $ref: "#/components/parameters/fileId"
+      responses:
+        "200":
+          description: The file's metadata.
+    delete:
+      tags: [Files]
+      summary: Delete a file
+      operationId: deleteFile
+      parameters:
+        - $ref: "#/components/parameters/version"
+        - $ref: "#/components/parameters/fileId"
+      responses:
+        "200":
+          description: The file was deleted.
+  /v1/files/{file_id}/content:
+    get:
+      tags: [Files]
+      summary: Download a file
+      operationId: downloadFile
+      parameters:
+        - $ref: "#/components/parameters/version"
+        - $ref: "#/components/parameters/fileId"
+      responses:
+        "200":
+          description: The file's content.
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: x-api-key
+  parameters:
+    version:
+      name: anthropic-version
+      in: header
+      required: true
+      schema: { type: string, example: "2023-06-01" }
+    batchId:
+      name: message_batch_id
+      in: path
+      required: true
+      schema: { type: string, example: msgbatch_01HkcTjaV5uDC8jWR4ZsDV8d }
+    fileId:
+      name: file_id
+      in: path
+      required: true
+      schema: { type: string, example: file_011CNha8iCJcU1wXNR6q4V8w }

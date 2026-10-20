@@ -16,6 +16,7 @@
   var MAX_TESTS = 10000;
   var MAX_RENDER = 16 * 1024 * 1024;
   var MAX_VISUALIZATION = 5 * 1024 * 1024;
+  var MAX_TYPED_DEPTH = 100;
 
   // ---- helpers ----------------------------------------------------------------
 
@@ -67,6 +68,14 @@
   }
 
   /** Variable values are strings outside scripts: objects become JSON. */
+  /** Whether arrays and objects in `v` (parsed JSON) nest more than `depth` levels. */
+  function nestedDeeper(v, depth) {
+    if (v === null || typeof v !== 'object') return false;
+    if (depth <= 0) return true;
+    for (var k in v) if (own(v, k) && nestedDeeper(v[k], depth - 1)) return true;
+    return false;
+  }
+
   function stored(v) {
     if (typeof v === 'string') return v;
     if (v === undefined) return '';
@@ -349,6 +358,17 @@
     Object.defineProperty(proto, name, { get: getter, configurable: true });
   }
 
+  // chai's own name for the object under test, which plugins and some scripts use.
+  Object.defineProperty(Assertion.prototype, '_obj', {
+    get: function () {
+      return flag(this, 'object');
+    },
+    set: function (value) {
+      flag(this, 'object', value);
+    },
+    configurable: true,
+  });
+
   function method(proto, name, fn) {
     Object.defineProperty(proto, name, { value: fn, writable: true, configurable: true });
   }
@@ -406,6 +426,7 @@
   setFlag('ordered', 'ordered', true);
   setFlag('any', 'any', true, 'all');
   setFlag('all', 'all', true, 'any');
+  setFlag('itself', 'itself', true);
 
   function withMessage(a, message) {
     if (message !== undefined) flag(a, 'message', message);
@@ -494,10 +515,12 @@
     withMessage(this, message);
     var o = flag(this, 'object');
     var deep = flag(this, 'deep');
+    var nested = flag(this, 'nested');
+    var isOwn = flag(this, 'own');
     var t = typeOf(o);
     var ok = false;
     var i;
-    var desc = (deep ? 'deep ' : '') + 'include ';
+    var desc = (deep ? 'deep ' : '') + (nested ? 'nested ' : '') + (isOwn ? 'own ' : '') + 'include ';
     if (t === 'string') {
       ok = o.indexOf(val) !== -1;
     } else if (t === 'array') {
@@ -511,7 +534,8 @@
       ok = true;
       for (i = 0; i < keys.length && ok; i++) {
         var k = keys[i];
-        ok = k in o && (deep ? deepEqual(o[k], val[k]) : o[k] === val[k]);
+        var at = nested ? pathInfo(o, k) : { exists: isOwn ? own(o, k) : k in o, value: o[k] };
+        ok = at.exists && (deep ? deepEqual(at.value, val[k]) : at.value === val[k]);
       }
     }
     this.assert(
@@ -807,6 +831,95 @@
     this.assert(matcher(o), 'expected ' + display(o) + ' to satisfy ' + name, 'expected ' + display(o) + ' to not satisfy ' + name);
   });
 
+  ['arguments', 'Arguments'].forEach(function (name) {
+    property(name, function () {
+      var o = flag(this, 'object');
+      this.assert(
+        typeOf(o) === 'arguments',
+        'expected ' + display(o) + ' to be arguments but got ' + typeOf(o),
+        'expected ' + display(o) + ' to not be arguments'
+      );
+    });
+  });
+
+  [
+    ['extensible', Object.isExtensible],
+    ['sealed', Object.isSealed],
+    ['frozen', Object.isFrozen],
+  ].forEach(function (p) {
+    property(p[0], function () {
+      var o = flag(this, 'object');
+      // Primitives are sealed and frozen, and not extensible (as in chai).
+      var ok = o === Object(o) ? p[1](o) : p[0] !== 'extensible';
+      this.assert(ok, 'expected ' + display(o) + ' to be ' + p[0], 'expected ' + display(o) + ' to not be ' + p[0]);
+    });
+  });
+
+  assertion(['respondTo', 'respondsTo'], function (method, message) {
+    withMessage(this, message);
+    var o = flag(this, 'object');
+    var target = typeof o === 'function' && !flag(this, 'itself') ? o.prototype : o;
+    this.assert(
+      target !== null && target !== undefined && typeof target[method] === 'function',
+      'expected ' + display(o) + ' to respond to ' + inspect(method),
+      'expected ' + display(o) + ' to not respond to ' + inspect(method)
+    );
+  });
+
+  assertion(['ownPropertyDescriptor', 'haveOwnPropertyDescriptor'], function (name, descriptor, message) {
+    if (typeof descriptor === 'string') {
+      message = descriptor;
+      descriptor = undefined;
+    }
+    withMessage(this, message);
+    var o = flag(this, 'object');
+    var actual = o === null || o === undefined ? undefined : Object.getOwnPropertyDescriptor(Object(o), name);
+    var what = 'the own property descriptor for ' + inspect(name) + ' on ' + display(o);
+    if (actual && descriptor) {
+      this.assert(
+        deepEqual(descriptor, actual),
+        'expected ' + what + ' to match ' + inspect(descriptor) + ', got ' + inspect(actual),
+        'expected ' + what + ' to not match ' + inspect(descriptor)
+      );
+    } else {
+      this.assert(
+        actual,
+        'expected ' + display(o) + ' to have an own property descriptor for ' + inspect(name),
+        'expected ' + display(o) + ' to not have an own property descriptor for ' + inspect(name)
+      );
+    }
+    flag(this, 'object', actual);
+  });
+
+  /** `change`, `increase` and `decrease`: what running the function does to a value. */
+  function delta(kind) {
+    return function (subject, prop, message) {
+      withMessage(this, message);
+      var fn = flag(this, 'object');
+      var read = prop === undefined ? subject : function () { return subject[prop]; };
+      if (typeof fn !== 'function' || typeof read !== 'function') {
+        throw new AssertionError('expected a function to run and a function or an object and property to check');
+      }
+      var initial = read();
+      fn();
+      var final = read();
+      var what = prop === undefined ? display(subject) : '.' + prop;
+      flag(this, 'deltaWhat', what);
+      flag(this, 'deltaKind', kind);
+      flag(this, 'deltaChange', kind === 'change' ? Math.abs(final - initial) : kind === 'decrease' ? initial - final : final - initial);
+      var ok = kind === 'change' ? initial !== final : kind === 'increase' ? final > initial : final < initial;
+      this.assert(ok, 'expected ' + what + ' to ' + kind, 'expected ' + what + ' to not ' + kind);
+    };
+  }
+  assertion(['change', 'changes'], delta('change'));
+  assertion(['increase', 'increases'], delta('increase'));
+  assertion(['decrease', 'decreases'], delta('decrease'));
+  assertion(['by'], function (n, message) {
+    withMessage(this, message);
+    var what = flag(this, 'deltaWhat') + ' to ' + flag(this, 'deltaKind') + ' by ' + n;
+    this.assert(flag(this, 'deltaChange') === Math.abs(n), 'expected ' + what, 'expected ' + what + ' not to happen');
+  });
+
   assertion(['throw', 'throws', 'Throw'], function (errorLike, matcher, message) {
     withMessage(this, message);
     var fn = flag(this, 'object');
@@ -846,14 +959,17 @@
     flag(this, 'object', caught);
   });
 
-  // ---- pm.response.to (chai-postman subset) --------------------------------------
+  // ---- chai-postman: pm.response.to, pm.request.to and pm.expect(…) on both ---------
 
+  // As in Postman, these are on every assertion: they first check that the object is a
+  // response (or a request); `ok` alone means a 200 for a response and truthy otherwise.
   function ResponseAssertion(response) {
     Assertion.call(this, response);
   }
   ResponseAssertion.prototype = Object.create(Assertion.prototype);
 
   var responses = new WeakSet();
+  var requests = new WeakSet();
 
   function responseBodyJson(res) {
     try {
@@ -862,6 +978,33 @@
       return { ok: false, error: e };
     }
   }
+
+  /** The assertion's response; an assertion error for anything else. */
+  function responseOf(a) {
+    var o = flag(a, 'object');
+    if (!responses.has(o)) {
+      var custom = flag(a, 'message');
+      throw new AssertionError((custom ? custom + ': ' : '') + 'expecting a postman response object but got ' + display(o));
+    }
+    return o;
+  }
+
+  property('postmanResponse', function () {
+    var o = flag(this, 'object');
+    this.assert(responses.has(o), 'expecting a postman response object but got ' + display(o), 'not expecting a postman response object');
+  });
+  property('postmanRequest', function () {
+    var o = flag(this, 'object');
+    this.assert(requests.has(o), 'expecting a postman request object but got ' + display(o), 'not expecting a postman request object');
+  });
+  property('postmanRequestOrResponse', function () {
+    var o = flag(this, 'object');
+    this.assert(
+      responses.has(o) || requests.has(o),
+      'expecting a postman request or response object but got ' + display(o),
+      'not expecting a postman request or response object'
+    );
+  });
 
   var statusCodes = {
     ok: 200,
@@ -876,8 +1019,9 @@
     rateLimited: 429,
   };
   Object.keys(statusCodes).forEach(function (name) {
-    define(ResponseAssertion.prototype, name, function () {
-      var code = flag(this, 'object').code;
+    // A response's `ok` is its own; on anything else `ok` stays chai's truthy check.
+    define(name === 'ok' ? ResponseAssertion.prototype : Assertion.prototype, name, function () {
+      var code = responseOf(this).code;
       var want = statusCodes[name];
       this.assert(
         code === want,
@@ -887,84 +1031,97 @@
       return this;
     });
   });
+  function assertStatusClass(a, want) {
+    var code = responseOf(a).code;
+    a.assert(
+      Math.floor(code / 100) === want,
+      'expected response code to be ' + want + 'XX but found ' + code,
+      'expected response code to not be ' + want + 'XX'
+    );
+  }
   var statusClasses = { info: 1, success: 2, redirection: 3, clientError: 4, serverError: 5 };
   Object.keys(statusClasses).forEach(function (name) {
-    define(ResponseAssertion.prototype, name, function () {
-      var code = flag(this, 'object').code;
-      var want = statusClasses[name];
-      this.assert(
-        Math.floor(code / 100) === want,
-        'expected response code to be ' + want + 'XX but found ' + code,
-        'expected response code to not be ' + want + 'XX'
-      );
-      return this;
+    property(name, function () {
+      assertStatusClass(this, statusClasses[name]);
     });
   });
-  define(ResponseAssertion.prototype, 'error', function () {
-    var code = flag(this, 'object').code;
+  assertion(['statusCodeClass'], function (want) {
+    assertStatusClass(this, Number(want));
+  });
+  property('error', function () {
+    var code = responseOf(this).code;
     var cls = Math.floor(code / 100);
     this.assert(
       cls === 4 || cls === 5,
       'expected response code to be 4XX or 5XX but found ' + code,
       'expected response code to not be 4XX or 5XX'
     );
-    return this;
   });
-  define(ResponseAssertion.prototype, 'withBody', function () {
+  property('withBody', function () {
     this.assert(
-      flag(this, 'object').text().length > 0,
+      responseOf(this).text().length > 0,
       'expected response to have content in body',
       'expected response to not have content in body'
     );
-    return this;
   });
-  define(ResponseAssertion.prototype, 'json', function () {
-    var parsed = responseBodyJson(flag(this, 'object'));
+  property('json', function () {
+    var parsed = responseBodyJson(responseOf(this));
     this.assert(
       parsed.ok,
       'expected response body to be a valid json but got error ' + (parsed.ok ? '' : errorText(parsed.error)),
       'expected response body not to be a valid json'
     );
-    return this;
   });
-  method(ResponseAssertion.prototype, 'status', function (want) {
-    var res = flag(this, 'object');
-    if (typeof want === 'number') {
-      this.assert(
-        res.code === want,
-        'expected response to have status code ' + want + ' but got ' + res.code,
-        'expected response to not have status code ' + want
-      );
-    } else {
-      this.assert(
-        res.status === String(want),
-        'expected response to have status reason ' + inspect(String(want)) + ' but got ' + inspect(res.status),
-        'expected response to not have status reason ' + inspect(String(want))
-      );
+  function assertStatusCode(a, want) {
+    var res = responseOf(a);
+    a.assert(
+      res.code === Number(want),
+      'expected response to have status code ' + Number(want) + ' but got ' + res.code,
+      'expected response to not have status code ' + Number(want)
+    );
+  }
+  function assertStatusReason(a, want) {
+    var res = responseOf(a);
+    a.assert(
+      res.status === String(want),
+      'expected response to have status reason ' + inspect(String(want)) + ' but got ' + inspect(res.status),
+      'expected response to not have status reason ' + inspect(String(want))
+    );
+  }
+  assertion(['status'], function (want) {
+    if (typeof want === 'number') assertStatusCode(this, want);
+    else assertStatusReason(this, want);
+  });
+  assertion(['statusCode'], function (want) {
+    assertStatusCode(this, want);
+  });
+  assertion(['statusReason'], function (want) {
+    assertStatusReason(this, want);
+  });
+  assertion(['header'], function (name, value) {
+    var o = flag(this, 'object');
+    var ror = responses.has(o) ? 'response' : requests.has(o) ? 'request' : null;
+    if (!ror) {
+      throw new AssertionError('expecting a postman request or response object but got ' + display(o));
     }
-    return this;
-  });
-  method(ResponseAssertion.prototype, 'header', function (name, value) {
-    var res = flag(this, 'object');
-    var has = res.headers.has(name);
-    if (value === undefined) {
+    var has = o.headers.has(name);
+    if (arguments.length < 2) {
       this.assert(
         has,
-        "expected response to have header with key '" + name + "'",
-        "expected response to not have header with key '" + name + "'"
+        'expected ' + ror + " to have header with key '" + name + "'",
+        'expected ' + ror + " to not have header with key '" + name + "'"
       );
     } else {
-      var actual = res.headers.get(name);
+      var actual = o.headers.get(name);
       this.assert(
         has && actual === String(value),
-        "expected '" + name + "' response header to be '" + value + "' but got '" + actual + "'",
-        "expected '" + name + "' response header to not be '" + value + "'"
+        "expected '" + name + "' " + ror + " header to be '" + value + "' but got '" + actual + "'",
+        "expected '" + name + "' " + ror + " header to not be '" + value + "'"
       );
     }
-    return this;
   });
-  method(ResponseAssertion.prototype, 'body', function (want) {
-    var res = flag(this, 'object');
+  assertion(['body'], function (want) {
+    var res = responseOf(this);
     var text = res.text();
     if (arguments.length === 0) {
       this.assert(text.length > 0, 'expected response to have content in body', 'expected response to not have content in body');
@@ -984,17 +1141,16 @@
         'expected response body json to not equal ' + display(want)
       );
     }
-    return this;
   });
-  method(ResponseAssertion.prototype, 'jsonBody', function (path, value) {
-    var parsed = responseBodyJson(flag(this, 'object'));
+  assertion(['jsonBody'], function (path, value) {
+    var parsed = responseBodyJson(responseOf(this));
     if (!parsed.ok || arguments.length === 0) {
       this.assert(
         parsed.ok,
         'expected response body to be a valid json but got error ' + (parsed.ok ? '' : errorText(parsed.error)),
         'expected response body not to be a valid json'
       );
-      return this;
+      return;
     }
     if (typeof path !== 'string') {
       this.assert(
@@ -1002,7 +1158,7 @@
         'expected response body json to equal ' + display(path) + ' but got ' + display(parsed.value),
         'expected response body json to not equal ' + display(path)
       );
-      return this;
+      return;
     }
     var info = pathInfo(parsed.value, path);
     if (arguments.length === 1) {
@@ -1018,36 +1174,104 @@
         'expected response body json at ' + inspect(path) + ' to not equal ' + display(value)
       );
     }
-    return this;
+  });
+  /** `pm.response.to.have.responseTime.below(200)`, `.responseSize(…)`: the number becomes the object. */
+  function measure(name, read) {
+    chainable(
+      name,
+      function (value) {
+        var n = flag(this, 'object');
+        this.assert(
+          n === Number(value),
+          'expected response ' + (name === 'responseTime' ? 'time' : 'size') + ' to be ' + value + ' but got ' + n,
+          'expected response ' + (name === 'responseTime' ? 'time' : 'size') + ' to not be ' + value
+        );
+      },
+      function () {
+        flag(this, 'object', read(responseOf(this)));
+      }
+    );
+  }
+  measure('responseTime', function (res) {
+    return res.responseTime;
+  });
+  measure('responseSize', function (res) {
+    return res.size().total;
   });
   /** The run's libraries (`setup` sets them): `jsonSchema` validates with the bundled Ajv. */
   var runLibraries = null;
 
-  method(ResponseAssertion.prototype, 'jsonSchema', function (schema, options) {
-    var parsed = responseBodyJson(flag(this, 'object'));
-    if (!parsed.ok) {
-      this.assert(false, 'expected response body to be a valid json but got error ' + errorText(parsed.error), '');
-      return this;
+  // Any data, or a response's JSON body (chai-postman).
+  assertion(['jsonSchema'], function (schema, options) {
+    var o = flag(this, 'object');
+    var data = o;
+    if (responses.has(o)) {
+      var parsed = responseBodyJson(o);
+      if (!parsed.ok) {
+        this.assert(false, 'expected response body to be a valid json but got error ' + errorText(parsed.error), '');
+        return;
+      }
+      data = parsed.value;
     }
     var Ajv = runLibraries.require('ajv');
-    var ajv = new Ajv(Object.assign({ allErrors: true }, options || {}));
-    var valid = ajv.validate(schema, parsed.value);
+    var ajv = new Ajv(Object.assign({ allErrors: true, logger: false }, options || {}));
+    var valid = ajv.validate(schema, data);
     this.assert(
       valid,
-      'expected response body to match the JSON Schema: ' + ajv.errorsText(ajv.errors, { dataVar: 'body' }),
-      'expected response body to not match the JSON Schema'
+      'expected data to satisfy schema but found following errors: \n' + ajv.errorsText(),
+      'expected data to not satisfy schema'
     );
-    return this;
   });
 
-  function expect(value, message) {
-    if (responses.has(value)) {
-      var a = new ResponseAssertion(value);
-      flag(a, 'message', message);
-      return a;
+  /** Edit distance of `a` and `b`, or `cap` when it is that much or more. */
+  function distance(a, b, cap) {
+    if (Math.abs(a.length - b.length) >= cap) return cap;
+    var row = [];
+    for (var j = 0; j <= b.length; j++) row.push(j);
+    for (var i = 1; i <= a.length; i++) {
+      var previous = row[0];
+      row[0] = i;
+      for (j = 1; j <= b.length; j++) {
+        var current = row[j];
+        row[j] = Math.min(row[j] + 1, row[j - 1] + 1, previous + (a[i - 1] === b[j - 1] ? 0 : 1));
+        previous = current;
+      }
     }
-    return new Assertion(value, message);
+    return Math.min(row[b.length], cap);
   }
+
+  var NOT_CHAI = ['then', 'catch', 'inspect', 'toJSON', 'nodeType', 'asymmetricMatch', '$$typeof'];
+
+  /** As chai does: a property no assertion has (a typo like `.to.be.ture`) throws instead of passing. */
+  function proxify(a) {
+    return new Proxy(a, {
+      get: function (target, name, receiver) {
+        if (typeof name === 'string' && NOT_CHAI.indexOf(name) < 0 && !Reflect.has(target, name)) {
+          var best = null;
+          var bestDistance = 4;
+          Object.getOwnPropertyNames(Assertion.prototype).forEach(function (k) {
+            var d = k === 'constructor' || k === 'assert' ? 4 : distance(name, k, 4);
+            if (d < bestDistance) {
+              best = k;
+              bestDistance = d;
+            }
+          });
+          throw Error('Invalid Chai property: ' + name + (best ? '. Did you mean "' + best + '"?' : ''));
+        }
+        return Reflect.get(target, name, receiver);
+      },
+    });
+  }
+
+  function expect(value, message) {
+    var a = responses.has(value) ? new ResponseAssertion(value) : new Assertion(value);
+    flag(a, 'message', message);
+    return proxify(a);
+  }
+  expect.fail = function (actual, expected, message) {
+    if (arguments.length < 2) message = actual;
+    throw new AssertionError(message === undefined ? 'expect.fail()' : String(message));
+  };
 
   // ---- request / response objects ------------------------------------------------
 
@@ -1072,10 +1296,12 @@
       for (var i = 0; i < list.length; i++) if (same(list[i].key, key)) return list[i];
       return undefined;
     }
+    /** A copy of an item: `{key, value}` (form fields also have `type` and `src`). */
+    function item(p) {
+      return copy(p);
+    }
     function all() {
-      return list.map(function (p) {
-        return { key: p.key, value: p.value };
-      });
+      return list.map(item);
     }
     var api = {
       get: function (key) {
@@ -1084,7 +1310,7 @@
       },
       one: function (key) {
         var p = find(key);
-        return p ? { key: p.key, value: p.value } : undefined;
+        return p ? item(p) : undefined;
       },
       has: function (key, value) {
         return list.some(function (p) {
@@ -1131,7 +1357,7 @@
       remove: function (key) {
         for (var i = list.length - 1; i >= 0; i--) {
           var p = list[i];
-          if (typeof key === 'function' ? key({ key: p.key, value: p.value }) : same(p.key, key)) list.splice(i, 1);
+          if (typeof key === 'function' ? key(item(p)) : same(p.key, key)) list.splice(i, 1);
         }
         changed();
       },
@@ -1201,6 +1427,16 @@
       req.url = m[1] + (params.length ? '?' + q : '') + (m[3] !== undefined ? '#' + m[3] : '');
     }
     var query = propertyList(params, parseParam, false, writeParams);
+    var variables = propertyList(req.pathVariables, parseHeader, false, function () {});
+    /** The path with `:name` segments replaced by their values, unless `unresolved`. */
+    function path(unresolved) {
+      var p = parts().path || '/';
+      if (unresolved) return p;
+      return p.replace(/\/:([A-Za-z0-9_.-]+)/g, function (m, name) {
+        var v = variables.get(name);
+        return v === undefined ? m : '/' + v;
+      });
+    }
     // Every read starts from the current URL string.
     Object.keys(query).forEach(function (name) {
       var fn = query[name];
@@ -1225,21 +1461,20 @@
       getHost: function () {
         return parts().host;
       },
-      getPath: function () {
-        return parts().path || '/';
-      },
+      getPath: path,
       getQueryString: function () {
         return parts().query || '';
       },
-      getPathWithQuery: function () {
-        var p = parts();
-        return (p.path || '/') + (p.query ? '?' + p.query : '');
+      getPathWithQuery: function (unresolved) {
+        var q = parts().query;
+        return path(unresolved) + (q ? '?' + q : '');
       },
       getRemote: function () {
         var p = parts();
         return p.host + (p.port ? ':' + p.port : '');
       },
       query: query,
+      variables: variables,
     };
     define(url, 'protocol', function () {
       return parts().protocol;
@@ -1263,38 +1498,100 @@
     return url;
   }
 
-  function requestObject(req) {
-    var url = urlObject(req);
-    var headers = headerList(req.headers);
+  /** A form field from a script: `{key, value}`, `{key, src, type: 'file'}` or "key=value". */
+  function parseField(item, value) {
+    if (typeof item === 'string') {
+      if (value !== undefined) return { key: item, value: stored(value), type: 'text' };
+      var i = item.indexOf('=');
+      return i < 0 ? { key: item, value: '', type: 'text' } : { key: item.slice(0, i), value: item.slice(i + 1), type: 'text' };
+    }
+    if (item && typeof item === 'object') {
+      var file = item.type === 'file';
+      var field = { key: String(item.key), value: file ? '' : stored(item.value), type: file ? 'file' : 'text' };
+      if (file) field.src = stored(Array.isArray(item.src) ? item.src[0] : item.src);
+      return field;
+    }
+    throw new TypeError('A form field is {key, value} or "key=value"');
+  }
+
+  var BODY_MODES = ['raw', 'urlencoded', 'formdata', 'file', 'graphql'];
+
+  /** `pm.request.body`: the raw text, or the fields of a form body (Postman's RequestBody). */
+  function bodyObject(req) {
+    if (!req.mode) req.mode = req.body ? 'raw' : '';
+    req.form = req.form || [];
+    var fields = propertyList(req.form, parseField, false, function () {});
     var body = {
       update: function (v) {
         if (v && typeof v === 'object') {
-          if ('raw' in v) req.body = stored(v.raw);
+          var mode = v.mode || ('raw' in v ? 'raw' : req.mode || 'raw');
+          if (BODY_MODES.indexOf(mode) < 0) throw new TypeError("pm.request.body.update: unknown mode '" + mode + "'");
+          req.mode = mode;
+          if (mode === 'raw') {
+            req.body = stored(v.raw);
+            req.form.length = 0;
+          } else if (mode === 'urlencoded' || mode === 'formdata') {
+            var list = v[mode] || [];
+            if (typeof list.all === 'function') list = list.all();
+            req.form.length = 0;
+            list.forEach(function (f) {
+              if (f && !f.disabled) req.form.push(parseField(f));
+            });
+            req.body = '';
+          }
         } else {
+          req.mode = 'raw';
           req.body = stored(v);
+          req.form.length = 0;
         }
       },
       isEmpty: function () {
+        if (req.mode === 'urlencoded' || req.mode === 'formdata') return !req.form.length;
         return !req.body;
       },
       toString: function () {
-        return req.body;
+        if (req.mode === 'urlencoded') {
+          return req.form
+            .map(function (f) {
+              return formEncode(f.key) + '=' + formEncode(f.value);
+            })
+            .join('&');
+        }
+        return req.mode === 'raw' ? req.body : '';
       },
       toJSON: function () {
-        return { mode: 'raw', raw: req.body };
+        var out = { mode: req.mode || 'raw' };
+        if (req.mode === 'urlencoded' || req.mode === 'formdata') out[req.mode] = fields.all();
+        else out.raw = req.body;
+        return out;
       },
     };
     define(body, 'mode', function () {
-      return 'raw';
+      return req.mode || undefined;
     });
     Object.defineProperty(body, 'raw', {
       get: function () {
-        return req.body;
+        return req.mode === 'raw' || !req.mode ? req.body : undefined;
       },
       set: function (v) {
+        req.mode = 'raw';
         req.body = stored(v);
       },
     });
+    define(body, 'urlencoded', function () {
+      return req.mode === 'urlencoded' ? fields : undefined;
+    });
+    define(body, 'formdata', function () {
+      return req.mode === 'formdata' ? fields : undefined;
+    });
+    return body;
+  }
+
+  function requestObject(req) {
+    req.pathVariables = req.pathVariables || [];
+    var url = urlObject(req);
+    var headers = headerList(req.headers);
+    var body = bodyObject(req);
     var request = {
       headers: headers,
       body: body,
@@ -1330,6 +1627,14 @@
         req.method = String(v).toUpperCase();
       },
     });
+    // chai-postman's request assertions: `pm.request.to.have.header('Accept')`.
+    define(request, 'to', function () {
+      return proxify(new Assertion(request));
+    });
+    define(request, 'description', function () {
+      return req.description || undefined;
+    });
+    requests.add(request);
     return request;
   }
 
@@ -1355,12 +1660,51 @@
       reason: function () {
         return res.status;
       },
+      details: function () {
+        return { code: res.code, name: res.status, detail: res.status };
+      },
+      /** Bytes: the body, the headers as they were sent (`Name: value` lines) and both. */
+      size: function () {
+        var header = res.headers.reduce(function (n, h) {
+          return n + h.key.length + h.value.length + 4;
+        }, 0);
+        return { body: res.responseSize, header: header, total: res.responseSize + header };
+      },
+      /** From the Content-Type and Content-Disposition headers. */
+      contentInfo: function () {
+        var type = response.headers.get('content-type') || '';
+        var mime = type.split(';')[0].trim().toLowerCase();
+        var charset = /charset=([^;]+)/i.exec(type);
+        var disposition = /filename(\*?)=(?:UTF-8'')?"?([^";]+)"?/i.exec(response.headers.get('content-disposition') || '');
+        var subtype = mime.split('/')[1] || '';
+        var extension = subtype.split('+').pop() || '';
+        var info = {
+          mimeType: mime.split('/')[0] || 'text',
+          mimeFormat: /json/.test(subtype) ? 'json' : /xml/.test(subtype) ? 'xml' : /html/.test(subtype) ? 'html' : subtype,
+          charset: charset ? charset[1].trim() : 'utf8',
+          fileExtension: extension === 'plain' ? 'txt' : extension,
+        };
+        info.fileName = disposition ? disposition[2] : 'response.' + (info.fileExtension || 'txt');
+        // Only `filename*=` is percent-encoded (`filename="100%.txt"` is that name).
+        if (disposition && disposition[1]) {
+          try {
+            info.fileName = decodeURIComponent(info.fileName);
+          } catch (e) {
+            // Not valid percent-encoding: the name as it is.
+          }
+        }
+        return info;
+      },
       toJSON: function () {
         return { code: res.code, status: res.status, header: response.headers.all(), body: body };
       },
     };
     define(response, 'to', function () {
-      return new ResponseAssertion(response);
+      return proxify(new ResponseAssertion(response));
+    });
+    // The body as a Buffer (`res.stream.toString()`), as Postman's responses have it.
+    define(response, 'stream', function () {
+      return runLibraries.require('buffer').Buffer.from(body, 'utf8');
     });
     var cookies = cookieList(res.cookies || []);
     define(response, 'cookies', function () {
@@ -1609,6 +1953,35 @@
     );
   }
 
+  /** The legacy `request` global: `{id, name, description, headers, method, url, data}`. */
+  function legacyRequest(request, info) {
+    var headers = {};
+    request.headers.each(function (h) {
+      if (own(headers, h.key)) headers[h.key] = [].concat(headers[h.key], h.value);
+      else headers[h.key] = h.value;
+    });
+    var body = request.body;
+    var data = {};
+    if (body.mode === 'raw') {
+      data = body.raw;
+    } else if (body.mode === 'urlencoded' || body.mode === 'formdata') {
+      body[body.mode].each(function (f) {
+        var value = f.type === 'file' ? f.src : f.value;
+        if (own(data, f.key)) data[f.key] = [].concat(data[f.key], value);
+        else data[f.key] = value;
+      });
+    }
+    return {
+      id: info.requestId || undefined,
+      name: info.requestName || undefined,
+      description: request.description,
+      headers: headers,
+      method: request.method,
+      url: request.url.toString(),
+      data: data,
+    };
+  }
+
   // ---- base64 (atob / btoa, if the engine has none) --------------------------------
 
   var B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -1648,6 +2021,214 @@
     return out;
   }
 
+  // ---- SugarJS --------------------------------------------------------------------
+
+  /**
+   * What SugarJS 1.3.9 adds to the built-ins, by object. Postman's sandbox loads it into
+   * every script (`responseBody.has('x')`, `(56).ordinalize()`, `Date.create('today')`).
+   * Here the names a script mentions (`.has`, `['has']`) are stubs until it uses one, which
+   * loads the library (it replaces them all), so scripts that don't use it pay nothing. A
+   * test checks this list against the library (libs/tests.rs).
+   */
+  var SUGAR = {
+    Array:
+      'AlphanumericSortEquivalents AlphanumericSortIgnoreCase AlphanumericSortOrder SugarMethods create' +
+      ' extend sugarRestore sugarRevert',
+    'Array.prototype':
+      'add all any average clone compact count each exclude findAll first flatten from groupBy inGroups' +
+      ' inGroupsOf include insert intersect isEmpty last least max min most none randomize remove' +
+      ' removeAt sample sortBy subtract sum to union unique zip',
+    String: 'Inflector SugarMethods extend sugarRestore sugarRevert',
+    'String.prototype':
+      'add assign camelize capitalize chars codes compact dasherize decodeBase64 each encodeBase64' +
+      ' escapeHTML escapeRegExp escapeURL first from hankaku has hasArabic hasCyrillic hasDevanagari' +
+      ' hasGreek hasHan hasHangul hasHebrew hasHiragana hasKana hasKanji hasKatakana hasLatin hasThai' +
+      ' hiragana humanize insert isArabic isBlank isCyrillic isDevanagari isGreek isHan isHangul' +
+      ' isHebrew isHiragana isKana isKanji isKatakana isLatin isThai katakana last lines pad padLeft' +
+      ' padRight paragraphs parameterize pluralize remove removeTags reverse shift singularize spacify' +
+      ' stripTags titleize to toNumber truncate underscore unescapeHTML unescapeURL words zenkaku',
+    Number: 'SugarMethods extend random sugarRestore sugarRevert',
+    'Number.prototype':
+      'abbr abs acos asin atan bytes ceil chr cos day dayAfter dayAgo dayBefore dayFromNow days' +
+      ' daysAfter daysAgo daysBefore daysFromNow downto duration exp floor format hex hour hourAfter' +
+      ' hourAgo hourBefore hourFromNow hours hoursAfter hoursAgo hoursBefore hoursFromNow isEven' +
+      ' isInteger isMultipleOf isOdd log metric millisecond millisecondAfter millisecondAgo' +
+      ' millisecondBefore millisecondFromNow milliseconds millisecondsAfter millisecondsAgo' +
+      ' millisecondsBefore millisecondsFromNow minute minuteAfter minuteAgo minuteBefore minuteFromNow' +
+      ' minutes minutesAfter minutesAgo minutesBefore minutesFromNow month monthAfter monthAgo' +
+      ' monthBefore monthFromNow months monthsAfter monthsAgo monthsBefore monthsFromNow ordinalize pad' +
+      ' pow round second secondAfter secondAgo secondBefore secondFromNow seconds secondsAfter' +
+      ' secondsAgo secondsBefore secondsFromNow sin sqrt tan times toNumber upto week weekAfter weekAgo' +
+      ' weekBefore weekFromNow weeks weeksAfter weeksAgo weeksBefore weeksFromNow year yearAfter yearAgo' +
+      ' yearBefore yearFromNow years yearsAfter yearsAgo yearsBefore yearsFromNow',
+    Date:
+      'ISO8601_DATE ISO8601_DATETIME RFC1036 RFC1123 SugarMethods addFormat addLocale create extend' +
+      ' future getLocale past range setLocale sugarRestore sugarRevert utc',
+    'Date.prototype':
+      'addDays addHours addMilliseconds addMinutes addMonths addSeconds addWeeks addYears advance' +
+      ' beginningOfDay beginningOfMonth beginningOfWeek beginningOfYear clone daysAgo daysFromNow' +
+      ' daysInMonth daysSince daysUntil endOfDay endOfMonth endOfWeek endOfYear format full getISOWeek' +
+      ' getUTCOffset getUTCWeekday getWeekday hoursAgo hoursFromNow hoursSince hoursUntil is isAfter' +
+      ' isApril isAugust isBefore isBetween isDecember isFebruary isFriday isFuture isJanuary isJuly' +
+      ' isJune isLastMonth isLastWeek isLastYear isLeapYear isMarch isMay isMonday isNextMonth' +
+      ' isNextWeek isNextYear isNovember isOctober isPast isSaturday isSeptember isSunday isThisMonth' +
+      ' isThisWeek isThisYear isThursday isToday isTomorrow isTuesday isUTC isValid isWednesday' +
+      ' isWeekday isWeekend isYesterday iso long millisecondsAgo millisecondsFromNow millisecondsSince' +
+      ' millisecondsUntil minutesAgo minutesFromNow minutesSince minutesUntil monthsAgo monthsFromNow' +
+      ' monthsSince monthsUntil relative reset rewind secondsAgo secondsFromNow secondsSince' +
+      ' secondsUntil set setISOWeek setWeekday short utc weeksAgo weeksFromNow weeksSince weeksUntil' +
+      ' yearsAgo yearsFromNow yearsSince yearsUntil',
+    Function: 'SugarMethods extend sugarRestore sugarRevert',
+    'Function.prototype': 'after cancel debounce delay fill lazy once throttle',
+    RegExp: 'SugarMethods extend sugarRestore sugarRevert',
+    'RegExp.prototype': 'addFlag getFlags removeFlag setFlags',
+    Object:
+      'SugarMethods all any average clone count each equal extend extended find findAll fromQueryString' +
+      ' has isArray isBoolean isDate isEmpty isFunction isNaN isNumber isObject isRegExp isString least' +
+      ' map max merge min most none reduce reject select size sugarRestore sugarRevert sum tap' +
+      ' toQueryString watch',
+    Boolean: 'SugarMethods extend sugarRestore sugarRevert',
+  };
+
+  /**
+   * Stubs for the SUGAR names `source` mentions; the returned `load` (also run by
+   * `require('sugar')`) removes them and loads the library.
+   */
+  function sugarStubs(source, requireSugar) {
+    var named = Object.create(null);
+    var mention = /\.\s*([A-Za-z_$][\w$]*)|\[\s*(['"`])([A-Za-z_$][\w$]*)\2\s*\]/g;
+    for (var m = mention.exec(source); m; m = mention.exec(source)) named[m[1] || m[3]] = true;
+    var stubs = [];
+    var loaded = false;
+    function load() {
+      if (loaded) return;
+      loaded = true;
+      stubs.forEach(function (s) {
+        var d = Object.getOwnPropertyDescriptor(s.target, s.name);
+        if (d && d.get === s.get) delete s.target[s.name];
+      });
+      requireSugar();
+    }
+    function stub(target, name) {
+      var s = {
+        target: target,
+        name: name,
+        get: function () {
+          load();
+          return this[name];
+        },
+      };
+      Object.defineProperty(target, name, {
+        get: s.get,
+        // An assignment makes a normal property, as it would without the stub.
+        set: function (value) {
+          Object.defineProperty(this, name, { value: value, writable: true, enumerable: true, configurable: true });
+        },
+        configurable: true,
+      });
+      stubs.push(s);
+    }
+    Object.keys(SUGAR).forEach(function (path) {
+      var parts = path.split('.');
+      var target = parts[1] ? G[parts[0]].prototype : G[parts[0]];
+      SUGAR[path].split(' ').forEach(function (name) {
+        if (named[name] && !hasOwn.call(target, name)) stub(target, name);
+      });
+    });
+    return load;
+  }
+
+  /**
+   * Postman's `_` global is lodash 3. Lodash 4 gets the lodash 3 names old scripts use
+   * (`_.pluck`, `_.contains`, `_.where`, …), and the lodash 3 call forms of functions
+   * lodash 4 changed (`_.max(list, 'n')`, `_.uniq(list, 'id')`, `_.flatten(list, true)`,
+   * `_.clone(x, true)`, `_.pick(o, fn)`, `_.rest(list)`). Calls in the lodash 4 way are
+   * unchanged.
+   */
+  function lodash3(lodash) {
+    /** Lodash 3's `isIterateeCall`: `(value, index, object)` as an iteratee gets them. */
+    function iterateeCall(value, index, object) {
+      if (object === null || (typeof object !== 'object' && typeof object !== 'function')) return false;
+      if ((typeof index !== 'number' && typeof index !== 'string') || !(index in object)) return false;
+      var other = object[index];
+      return value === value ? value === other : other !== other;
+    }
+    var names = {
+      pluck: 'map',
+      where: 'filter',
+      findWhere: 'find',
+      contains: 'includes',
+      include: 'includes',
+      any: 'some',
+      all: 'every',
+      collect: 'map',
+      detect: 'find',
+      select: 'filter',
+      foldl: 'reduce',
+      inject: 'reduce',
+      foldr: 'reduceRight',
+      methods: 'functions',
+      indexBy: 'keyBy',
+      sortByOrder: 'orderBy',
+      sortByAll: 'sortBy',
+      padLeft: 'padStart',
+      padRight: 'padEnd',
+      trimLeft: 'trimStart',
+      trimRight: 'trimEnd',
+      callback: 'iteratee',
+      backflow: 'flowRight',
+      compose: 'flowRight',
+    };
+    Object.keys(names).forEach(function (old) {
+      if (!(old in lodash)) lodash[old] = lodash[names[old]];
+    });
+    var v4 = {};
+    ['max', 'min', 'sum', 'uniq', 'flatten', 'clone', 'pick', 'omit', 'rest', 'zipObject'].forEach(function (n) {
+      v4[n] = lodash[n];
+    });
+    [
+      ['max', 'maxBy'],
+      ['min', 'minBy'],
+      ['sum', 'sumBy'],
+      ['uniq', 'uniqBy'],
+    ].forEach(function (p) {
+      lodash[p[0]] = function (collection, iteratee, more) {
+        // `_.map(lists, _.max)` calls `max(list, index, lists)`: no iteratee, as lodash 3 checks.
+        if (iterateeCall(collection, iteratee, more)) iteratee = undefined;
+        // uniq(array, isSorted, iteratee)
+        else if (p[0] === 'uniq' && typeof iteratee === 'boolean') iteratee = more;
+        if (iteratee === undefined || iteratee === null) return v4[p[0]](collection);
+        return lodash[p[1]](lodash.toArray(collection), iteratee);
+      };
+    });
+    lodash.trunc = function (string, options) {
+      return lodash.truncate(string, typeof options === 'number' ? { length: options } : options);
+    };
+    lodash.object = function (keys, values) {
+      return values === undefined ? lodash.fromPairs(keys) : v4.zipObject(keys, values);
+    };
+    lodash.zipObject = function (keys, values) {
+      var pairs = values === undefined && Array.isArray(keys) && Array.isArray(keys[0]);
+      return pairs ? lodash.fromPairs(keys) : v4.zipObject(keys, values);
+    };
+    lodash.flatten = function (array, deep) {
+      return deep === true ? lodash.flattenDeep(array) : v4.flatten(array);
+    };
+    lodash.clone = function (value, deep) {
+      return deep === true ? lodash.cloneDeep(value) : v4.clone(value);
+    };
+    lodash.pick = function (object, predicate) {
+      return typeof predicate === 'function' ? lodash.pickBy(object, predicate) : v4.pick.apply(lodash, arguments);
+    };
+    lodash.omit = function (object, predicate) {
+      return typeof predicate === 'function' ? lodash.omitBy(object, predicate) : v4.omit.apply(lodash, arguments);
+    };
+    lodash.rest = function (array) {
+      return typeof array === 'function' ? v4.rest.apply(lodash, arguments) : lodash.tail(array);
+    };
+    return lodash;
+  }
+
   // ---- require: the built-in libraries -------------------------------------------
 
   // Postman's `xml2Json` options (explicitArray off: single children aren't arrays).
@@ -1662,16 +2243,47 @@
    */
   function libraries(host) {
     var modules = new Map();
+    /** Loads SugarJS over its stubs (`install` sets it). */
+    var loadSugar = null;
+    var SANDBOX_MODULES = {
+      timers: function () {
+        return {
+          setTimeout: G.setTimeout,
+          clearTimeout: G.clearTimeout,
+          setInterval: G.setInterval,
+          clearInterval: G.clearInterval,
+          setImmediate: G.setImmediate,
+          clearImmediate: G.clearImmediate,
+        };
+      },
+      atob: function () {
+        return G.atob;
+      },
+      btoa: function () {
+        return G.btoa;
+      },
+    };
 
     function require(id) {
       if (typeof id !== 'string') throw new TypeError('require: the module name must be a string');
-      var name = id.indexOf('node:') === 0 ? id.slice(5) : id;
+      // `node:util` and `util/` (the npm package, as some libraries ask for it) are `util`.
+      var name = (id.indexOf('node:') === 0 ? id.slice(5) : id).replace(/^([^\/]+)\/$/, '$1');
       var module = modules.get(name);
       if (module) return module.exports;
+      // Modules Postman's sandbox has that are the sandbox's own globals.
+      if (own(SANDBOX_MODULES, name)) return SANDBOX_MODULES[name]();
+      // SugarJS replaces the stubs for its methods: they go first.
+      if (name === 'sugar' && loadSugar) {
+        var load = loadSugar;
+        loadSugar = null;
+        load();
+        return require('sugar');
+      }
       var factory = host.library(name);
       if (typeof factory !== 'function') {
         throw new Error(
-          "Cannot find module '" + id + "'. Scripts can require only these built-in libraries: " + host.names.join(', ')
+          "Cannot find module '" + id + "'. Scripts can require only these built-in libraries: " +
+            host.names.concat(Object.keys(SANDBOX_MODULES)).sort().join(', ')
         );
       }
       module = { id: name, exports: {}, loaded: false };
@@ -1686,6 +2298,7 @@
         throw new Error('The built-in library "' + name + '" failed to load: ' + errorText(e));
       }
       module.loaded = true;
+      if (name === 'lodash') lodash3(module.exports);
       return module.exports;
     }
 
@@ -1741,13 +2354,33 @@
       });
     }
 
-    function install() {
+    function install(source) {
       // Web Crypto's random part: uuid and crypto-js need it; scripts can use it too.
       G.crypto = { getRandomValues: getRandomValues, randomUUID: randomUUID };
+      loadSugar = sugarStubs(String(source || ''), function () {
+        require('sugar');
+      });
       lazy('CryptoJS', 'crypto-js');
       lazy('_', 'lodash');
       lazy('tv4', 'tv4');
       lazy('cheerio', 'cheerio');
+      // Node's Buffer, which Postman's sandbox has as a global. Libraries that look for it
+      // while they load don't get it (they never had it), so it loads only when a script uses it.
+      Object.defineProperty(G, 'Buffer', {
+        get: function () {
+          var loading = Array.from(modules.values()).some(function (m) {
+            return !m.loaded;
+          });
+          if (loading) return undefined;
+          var value = require('buffer').Buffer;
+          Object.defineProperty(G, 'Buffer', { value: value, writable: true, configurable: true });
+          return value;
+        },
+        set: function (value) {
+          Object.defineProperty(G, 'Buffer', { value: value, writable: true, configurable: true });
+        },
+        configurable: true,
+      });
       G.xml2Json = function xml2Json(xml) {
         var json;
         var failed = null;
@@ -1765,7 +2398,7 @@
 
   // ---- setup ---------------------------------------------------------------------
 
-  return function setup(inputJson, responseBody, host) {
+  return function setup(inputJson, responseBody, host, source) {
     var input = jsonParse(inputJson);
     var vars = input.variables || {};
     var overrides = copy(vars.overrides);
@@ -1775,6 +2408,15 @@
     var collection = copy(vars.collection);
     var globals = copy(vars.globals);
     var chain = [overrides, local, data, environment, collection, globals];
+    // Values earlier scripts set that aren't text come back as they were (Rust: `Variables::typed`).
+    var scopesByName = { local: local, environment: environment, collection: collection, globals: globals };
+    var typed = vars.typed || {};
+    Object.keys(typed).forEach(function (id) {
+      var at = id.indexOf(':');
+      var values = scopesByName[id.slice(0, at)];
+      var key = id.slice(at + 1);
+      if (values && own(values, key) && values[key] === stored(typed[id])) values[key] = typed[id];
+    });
     var changes = new Map();
     var tests = [];
     var skip = false;
@@ -1820,10 +2462,22 @@
       nextRequest = { name: name === null || name === undefined ? null : String(name) };
     }
 
-    function record(scope, key, value) {
+    /** A set (`value` as the script gave it) or an unset (`undefined`) to report. */
+    function record(scope, key, value, unset) {
       var id = scope + '\u0000' + key;
+      var change = { scope: scope, key: key, value: unset ? null : stored(value) };
+      // Not text: kept as JSON too, so later scripts get the number, object, … back.
+      if (!unset && typeof value !== 'string' && value !== undefined) {
+        try {
+          var json = jsonParse(change.value);
+          // The app reads 128 levels of nesting at most: deeper values travel as text only.
+          if (!nestedDeeper(json, MAX_TYPED_DEPTH)) change.json = json;
+        } catch (e) {
+          // NaN, functions, …: only the text.
+        }
+      }
       changes.delete(id);
-      changes.set(id, { scope: scope, key: key, value: value });
+      changes.set(id, change);
     }
 
     function lookup(name) {
@@ -1854,11 +2508,22 @@
         api.set = function (key, value) {
           if (key === undefined || key === null) return;
           values[String(key)] = value;
-          record(name, String(key), stored(value));
+          record(name, String(key), value, false);
         };
         api.unset = function (key) {
           delete values[String(key)];
-          record(name, String(key), null);
+          record(name, String(key), null, true);
+        };
+        api.clear = function () {
+          Object.keys(values).forEach(api.unset);
+        };
+      } else {
+        // `pm.iterationData`: changes last for this script only (the data file stays as it is).
+        api.set = function (key, value) {
+          if (key !== undefined && key !== null) values[String(key)] = value;
+        };
+        api.unset = function (key) {
+          delete values[String(key)];
         };
         api.clear = function () {
           Object.keys(values).forEach(api.unset);
@@ -1957,6 +2622,10 @@
       },
       require: libs.pmRequire,
       execution: {
+        // The folders and the request this script belongs to, `current` the item whose script runs.
+        location: Object.defineProperty((info.location || []).slice(), 'current', {
+          value: info.current || info.requestName || '',
+        }),
         setNextRequest: setNextRequest,
         // Only a pre-request script can skip: the request isn't sent (a run goes on).
         skipRequest: function () {
@@ -1998,35 +2667,67 @@
     };
     G.clearTimeout = G.clearInterval = G.clearImmediate = clearTimer;
     // Postman's sandbox libraries (`CryptoJS`, `_`, `tv4`, `cheerio`, `xml2Json`) and `crypto`.
-    libs.install();
+    libs.install(source);
     if (typeof G.atob !== 'function') G.atob = atob;
     if (typeof G.btoa !== 'function') G.btoa = btoa;
 
     // Legacy Postman API (`postman.*`, `tests[…]`, `responseBody`, …), still common in old collections.
+    // `environment` and `globals` are snapshots that only the `postman.*` setters change, as in Postman.
+    var legacyEnvironment = copy(environment);
+    var legacyGlobals = copy(globals);
+    function legacySetter(snapshot, scopeApi) {
+      return function (key, value) {
+        // Postman's legacy setters store `value.toString()` (but 0, '' and null as they are).
+        if ((value === false || value) && typeof value.toString === 'function') value = value.toString();
+        snapshot[key] = value;
+        scopeApi.set(key, value);
+      };
+    }
+    function legacyClear(snapshot, scopeApi) {
+      return {
+        one: function (key) {
+          if (key) delete snapshot[key];
+          scopeApi.unset(key);
+        },
+        all: function () {
+          Object.keys(snapshot).forEach(function (k) {
+            delete snapshot[k];
+          });
+          scopeApi.clear();
+        },
+      };
+    }
+    var clearEnv = legacyClear(legacyEnvironment, envScope);
+    var clearGlobals = legacyClear(legacyGlobals, pm.globals);
     G.tests = {};
     G.postman = {
-      setEnvironmentVariable: envScope.set,
+      setEnvironmentVariable: legacySetter(legacyEnvironment, envScope),
       getEnvironmentVariable: envScope.get,
-      clearEnvironmentVariable: envScope.unset,
-      clearEnvironmentVariables: envScope.clear,
-      setGlobalVariable: pm.globals.set,
+      clearEnvironmentVariable: clearEnv.one,
+      clearEnvironmentVariables: clearEnv.all,
+      setGlobalVariable: legacySetter(legacyGlobals, pm.globals),
       getGlobalVariable: pm.globals.get,
-      clearGlobalVariable: pm.globals.unset,
-      clearGlobalVariables: pm.globals.clear,
-      getResponseHeader: function (name) {
-        return pm.response ? pm.response.headers.get(name) : undefined;
-      },
+      clearGlobalVariable: clearGlobals.one,
+      clearGlobalVariables: clearGlobals.all,
       setNextRequest: setNextRequest,
     };
-    G.environment = copy(environment);
-    G.globals = copy(globals);
+    G.environment = legacyEnvironment;
+    G.globals = legacyGlobals;
     G.data = copy(data);
     G.iteration = pm.info.iteration;
+    G.request = legacyRequest(pm.request, info);
     if (pm.response) {
+      G.postman.getResponseHeader = function (name) {
+        return pm.response.headers.get(name);
+      };
+      G.postman.getResponseCookie = function (name) {
+        return cookies.one(String(name));
+      };
       G.responseBody = pm.response.text();
       G.responseCode = { code: pm.response.code, name: pm.response.status, detail: pm.response.status };
       G.responseHeaders = pm.response.headers.toObject();
       G.responseTime = pm.response.responseTime;
+      G.responseCookies = cookies.all();
     }
 
     function finish() {
@@ -2041,7 +2742,9 @@
       if (legacy && typeof legacy === 'object') {
         for (var k in legacy) {
           if (own(legacy, k) && tests.length < MAX_TESTS) {
-            tests.push({ name: k, passed: !!legacy[k], skipped: false, error: null });
+            var passed = !!legacy[k];
+            var error = passed ? null : clip('expected ' + show(legacy[k]) + ' to be truthy');
+            tests.push({ name: k, passed: passed, skipped: false, error: error });
           }
         }
       }
@@ -2061,7 +2764,22 @@
       for (i = 0; i < req.headers.length; i++) {
         headers.push({ key: String(req.headers[i].key), value: stored(req.headers[i].value) });
       }
-      out.request = { url: stored(req.url), method: stored(req.method), headers: headers, body: stored(req.body) };
+      out.request = {
+        url: stored(req.url),
+        method: stored(req.method),
+        headers: headers,
+        body: stored(req.body),
+        mode: stored(req.mode),
+        form: req.form.map(function (f) {
+          var field = { key: stored(f.key), value: stored(f.value), type: f.type === 'file' ? 'file' : 'text' };
+          if (field.type === 'file') field.src = stored(f.src);
+          return field;
+        }),
+        pathVariables: req.pathVariables.map(function (v) {
+          return { key: stored(v.key), value: stored(v.value) };
+        }),
+        description: stored(req.description),
+      };
       changes.forEach(function (c) {
         out.variables.push(c);
       });

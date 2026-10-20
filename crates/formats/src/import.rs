@@ -41,6 +41,8 @@ pub struct ImportedCollection {
     pub items: Vec<ImportedItem>,
     /// Things that could not be imported faithfully (shown to the user).
     pub warnings: Vec<String>,
+    /// What the collection or API is (Markdown): the docs of the folder it becomes.
+    pub docs: String,
 }
 
 impl ImportedCollection {
@@ -73,6 +75,10 @@ pub struct ImportSummary {
     pub warnings: Vec<String>,
     /// Path of the created top-level folder (relative to requests/), if any.
     pub folder_path: Option<String>,
+    /// Id of the environment the import created, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub environment_id: Option<String>,
 }
 
 /// Result of importing a Postman environment file.

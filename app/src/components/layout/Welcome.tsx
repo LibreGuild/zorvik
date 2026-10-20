@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { ArrowRight, FolderOpen, FolderPlus, GraduationCap, Layers, X } from "lucide-react";
+import { ArrowRight, FolderOpen, FolderPlus, GraduationCap, Layers, Library, X } from "lucide-react";
 import { formatRelative } from "../../lib/format";
 import { pickFolder } from "../../lib/platform";
 import { api, errorMessage } from "../../lib/rpc";
 import { isBootcampPath, openAcademy, useAcademy } from "../../store/academy";
 import { restoreTabs } from "../../store/tabs";
 import { toast } from "../../store/toasts";
+import { openModal } from "../../store/ui";
 import { createWorkspace, openOrInitWorkspace, useWorkspace } from "../../store/workspace";
 import { Button, Field, Input, Modal } from "../ui";
 import welcomeArt from "../../assets/welcome-art.webp";
@@ -93,6 +94,18 @@ export function Welcome() {
             <div className="text-[12px] text-muted">Open an existing folder that contains zorvik.yaml.</div>
           </button>
         </div>
+        <button
+          onClick={() => openModal({ type: "import", tab: "catalog" })}
+          className="group mt-3 flex w-full items-center gap-3 rounded-xl border border-line bg-elev p-4 text-left transition-colors hover:border-accent"
+          data-testid="welcome-catalog"
+        >
+          <Library size={20} className="shrink-0 text-accent" />
+          <div className="min-w-0 flex-1">
+            <div className="text-[13.5px] font-semibold text-fg">Browse API catalog</div>
+            <div className="text-[12px] text-muted">Start from a well-known API, such as OpenAI, Stripe or GitHub, in one click.</div>
+          </div>
+          <ArrowRight size={16} className="shrink-0 text-faint transition-transform group-hover:translate-x-0.5 group-hover:text-accent" />
+        </button>
         {recent.length > 0 && (
           <div className="mt-8">
             <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-faint">Recent</div>

@@ -1,6 +1,7 @@
 //! Zorvik data model and interchange formats.
 
 pub mod curl;
+pub mod discovery;
 pub mod filter;
 pub mod graphql;
 pub mod import;
@@ -13,6 +14,7 @@ pub mod openapi;
 pub mod postman;
 pub mod regex_test;
 pub mod server;
+pub mod smithy;
 pub mod snippet;
 pub mod spec_check;
 

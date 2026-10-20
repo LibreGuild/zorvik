@@ -17,10 +17,12 @@ use ts_rs::TS;
 use zorvik_engine::{Client, CookieInfo, CookieJar, Header, HttpRequest, HttpResponse, RequestOptions};
 use zorvik_script::{
     ConsoleEntry, ConsoleLevel, Event, Host, HostRequest, HostResponse, Info, Limits, NextRequest, Scope, ScriptCookie,
-    ScriptHeader, ScriptInput, ScriptRequest, ScriptResponse, TestResult, VariableChange, Variables,
+    ScriptField, ScriptHeader, ScriptInput, ScriptRequest, ScriptResponse, TestResult, VariableChange, Variables,
 };
 use zorvik_workspace::Workspace;
-use zorvik_workspace::formats::{BodyType, FolderMeta, KeyValue, Request, Scripts, Variable, WorkspaceMeta};
+use zorvik_workspace::formats::{
+    BodyType, FolderMeta, KeyValue, MultipartField, Request, Scripts, Variable, WorkspaceMeta,
+};
 use zorvik_workspace::localvalues::{GLOBALS, overlay};
 use zorvik_workspace::oauth2::{self, TokenCache};
 use zorvik_workspace::resolve::{Inheritance, Resolved, apply_token, check_url_variables, resolve};
@@ -216,6 +218,8 @@ pub(crate) async fn send_scripted_with(
         request_id: path.unwrap_or_default().to_string(),
         iteration: iteration.index,
         iteration_count: iteration.count,
+        location: folders.iter().map(|f| f.name.clone()).chain([request.name.clone()]).collect(),
+        current: String::new(),
     };
     let mut report: Option<ScriptReport> = None;
     let mut next_request = None;
@@ -258,7 +262,7 @@ pub(crate) async fn send_scripted_with(
     };
 
     let mut post = chain(cx.meta, &folders, &request, |s| &s.post_response);
-    post.extend(extra);
+    post.extend(extra.map(|(label, code)| ChainScript { label, owner: request.name.clone(), code }));
     if !post.is_empty() {
         let mut res = response_snapshot(&response, limits.memory);
         res.events = events.as_ref().map(|(list, _)| {
@@ -267,7 +271,8 @@ pub(crate) async fn send_scripted_with(
                 .collect()
         });
         res.cookies = response.meta.cookies.iter().map(script_cookie).collect();
-        let mut input = script_input(Event::PostResponse, &info, vars, sent_snapshot(&resolved.request), Some(res));
+        let sent = sent_snapshot(&resolved.request, &response, &request, vars);
+        let mut input = script_input(Event::PostResponse, &info, vars, sent, Some(res));
         input.cookies = jar_cookies(cx.jar, &resolved.request.url);
         let merged = report.get_or_insert_with(Default::default);
         match run_chain(Event::PostResponse, post, input, vars.environment.is_some(), limits, host).await {
@@ -573,20 +578,30 @@ fn script_host(cx: &SendContext<'_>, url: &str) -> ApiResult<Option<Arc<dyn Host
     Ok(Some(Arc::new(host)))
 }
 
+/// One script of a chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChainScript {
+    /// For messages: "folder 'Users'".
+    label: String,
+    /// The workspace's, folder's or request's name (`pm.execution.location.current`).
+    owner: String,
+    code: String,
+}
+
 /// The non-empty scripts for `request`, outermost first, with names for messages.
 fn chain(
     meta: &WorkspaceMeta,
     folders: &[FolderMeta],
     request: &Request,
     pick: fn(&Scripts) -> &String,
-) -> Vec<(String, String)> {
+) -> Vec<ChainScript> {
     let named =
         |name: &str, what: &str| if name.trim().is_empty() { what.to_string() } else { format!("{what} '{name}'") };
-    std::iter::once(("workspace".to_string(), pick(&meta.scripts)))
-        .chain(folders.iter().map(|f| (named(&f.name, "folder"), pick(&f.scripts))))
-        .chain(std::iter::once((named(&request.name, "request"), pick(&request.scripts))))
-        .filter(|(_, code)| !code.trim().is_empty())
-        .map(|(label, code)| (label, code.clone()))
+    std::iter::once(("workspace".to_string(), &meta.name, pick(&meta.scripts)))
+        .chain(folders.iter().map(|f| (named(&f.name, "folder"), &f.name, pick(&f.scripts))))
+        .chain(std::iter::once((named(&request.name, "request"), &request.name, pick(&request.scripts))))
+        .filter(|(_, _, code)| !code.trim().is_empty())
+        .map(|(label, owner, code)| ChainScript { label, owner: owner.clone(), code: code.clone() })
         .collect()
 }
 
@@ -624,7 +639,7 @@ struct ChainOutcome {
 /// previous ones did. A pre-request error stops the rest, a post-response one doesn't.
 async fn run_chain(
     event: Event,
-    scripts: Vec<(String, String)>,
+    scripts: Vec<ChainScript>,
     input: ScriptInput,
     has_environment: bool,
     limits: Limits,
@@ -638,7 +653,8 @@ async fn run_chain(
         let mut next_request = None;
         let mut skip = false;
         let kind = if event == Event::PreRequest { "Pre-request" } else { "Post-response" };
-        for (label, code) in scripts {
+        for ChainScript { label, owner, code } in scripts {
+            input.info.current = owner;
             let out = zorvik_script::run_with(&code, &input, &limits, host.clone());
             skip |= out.skip_request;
             if out.visualization.is_some() {
@@ -694,13 +710,62 @@ fn raw_body(t: BodyType) -> bool {
     matches!(t, BodyType::Json | BodyType::Text | BodyType::Xml)
 }
 
+/// Postman's name for a body type (`pm.request.body.mode`).
+fn body_mode(t: BodyType) -> &'static str {
+    match t {
+        BodyType::Json | BodyType::Text | BodyType::Xml => "raw",
+        BodyType::FormUrlencoded => "urlencoded",
+        BodyType::Multipart => "formdata",
+        BodyType::Binary => "file",
+        BodyType::Graphql => "graphql",
+        BodyType::None => "",
+    }
+}
+
+/// The enabled fields of a form body, values passed through `render`.
+fn form_fields(r: &Request, render: &dyn Fn(&str) -> String) -> Vec<ScriptField> {
+    match r.body.body_type {
+        BodyType::FormUrlencoded => r
+            .body
+            .form
+            .iter()
+            .filter(|f| f.enabled)
+            .map(|f| ScriptField::text(render(&f.key), render(&f.value)))
+            .collect(),
+        BodyType::Multipart => r
+            .body
+            .multipart
+            .iter()
+            .filter(|f| f.enabled)
+            .map(|f| {
+                if f.file {
+                    ScriptField::file(render(&f.key), render(&f.value))
+                } else {
+                    ScriptField::text(render(&f.key), render(&f.value))
+                }
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// `pm.request` for pre-request scripts: the request as saved (enabled headers only).
 fn request_snapshot(r: &Request) -> ScriptRequest {
+    let same = |s: &str| s.to_string();
     ScriptRequest {
         url: r.url.clone(),
         method: r.method.clone(),
         headers: r.headers.iter().filter(|h| h.enabled).map(|h| ScriptHeader::new(&h.key, &h.value)).collect(),
         body: if raw_body(r.body.body_type) { r.body.text.clone() } else { String::new() },
+        mode: body_mode(r.body.body_type).to_string(),
+        form: form_fields(r, &same),
+        path_variables: r
+            .path_params
+            .iter()
+            .filter(|p| p.enabled)
+            .map(|p| ScriptHeader::new(&p.key, &p.value))
+            .collect(),
+        description: r.docs.clone(),
     }
 }
 
@@ -716,22 +781,92 @@ fn apply_request(r: &mut Request, before: &ScriptRequest, after: ScriptRequest) 
         let disabled: Vec<KeyValue> = r.headers.iter().filter(|h| !h.enabled).cloned().collect();
         r.headers = after.headers.into_iter().map(|h| KeyValue::new(h.key, h.value)).chain(disabled).collect();
     }
-    if after.body != before.body {
-        if !raw_body(r.body.body_type) {
-            let json = after.body.trim_start().starts_with(['{', '[']);
-            r.body.body_type = if json { BodyType::Json } else { BodyType::Text };
+    if after.path_variables != before.path_variables {
+        let old = std::mem::take(&mut r.path_params);
+        let kept = |key: &str| old.iter().find(|p| p.key == key && p.enabled);
+        r.path_params = after
+            .path_variables
+            .into_iter()
+            .map(|v| KeyValue { value: v.value, ..kept(&v.key).cloned().unwrap_or_else(|| KeyValue::new(&v.key, "")) })
+            .chain(old.iter().filter(|p| !p.enabled).cloned())
+            .collect();
+    }
+    let mode_changed = after.mode != before.mode;
+    let mode = if after.mode.is_empty() && !after.body.is_empty() { "raw" } else { after.mode.as_str() };
+    match mode {
+        "urlencoded" | "formdata" if mode_changed || after.form != before.form => {
+            if mode == "urlencoded" {
+                let disabled: Vec<KeyValue> = r.body.form.iter().filter(|f| !f.enabled).cloned().collect();
+                r.body.body_type = BodyType::FormUrlencoded;
+                r.body.form = after.form.into_iter().map(|f| KeyValue::new(f.key, f.value)).chain(disabled).collect();
+            } else {
+                let old = std::mem::take(&mut r.body.multipart);
+                // Unchanged fields keep their content type.
+                let same = |f: &ScriptField| {
+                    let value = if f.is_file() { &f.src } else { &f.value };
+                    old.iter().find(|m| m.enabled && m.key == f.key && m.file == f.is_file() && m.value == *value)
+                };
+                r.body.body_type = BodyType::Multipart;
+                r.body.multipart = after
+                    .form
+                    .iter()
+                    .map(|f| {
+                        same(f).cloned().unwrap_or_else(|| MultipartField {
+                            key: f.key.clone(),
+                            value: if f.is_file() { f.src.clone() } else { f.value.clone() },
+                            file: f.is_file(),
+                            content_type: None,
+                            enabled: true,
+                        })
+                    })
+                    .chain(old.iter().filter(|m| !m.enabled).cloned())
+                    .collect();
+            }
         }
-        r.body.text = after.body;
+        "raw" if mode_changed || after.body != before.body => {
+            if !raw_body(r.body.body_type) {
+                let json = after.body.trim_start().starts_with(['{', '[']);
+                r.body.body_type = if json { BodyType::Json } else { BodyType::Text };
+            }
+            r.body.text = after.body;
+        }
+        "" if mode_changed => r.body.body_type = BodyType::None,
+        _ => {}
     }
 }
 
-/// `pm.request` for post-response scripts: what was sent.
-fn sent_snapshot(r: &HttpRequest) -> ScriptRequest {
+/// `pm.request` for post-response scripts: what was sent, with the headers the engine
+/// added (`Host`, `User-Agent`, …) as Postman's has them, and the form fields.
+fn sent_snapshot(r: &HttpRequest, response: &HttpResponse, request: &Request, vars: &ScriptVars) -> ScriptRequest {
+    let mut headers: Vec<ScriptHeader> = r.headers.iter().map(|h| ScriptHeader::new(&h.name, &h.value)).collect();
+    let has = |headers: &[ScriptHeader], name: &str| headers.iter().any(|x| x.key.eq_ignore_ascii_case(name));
+    if response.meta.redirects.is_empty() {
+        for h in &response.meta.request.headers {
+            if !has(&headers, &h.name) {
+                headers.push(ScriptHeader::new(&h.name, &h.value));
+            }
+        }
+    }
+    // HTTP/2 sends the host as `:authority`; Postman's request has it as `Host`.
+    if !has(&headers, "host")
+        && let Ok(url) = url::Url::parse(&r.url)
+        && let Some(host) = url.host_str()
+    {
+        let host = url.port().map_or_else(|| host.to_string(), |p| format!("{host}:{p}"));
+        headers.push(ScriptHeader::new("Host", host));
+    }
+    let ctx = vars.var_context();
+    let render = |s: &str| ctx.render(s, &mut std::collections::BTreeSet::new());
+    let saved = request_snapshot(request);
     ScriptRequest {
         url: r.url.clone(),
         method: r.method.clone(),
-        headers: r.headers.iter().map(|h| ScriptHeader::new(&h.name, &h.value)).collect(),
+        headers,
         body: String::from_utf8_lossy(&r.body[..r.body.len().min(MAX_SENT_BODY)]).into_owned(),
+        mode: saved.mode,
+        form: form_fields(request, &render),
+        path_variables: saved.path_variables.into_iter().map(|v| ScriptHeader::new(v.key, render(&v.value))).collect(),
+        description: saved.description,
     }
 }
 
@@ -866,12 +1001,17 @@ mod tests {
         request.scripts.pre_request = "c()".into();
         request.scripts.post_response = "  ".into();
         let pre = chain(&meta, &folders, &request, |s| &s.pre_request);
+        let script = |label: &str, owner: &str, code: &str| ChainScript {
+            label: label.into(),
+            owner: owner.into(),
+            code: code.into(),
+        };
         assert_eq!(
             pre,
             [
-                ("workspace".to_string(), "a()".to_string()),
-                ("folder 'Users'".to_string(), "b()".to_string()),
-                ("request 'Get'".to_string(), "c()".to_string()),
+                script("workspace", "W", "a()"),
+                script("folder 'Users'", "Users", "b()"),
+                script("request 'Get'", "Get", "c()"),
             ]
         );
         assert!(chain(&meta, &folders, &request, |s| &s.post_response).is_empty());
@@ -896,12 +1036,58 @@ mod tests {
             method: "POST".into(),
             headers: vec![ScriptHeader::new("Accept", "*/*"), ScriptHeader::new("X-Sig", "1")],
             body: "{\"a\":1}".into(),
+            ..Default::default()
         };
         apply_request(&mut r, &before, after);
         assert_eq!(r.url, "{{base}}/b");
         assert_eq!(r.method, "POST");
         assert_eq!(r.headers, [kv("Accept", "*/*"), kv("X-Sig", "1"), KeyValue { enabled: false, ..kv("X-Off", "1") }]);
         assert_eq!((r.body.body_type, r.body.text.as_str()), (BodyType::Json, "{\"a\":1}"));
+    }
+
+    #[test]
+    fn script_changes_to_forms_and_path_variables() {
+        let mut r = Request::new("R", Default::default());
+        r.url = "https://x.test/users/:id".into();
+        r.path_params = vec![KeyValue { description: "The user".into(), ..kv("id", "1") }];
+        r.body.body_type = BodyType::Multipart;
+        r.body.multipart = vec![
+            MultipartField {
+                key: "photo".into(),
+                value: "a.png".into(),
+                file: true,
+                content_type: Some("image/png".into()),
+                enabled: true,
+            },
+            MultipartField { key: "off".into(), value: "x".into(), file: false, content_type: None, enabled: false },
+        ];
+        let before = request_snapshot(&r);
+        assert_eq!(before.mode, "formdata");
+        assert_eq!(before.form, [ScriptField::file("photo", "a.png")]);
+        assert_eq!(before.path_variables, [ScriptHeader::new("id", "1")]);
+
+        let mut after = before.clone();
+        after.form.push(ScriptField::text("note", "hi"));
+        after.path_variables[0].value = "7".into();
+        apply_request(&mut r, &before, after);
+        assert_eq!(r.path_params, [KeyValue { description: "The user".into(), ..kv("id", "7") }]);
+        let fields: Vec<(&str, &str, bool, Option<&str>)> = r
+            .body
+            .multipart
+            .iter()
+            .map(|f| (f.key.as_str(), f.value.as_str(), f.enabled, f.content_type.as_deref()))
+            .collect();
+        assert_eq!(
+            fields,
+            [("photo", "a.png", true, Some("image/png")), ("note", "hi", true, None), ("off", "x", false, None)]
+        );
+
+        // From form-data to urlencoded.
+        let before = request_snapshot(&r);
+        let after =
+            ScriptRequest { mode: "urlencoded".into(), form: vec![ScriptField::text("a", "1")], ..before.clone() };
+        apply_request(&mut r, &before, after);
+        assert_eq!((r.body.body_type, r.body.form.clone()), (BodyType::FormUrlencoded, vec![kv("a", "1")]));
     }
 
     #[test]

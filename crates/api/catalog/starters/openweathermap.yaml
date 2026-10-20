@@ -1,0 +1,129 @@
+# Written for Zorvik's API catalog from OpenWeather's API docs (https://openweathermap.org/api),
+# which publish no machine-readable description.
+openapi: 3.0.3
+info:
+  title: OpenWeatherMap API
+  version: "2.5"
+  description: >-
+    Current weather, a 5-day forecast in 3-hour steps, and geocoding (place names to
+    coordinates and back). Every request sends your API key in the `appid` query parameter.
+servers:
+  - url: https://api.openweathermap.org
+security:
+  - appid: []
+tags:
+  - name: Weather
+  - name: Geocoding
+paths:
+  /data/2.5/weather:
+    get:
+      tags: [Weather]
+      summary: Current weather
+      description: The weather now at a place, by its coordinates.
+      operationId: currentWeather
+      parameters:
+        - $ref: "#/components/parameters/lat"
+        - $ref: "#/components/parameters/lon"
+        - $ref: "#/components/parameters/units"
+        - $ref: "#/components/parameters/lang"
+        - $ref: "#/components/parameters/mode"
+      responses:
+        "200":
+          description: The current weather.
+  /data/2.5/forecast:
+    get:
+      tags: [Weather]
+      summary: 5-day forecast
+      description: The forecast for the next 5 days in 3-hour steps, by coordinates.
+      operationId: forecast
+      parameters:
+        - $ref: "#/components/parameters/lat"
+        - $ref: "#/components/parameters/lon"
+        - $ref: "#/components/parameters/units"
+        - $ref: "#/components/parameters/lang"
+        - $ref: "#/components/parameters/mode"
+        - name: cnt
+          in: query
+          description: How many 3-hour steps to return.
+          schema: { type: integer, example: 8 }
+      responses:
+        "200":
+          description: The forecast.
+  /geo/1.0/direct:
+    get:
+      tags: [Geocoding]
+      summary: Coordinates by place name
+      description: Places matching a name, as `city`, `city,country` or `city,state,country` (ISO 3166 codes).
+      operationId: geocodeDirect
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, example: "London,GB" }
+        - $ref: "#/components/parameters/limit"
+      responses:
+        "200":
+          description: The matching places, with their coordinates.
+  /geo/1.0/zip:
+    get:
+      tags: [Geocoding]
+      summary: Coordinates by zip code
+      operationId: geocodeZip
+      parameters:
+        - name: zip
+          in: query
+          required: true
+          description: The zip or post code and the country code.
+          schema: { type: string, example: "E14,GB" }
+      responses:
+        "200":
+          description: The place, with its coordinates.
+  /geo/1.0/reverse:
+    get:
+      tags: [Geocoding]
+      summary: Place names by coordinates
+      operationId: geocodeReverse
+      parameters:
+        - $ref: "#/components/parameters/lat"
+        - $ref: "#/components/parameters/lon"
+        - $ref: "#/components/parameters/limit"
+      responses:
+        "200":
+          description: The places near the coordinates.
+components:
+  securitySchemes:
+    appid:
+      type: apiKey
+      in: query
+      name: appid
+  parameters:
+    lat:
+      name: lat
+      in: query
+      required: true
+      schema: { type: number, example: 51.5074 }
+    lon:
+      name: lon
+      in: query
+      required: true
+      schema: { type: number, example: -0.1278 }
+    units:
+      name: units
+      in: query
+      description: Units of measurement; standard (Kelvin) when left out.
+      schema: { type: string, enum: [standard, metric, imperial], example: metric }
+    lang:
+      name: lang
+      in: query
+      description: The language of the descriptions, e.g. en, de, fr.
+      schema: { type: string, example: en }
+    mode:
+      name: mode
+      in: query
+      description: The response format; JSON when left out.
+      schema: { type: string, enum: [json, xml] }
+    limit:
+      name: limit
+      in: query
+      description: The most places to return (up to 5).
+      schema: { type: integer, maximum: 5, example: 5 }

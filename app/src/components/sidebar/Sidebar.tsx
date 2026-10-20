@@ -183,7 +183,7 @@ function CollectionTree() {
             ) : (
               <EmptyState title="No requests yet">
                 <div className="mt-1 flex flex-col items-center gap-2">
-                  <span>Create a request or import from Postman, OpenAPI or cURL.</span>
+                  <span>Create a request, or import an API from the catalog, Postman, OpenAPI or cURL.</span>
                   <div className="flex gap-2">
                     <button className="text-accent hover:underline" onClick={() => createRequestIn("")}>
                       New request

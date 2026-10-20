@@ -878,11 +878,23 @@ fn find_route<'r>(
     pass(method).or_else(|| if *method == Method::HEAD { pass(&Method::GET) } else { None })
 }
 
-fn param_name(segment: &str) -> Option<&str> {
-    let name = segment
-        .strip_prefix(':')
-        .or_else(|| segment.strip_prefix('{').and_then(|s| s.strip_suffix('}')).filter(|s| !s.starts_with('{')))?;
-    (!name.is_empty()).then_some(name)
+/// A parameter segment (`:id`, `{id}`): its name, and the literal text after it, as in
+/// Google's custom methods (`:name:generateContent`, `{name}:cancel`).
+/// A segment holding more parameters (`:name.:ext`, `{a}-{b}`, as OpenAPI's `{name}.{ext}`
+/// becomes) is one parameter named by all of it, which takes any value.
+fn param_segment(segment: &str) -> Option<(&str, &str)> {
+    let (whole, (name, suffix)) = match segment.strip_prefix(':') {
+        Some(rest) => (rest, rest.find(':').map_or((rest, ""), |i| rest.split_at(i))),
+        None => {
+            let rest = segment.strip_prefix('{').filter(|s| !s.starts_with('{'))?;
+            (rest.strip_suffix('}').unwrap_or(rest), rest.split_once('}')?)
+        }
+    };
+    // A verb follows a name (`:name:verb`); `name.:ext` or `a::b` start another parameter.
+    let another = suffix.get(1..).is_some_and(|s| s.contains([':', '{']))
+        || (suffix.starts_with(':') && !name.ends_with(|c: char| c.is_alphanumeric() || c == '_'));
+    let (name, suffix) = if another { (whole, "") } else { (name, suffix) };
+    (!name.is_empty()).then_some((name, suffix))
 }
 
 /// Match a route path (`/users/:id`, `/files/*`) against a request path; returns
@@ -899,8 +911,9 @@ pub(crate) fn match_path(pattern: &str, path: &str) -> Option<Vec<(String, Strin
             return Some(params);
         }
         let actual = got.get(i)?;
-        if let Some(name) = param_name(segment) {
-            params.push((name.to_string(), actual.clone()));
+        if let Some((name, suffix)) = param_segment(segment) {
+            let value = actual.strip_suffix(suffix).filter(|v| !v.is_empty())?;
+            params.push((name.to_string(), value.to_string()));
         } else if *segment != "*" && percent_decode(segment) != *actual {
             return None;
         }
@@ -1046,6 +1059,20 @@ mod tests {
         assert_eq!(match_path("/Users", "/users"), None, "case-sensitive");
         assert_eq!(match_path("/files/*", "/files/a/b%20c"), Some(params(&[("*", "a/b c")])));
         assert_eq!(match_path("/files/*", "/files"), Some(params(&[("*", "")])));
+        // A custom method after a parameter (Google APIs): the verb must match too.
+        let generate = "/v1/models/:model:generateContent";
+        assert_eq!(match_path(generate, "/v1/models/gemini:generateContent"), Some(params(&[("model", "gemini")])));
+        assert_eq!(match_path(generate, "/v1/models/gemini:countTokens"), None);
+        assert_eq!(match_path(generate, "/v1/models/:generateContent"), None);
+        assert_eq!(match_path("/v1/{name}:cancel", "/v1/op-1:cancel"), Some(params(&[("name", "op-1")])));
+        assert_eq!(match_path("/v1/{name}:cancel", "/v1/op-1"), None);
+        // Several parameters in one segment (OpenAPI's `{name}.{ext}` becomes `:name.:ext`): one
+        // parameter takes the whole segment, as it always did.
+        assert_eq!(match_path("/files/:name.:ext", "/files/a.json"), Some(params(&[("name.:ext", "a.json")])));
+        assert_eq!(match_path("/r/:a-:b", "/r/1-2"), Some(params(&[("a-:b", "1-2")])));
+        assert_eq!(match_path("/r/:a::b", "/r/1:2"), Some(params(&[("a::b", "1:2")])));
+        assert_eq!(match_path("/files/{name}.{ext}", "/files/a.json"), Some(params(&[("name}.{ext", "a.json")])));
+        assert_eq!(match_path("/users/:user-id", "/users/7"), Some(params(&[("user-id", "7")])));
         assert_eq!(match_path("*", "/anything/at/all"), Some(params(&[("*", "anything/at/all")])));
         assert_eq!(match_path("/a/*/c", "/a/b/c"), Some(vec![]));
         assert_eq!(match_path("/", "/"), Some(vec![]));

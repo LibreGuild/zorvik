@@ -378,7 +378,8 @@ impl Api {
                 value["extensions"] = Value::String(redactor.text(&e));
             }
             if let Some(unresolved) = opened["unresolved"].as_array().filter(|u| !u.is_empty()) {
-                value["undefinedVariables"] = Value::Array(unresolved.clone());
+                let names = unresolved.iter().map(|u| Value::String(redactor.text(u.as_str().unwrap_or_default())));
+                value["undefinedVariables"] = Value::Array(names.collect());
             }
         } else {
             value["protocol"] = opened["protocol"].clone();

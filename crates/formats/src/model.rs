@@ -1333,6 +1333,41 @@ pub struct OpenApiSource {
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     #[ts(optional, as = "Option<bool>")]
     pub validate: bool,
+    /// The part of the document the folder took (updates keep to it); empty = all of it.
+    #[serde(default, skip_serializing_if = "OperationFilter::is_empty")]
+    #[ts(optional, as = "Option<OperationFilter>")]
+    pub only: OperationFilter,
+    /// The security scheme its requests use, chosen over the document's own (updates keep it).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub scheme: String,
+}
+
+/// Which operations of an OpenAPI document to import. Empty lists take everything.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct OperationFilter {
+    /// Operations whose first tag is one of these (`""` = operations without a tag).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<String>>")]
+    pub tags: Vec<String>,
+    /// Operations on these paths, as the document writes them (e.g. `/chat/completions`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<String>>")]
+    pub paths: Vec<String>,
+}
+
+impl OperationFilter {
+    pub fn is_empty(&self) -> bool {
+        self.tags.is_empty() && self.paths.is_empty()
+    }
+
+    /// Whether an operation on `path` whose first tag is `tag` is taken.
+    pub fn takes(&self, tag: Option<&str>, path: &str) -> bool {
+        (self.tags.is_empty() || self.tags.iter().any(|t| t.trim() == tag.unwrap_or_default()))
+            && (self.paths.is_empty() || self.paths.iter().any(|p| p == path))
+    }
 }
 
 fn is_http(k: &RequestKind) -> bool {

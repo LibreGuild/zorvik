@@ -104,13 +104,35 @@ export function pathParams(path: string): string[] {
   const names: string[] = [];
   const parts = path.split("?")[0].split("/").filter(Boolean);
   parts.forEach((p, i) => {
-    let name: string | null = null;
-    if (p.startsWith(":") && p.length > 1) name = p.slice(1);
-    else if (p.startsWith("{") && p.endsWith("}") && !p.startsWith("{{") && p.length > 2) name = p.slice(1, -1);
-    else if (p === "*" && i === parts.length - 1) name = "*";
+    const name = p === "*" && i === parts.length - 1 ? "*" : paramName(p);
     if (name && !names.includes(name)) names.push(name);
   });
   return names;
+}
+
+/** The parameter a route path segment names, as the server matches it (`param_segment` in
+ * crates/servers/src/http.rs): `:id`, `{id}`, and a name with a custom method after it, as in
+ * Google APIs (`:name:generateContent`, `{name}:cancel`). */
+function paramName(segment: string): string | null {
+  let whole: string;
+  let name: string;
+  let suffix: string;
+  if (segment.startsWith(":")) {
+    whole = segment.slice(1);
+    const colon = whole.indexOf(":");
+    [name, suffix] = colon < 0 ? [whole, ""] : [whole.slice(0, colon), whole.slice(colon)];
+  } else if (segment.startsWith("{") && !segment.startsWith("{{")) {
+    const rest = segment.slice(1);
+    const close = rest.indexOf("}");
+    if (close < 0) return null;
+    whole = rest.endsWith("}") ? rest.slice(0, -1) : rest;
+    [name, suffix] = [rest.slice(0, close), rest.slice(close + 1)];
+  } else {
+    return null;
+  }
+  // A verb follows a name (`:name:verb`); `name.:ext` or `a::b` start another parameter.
+  const another = /[:{]/.test(suffix.slice(1)) || (suffix.startsWith(":") && !/[\p{L}\p{N}_]$/u.test(name));
+  return (another ? whole : name) || null;
 }
 
 /** `{{request.…}}` names a route's templates can use (for autocomplete and highlighting). */

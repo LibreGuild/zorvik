@@ -92,7 +92,7 @@ A folder script therefore runs for every request inside the folder, including re
 | `pm.request.url` | The URL exactly as typed, for example `{{base}}/users?page=1` |
 | `pm.request.method` | The method, such as `GET` |
 | `pm.request.headers` | The request's own enabled headers. Headers inherited from folders and the workspace, auth headers and default headers are added later and are not in this list. |
-| `pm.request.body` | The body text for JSON, Text and XML bodies. Empty for other body types (form, multipart, file, GraphQL). |
+| `pm.request.body` | The body text for JSON, Text and XML bodies, and the enabled fields of URL-encoded and form-data bodies (`pm.request.body.urlencoded`, `.formdata`). See [pm.request.body](../pm-reference/#pmrequestbody). |
 | `pm.response` | `undefined` (there is no response yet) |
 
 Changes the script makes to the URL, method, headers or body apply to **this send only**. They are never saved to the request file.
@@ -113,7 +113,7 @@ pm.variables.set("timestamp", Date.now());
 | Part | What the script gets |
 |---|---|
 | `pm.response` | The response: status, headers, body, time and size. See [pm.response](../pm-reference/#pmresponse). |
-| `pm.request` | What was actually sent: the resolved URL, the headers after inheritance and auth, and the body text (the first 1 MB). Changing it has no effect. |
+| `pm.request` | What was actually sent: the resolved URL, the headers after inheritance and auth (with the ones Zorvik adds, such as `Host` and `User-Agent`), the body text (the first 1 MB) and form fields. Changing it has no effect. |
 
 For Server-Sent Events requests in a collection run, `pm.response.events` also lists the events that were read.
 
@@ -130,7 +130,7 @@ Scripts can set variables in four scopes. The table shows how long a value lasts
 
 "Kept on this computer" means the value is stored in the app's data folder, never in the workspace files, so tokens that scripts save don't end up in Git. These values win over the value in the file for the same variable. If no environment is active, `pm.environment.set` still works for the rest of the send, but the value is not kept, and the console shows: `No environment is active: values set with pm.environment are not kept.`
 
-Values are always stored as text: numbers and booleans become their text form, objects and arrays become JSON. See [Variables and environments](../../variables/variables-and-environments/) for how scopes are resolved.
+Values are kept as text: numbers and booleans become their text form, objects and arrays become JSON. Within one send or one collection run, scripts get a number, array or object back as they set it, as in Postman; see [How values are stored](../pm-reference/#how-values-are-stored). See [Variables and environments](../../variables/variables-and-environments/) for how scopes are resolved.
 
 ## The console
 

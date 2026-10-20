@@ -173,7 +173,7 @@ function Modals() {
     case "environments":
       return <EnvironmentsModal focus={modal.focus} />;
     case "import":
-      return <ImportModal parent={modal.parent} />;
+      return <ImportModal parent={modal.parent} tab={modal.tab} />;
     case "cookies":
       return <CookiesModal />;
     case "workspaceSettings":

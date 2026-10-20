@@ -11,4 +11,8 @@ workspaceVariables: number, warnings: Array<string>,
 /**
  * Path of the created top-level folder (relative to requests/), if any.
  */
-folderPath: string | null, };
+folderPath: string | null, 
+/**
+ * Id of the environment the import created, if any.
+ */
+environmentId?: string, };

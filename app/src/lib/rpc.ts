@@ -11,6 +11,9 @@ import type { ApiError } from "../bindings/ApiError";
 import type { ActiveLoadRun } from "../bindings/ActiveLoadRun";
 import type { AppInfo } from "../bindings/AppInfo";
 import type { AutoStartResult } from "../bindings/AutoStartResult";
+import type { CatalogEntry } from "../bindings/CatalogEntry";
+import type { CatalogImport } from "../bindings/CatalogImport";
+import type { CatalogPreview } from "../bindings/CatalogPreview";
 import type { Auth } from "../bindings/Auth";
 import type { CookieInfo } from "../bindings/CookieInfo";
 import type { CurlFlavor } from "../bindings/CurlFlavor";
@@ -308,6 +311,10 @@ export const api = {
   importFile: (path: string, parent: string, baseUrl?: string) => call<ImportSummary>("import.file", { path, parent, baseUrl }),
   importText: (text: string, parent: string, baseUrl?: string) => call<ImportSummary>("import.file", { text, parent, baseUrl }),
   importUrl: (url: string, parent: string, baseUrl?: string) => call<ImportSummary>("import.url", { url, parent, baseUrl }),
+  catalogList: () => call<CatalogEntry[]>("catalog.list"),
+  catalogPreview: (id: string) => call<CatalogPreview>("catalog.preview", { id }),
+  /** `groups`: the groups (first tags) to import; left out, the entry's preset or everything. */
+  catalogImport: (id: string, parent: string, groups?: string[]) => call<CatalogImport>("catalog.import", { id, parent, groups }),
   specUpdate: (folder: string, from: { text?: string; path?: string; url?: string }, apply: boolean) =>
     call<SpecUpdate>(apply ? "import.update" : "import.updatePreview", { folder, ...from }),
   exportCurl: (request: Request, path: string | null, flavor: CurlFlavor, resolveVariables: boolean) =>
