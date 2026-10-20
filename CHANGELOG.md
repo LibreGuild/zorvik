@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-20
+
 ### Added
 - **API catalog:** import well-known APIs in one step from the **API catalog** tab of the Import dialog (or **Browse API catalog** on the start screen): AI and LLM providers (OpenAI, Anthropic, Gemini, Mistral, Groq, OpenRouter, Ollama…), cloud and developer tools (AWS, Google Cloud, Cloudflare, GitHub, GitLab, Kubernetes, Docker…), messaging, productivity, payments, commerce, identity and more. Search or pick a category, see how each API signs in and its description's license, and choose **Import**: the requests arrive in a folder with sign-in set up, an environment with empty secret variables for your key is made active, and the request to try first opens. Very large APIs let you tick the groups you want. Descriptions are downloaded from their publishers only when you import; when a file has moved or a download fails, the message says what happened and how to download it yourself and import the file. AI agents can use it with `search_catalog` and `import_from_catalog`.
 - **Google Discovery documents import** like OpenAPI (Gmail, Drive, Calendar, Sheets, YouTube, Gemini, Vertex AI, Cloud Storage, BigQuery and every other Google API), with Google's OAuth 2.0 or an API key, response checks, mocks and **Update from API spec**.
@@ -166,7 +168,8 @@ The first public release.
 - In-app docs, light and dark themes, zoom and font settings.
 - Installers for Windows, macOS (universal) and Linux (deb, rpm, AppImage).
 
-[Unreleased]: https://github.com/LibreGuild/zorvik/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/LibreGuild/zorvik/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/LibreGuild/zorvik/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/LibreGuild/zorvik/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/LibreGuild/zorvik/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/LibreGuild/zorvik/compare/v0.1.0...v0.1.2
