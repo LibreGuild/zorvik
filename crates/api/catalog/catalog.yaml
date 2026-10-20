@@ -1,0 +1,2697 @@
+# The API catalog shipped with Zorvik (see crates/api/src/catalog.rs for the fields).
+# Descriptions are downloaded from their publishers when a user imports them; nothing here is
+# fetched unasked. Keep entries sorted by category, then name. Check every download with
+# `cargo test -p zorvik-api --test catalog_live -- --ignored` (docs/testing.md).
+
+# ---- AI ------------------------------------------------------------------------------------
+
+- id: aws-bedrock
+  name: Amazon Bedrock
+  category: ai
+  description: Foundation models, custom models, guardrails and inference profiles on AWS.
+  website: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_Operations_Amazon_Bedrock.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/bedrock/service/2023-04-20/bedrock-2023-04-20.json
+  first: ListFoundationModels
+
+- id: aws-bedrock-runtime
+  name: Amazon Bedrock Runtime
+  category: ai
+  description: Run foundation models on AWS with Converse, InvokeModel and streaming.
+  website: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_Operations_Amazon_Bedrock_Runtime.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/bedrock-runtime/service/2023-09-30/bedrock-runtime-2023-09-30.json
+  first: Converse
+
+- id: anthropic
+  name: Anthropic
+  category: ai
+  description: Claude models through the Messages API, token counting, batches and files.
+  website: https://platform.claude.com/docs/en/api/overview
+  auth: API key in the x-api-key header
+  format: Written for Zorvik
+  source:
+    type: starter
+    file: anthropic.yaml
+  first: POST /v1/messages
+
+- id: assemblyai
+  name: AssemblyAI
+  category: ai
+  description: Speech-to-text transcription with speaker labels, summaries and subtitles.
+  website: https://www.assemblyai.com/docs/api-reference
+  auth: API key in the Authorization header
+  format: OpenAPI 3.1
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://www.assemblyai.com/docs/openapi.json
+  first: GET /v2/transcript
+
+- id: azure-openai
+  name: Azure OpenAI
+  category: ai
+  description: OpenAI models deployed in your Azure AI Foundry resource, through the v1 API.
+  website: https://learn.microsoft.com/en-us/azure/ai-foundry/openai/reference
+  auth: API key in the api-key header (or a Microsoft Entra ID token)
+  format: OpenAPI 3.2
+  license:
+    name: MIT
+    url: https://github.com/Azure/azure-rest-api-specs/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/ai/data-plane/OpenAI.v1/azure-v1-v1-generated.json
+    baseUrl: https://your-resource.openai.azure.com/openai/v1
+  first: GET /models
+
+- id: black-forest-labs
+  name: Black Forest Labs
+  category: ai
+  description: FLUX image generation and editing models.
+  website: https://docs.bfl.ai
+  auth: API key in the x-key header
+  format: OpenAPI 3.1
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://api.bfl.ai/openapi.json
+    scheme: APIKeyHeader
+  first: GET /v1/credits
+
+- id: cerebras
+  name: Cerebras
+  category: ai
+  description: Very fast inference for open models through an OpenAI-compatible API.
+  website: https://inference-docs.cerebras.ai/api-reference
+  auth: Bearer API key
+  format: OpenAI-compatible
+  source:
+    type: compatible
+    of: openai
+    baseUrl: https://api.cerebras.ai/v1
+    paths: [/chat/completions, /completions, /models]
+  first: POST /chat/completions
+
+- id: chroma
+  name: Chroma
+  category: ai
+  description: Chroma Cloud vector database for embeddings, collections and search.
+  website: https://docs.trychroma.com/reference
+  auth: API key in the x-chroma-token header
+  format: OpenAPI 3.1
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://docs.trychroma.com/openapi.json
+    scheme: ApiKeyAuth
+  first: GET /api/v2/auth/identity
+
+- id: cohere
+  name: Cohere
+  category: ai
+  description: Command models, embeddings and reranking.
+  website: https://docs.cohere.com/reference/about
+  auth: Bearer API key
+  format: OpenAPI 3.0
+  source:
+    type: link
+    reason: Cohere's API description is published under a proprietary license that doesn't allow its use outside Cohere.
+
+- id: deepgram
+  name: Deepgram
+  category: ai
+  description: Speech-to-text, text-to-speech and audio intelligence.
+  website: https://developers.deepgram.com/reference
+  auth: API key in the Authorization header ("Token <key>")
+  format: OpenAPI 3.1
+  license:
+    name: CC-BY-4.0
+    url: https://github.com/deepgram/deepgram-api-specs/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/deepgram/deepgram-api-specs/main/openapi.yml
+    baseUrl: https://api.deepgram.com
+    scheme: ApiKeyAuth
+  first: GET /v1/projects
+
+- id: deepseek
+  name: DeepSeek
+  category: ai
+  description: DeepSeek chat and reasoning models through an OpenAI-compatible API.
+  website: https://api-docs.deepseek.com
+  auth: Bearer API key
+  format: OpenAI-compatible
+  source:
+    type: compatible
+    of: openai
+    baseUrl: https://api.deepseek.com
+    paths: [/chat/completions, /models]
+  first: POST /chat/completions
+
+- id: elevenlabs
+  name: ElevenLabs
+  category: ai
+  description: Text-to-speech, voices, speech-to-text, dubbing and conversational agents.
+  website: https://elevenlabs.io/docs/api-reference
+  auth: API key in the xi-api-key header
+  format: OpenAPI 3.1
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://api.elevenlabs.io/openapi.json
+    baseUrl: https://api.elevenlabs.io
+    auth: {type: apiKey, key: xi-api-key, value: "{{apiKey}}", location: header}
+    variables:
+      - {key: apiKey, value: "", secret: true}
+  first: GET /v1/models
+
+- id: fal
+  name: fal.ai
+  category: ai
+  description: Generative media models for images, video and audio.
+  website: https://docs.fal.ai/model-apis
+  auth: API key in the Authorization header ("Key <key>")
+  format: OpenAPI 3.0
+  source:
+    type: link
+    reason: fal.ai publishes a separate description for each model rather than one for its API.
+
+- id: fireworks
+  name: Fireworks AI
+  category: ai
+  description: Open-model inference and embeddings through an OpenAI-compatible API.
+  website: https://docs.fireworks.ai/api-reference/introduction
+  auth: Bearer API key
+  format: OpenAI-compatible
+  source:
+    type: compatible
+    of: openai
+    baseUrl: https://api.fireworks.ai/inference/v1
+    paths: [/chat/completions, /completions, /embeddings, /models]
+  first: POST /chat/completions
+
+- id: gemini
+  name: Google Gemini
+  category: ai
+  description: Gemini models for text, images, embeddings, files and caching.
+  website: https://ai.google.dev/api
+  auth: API key in the key query parameter
+  format: Google Discovery
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://generativelanguage.googleapis.com/$discovery/rest?version=v1beta
+    scheme: apiKey
+    variables:
+      - key: modelsId
+        value: gemini-3.8-flash
+  first: POST /v1beta/models/{modelsId}:generateContent
+
+- id: groq
+  name: Groq
+  category: ai
+  description: Fast open-model inference through an OpenAI-compatible API.
+  website: https://console.groq.com/docs/api-reference
+  auth: Bearer API key
+  format: OpenAI-compatible
+  source:
+    type: compatible
+    of: openai
+    baseUrl: https://api.groq.com/openai/v1
+    paths: [/chat/completions, /models, /audio/transcriptions]
+  first: POST /chat/completions
+
+- id: huggingface
+  name: Hugging Face Hub
+  category: ai
+  description: Models, datasets, Spaces, discussions and your account on the Hugging Face Hub.
+  website: https://huggingface.co/docs/hub/api
+  auth: Bearer access token
+  format: OpenAPI 3.1
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://huggingface.co/.well-known/openapi.json
+  first: GET /api/whoami-v2
+
+- id: huggingface-inference
+  name: Hugging Face Inference Providers
+  category: ai
+  description: Open models served by many inference providers through one OpenAI-compatible router.
+  website: https://huggingface.co/docs/inference-providers
+  auth: Bearer access token
+  format: OpenAI-compatible
+  source:
+    type: compatible
+    of: openai
+    baseUrl: https://router.huggingface.co/v1
+    paths: [/chat/completions, /models]
+  first: POST /chat/completions
+
+- id: jina
+  name: Jina AI
+  category: ai
+  description: Embeddings, reranking and batch embedding jobs.
+  website: https://jina.ai/embeddings
+  auth: Bearer API key
+  format: OpenAPI 3.1
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://api.jina.ai/openapi.json
+    scheme: HTTPBearer
+  first: POST /v1/embeddings
+
+- id: lm-studio
+  name: LM Studio
+  category: ai
+  description: Models running in LM Studio on your computer, through its OpenAI-compatible server.
+  website: https://lmstudio.ai/docs
+  auth: None (local server)
+  format: OpenAI-compatible
+  source:
+    type: compatible
+    of: openai
+    baseUrl: http://localhost:1234/v1
+    paths: [/chat/completions, /completions, /embeddings, /models]
+  first: GET /models
+
+- id: milvus
+  name: Milvus
+  category: ai
+  description: Open-source vector database for similarity search.
+  website: https://milvus.io/api-reference/restful/v2.6.x/About.md
+  auth: Bearer token (user:password or API key)
+  format: Not published
+  source:
+    type: link
+    reason: Milvus publishes no machine-readable description of its REST API.
+
+- id: mistral
+  name: Mistral AI
+  category: ai
+  description: Mistral models for chat, embeddings, OCR, agents, files and fine-tuning.
+  website: https://docs.mistral.ai/api
+  auth: Bearer API key
+  format: OpenAPI 3.1
+  license:
+    name: Apache-2.0
+    url: https://github.com/mistralai/platform-docs-public/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/mistralai/platform-docs-public/main/openapi.yaml
+  first: GET /v1/models
+
+- id: nvidia-nim
+  name: NVIDIA NIM
+  category: ai
+  description: Models from NVIDIA's API catalog through an OpenAI-compatible API.
+  website: https://docs.api.nvidia.com/nim/reference
+  auth: Bearer API key
+  format: OpenAI-compatible
+  source:
+    type: compatible
+    of: openai
+    baseUrl: https://integrate.api.nvidia.com/v1
+    paths: [/chat/completions, /completions, /embeddings, /models]
+  first: POST /chat/completions
+
+- id: ollama
+  name: Ollama
+  category: ai
+  description: Models running in Ollama on your computer, for chat, generation and embeddings.
+  website: https://docs.ollama.com/api
+  auth: None (local server)
+  format: OpenAPI 3.1
+  license:
+    name: MIT
+    url: https://github.com/ollama/ollama/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/ollama/ollama/main/docs/openapi.yaml
+    baseUrl: http://localhost:11434
+  first: GET /api/tags
+
+- id: openai
+  name: OpenAI
+  category: ai
+  description: GPT models, embeddings, images, audio, files, fine-tuning and assistants.
+  website: https://platform.openai.com/docs/api-reference
+  auth: Bearer API key
+  format: OpenAPI 3.1
+  license:
+    name: MIT
+    url: https://github.com/openai/openai-openapi/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/openai/openai-openapi/main/openapi.yaml
+  first: POST /chat/completions
+
+- id: openrouter
+  name: OpenRouter
+  category: ai
+  description: Hundreds of models from many providers behind one API.
+  website: https://openrouter.ai/docs
+  auth: Bearer API key
+  format: OpenAPI 3.1
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  source:
+    type: download
+    url: https://openrouter.ai/openapi.json
+  first: GET /models
+
+- id: perplexity
+  name: Perplexity
+  category: ai
+  description: Sonar models that answer with live web search, plus search and embeddings.
+  website: https://docs.perplexity.ai/api-reference
+  auth: Bearer API key
+  format: OpenAPI 3.1
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://docs.perplexity.ai/openapi.json
+    scheme: HTTPBearer
+  first: POST /v1/sonar
+
+- id: pinecone
+  name: Pinecone
+  category: ai
+  description: Create and manage Pinecone vector indexes, collections and backups.
+  website: https://docs.pinecone.io/reference/api/introduction
+  auth: API key in the Api-Key header
+  format: OpenAPI 3.0
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/pinecone-io/pinecone-api/main/2026-07/db_control_2026-07.oas.yaml
+  first: GET /indexes
+
+- id: qdrant
+  name: Qdrant
+  category: ai
+  description: Vector search engine for collections, points, search and snapshots.
+  website: https://api.qdrant.tech/api-reference
+  auth: API key in the api-key header (none on a local server)
+  format: OpenAPI 3.0
+  license:
+    name: Apache-2.0
+    url: https://github.com/qdrant/qdrant/blob/master/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/qdrant/qdrant/master/docs/redoc/master/openapi.json
+    baseUrl: http://localhost:6333
+  first: GET /collections
+
+- id: replicate
+  name: Replicate
+  category: ai
+  description: Run open models and your own models in the cloud.
+  website: https://replicate.com/docs/reference/http
+  auth: Bearer API token
+  format: OpenAPI 3.1
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://api.replicate.com/openapi.json
+  first: GET /account
+
+- id: stability-ai
+  name: Stability AI
+  category: ai
+  description: Stable Diffusion image generation, editing, upscaling, audio and 3D.
+  website: https://platform.stability.ai/docs/api-reference
+  auth: Bearer API key
+  format: OpenAPI 3.0
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://docs.stability.ai/openapi.json
+  first: POST /v2beta/stable-image/generate/core
+
+- id: together
+  name: Together AI
+  category: ai
+  description: Open-model inference, fine-tuning, dedicated endpoints and batch jobs.
+  website: https://docs.together.ai/reference
+  auth: Bearer API key
+  format: OpenAPI 3.1
+  license:
+    name: MIT
+    url: https://github.com/togethercomputer/openapi/blob/main/LICENSE
+  source:
+    type: download
+    url: https://docs.together.ai/openapi.yaml
+  first: GET /models
+
+- id: vertex-ai
+  name: Vertex AI
+  category: ai
+  description: Gemini and partner models, endpoints and training on Google Cloud.
+  website: https://cloud.google.com/vertex-ai/docs/reference/rest
+  auth: OAuth 2.0 (a Google Cloud access token)
+  format: Google Discovery
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://aiplatform.googleapis.com/$discovery/rest?version=v1
+    groups: [projects.locations.publishers.models, projects.locations.endpoints, projects.locations.models]
+    variables:
+      - key: locationsId
+        value: global
+      - key: publishersId
+        value: google
+      - key: modelsId
+        value: gemini-3.8-flash
+  first: POST /v1/projects/{projectsId}/locations/{locationsId}/publishers/{publishersId}/models/{modelsId}:generateContent
+
+- id: voyage
+  name: Voyage AI
+  category: ai
+  description: Text and multimodal embeddings and rerankers.
+  website: https://docs.voyageai.com/reference
+  auth: Bearer API key
+  format: OpenAPI 3.0
+  license:
+    name: MIT
+    url: https://github.com/voyage-ai/openapi/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/voyage-ai/openapi/main/voyage-openapi.yml
+    auth: {type: bearer, token: "{{apiKey}}"}
+    variables:
+      - {key: apiKey, value: "", secret: true}
+  first: POST /embeddings
+
+- id: weaviate
+  name: Weaviate
+  category: ai
+  description: Open-source vector database for collections, objects, search and backups.
+  website: https://docs.weaviate.io/weaviate/api/rest
+  auth: Bearer API key (none on a local server)
+  format: Swagger 2.0
+  license:
+    name: BSD-3-Clause
+    url: https://github.com/weaviate/weaviate/blob/main/LICENSE-BSD
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/weaviate/weaviate/main/openapi-specs/schema.json
+    baseUrl: http://localhost:8080/v1
+  first: GET /meta
+
+- id: xai
+  name: xAI
+  category: ai
+  description: Grok models for chat, images, embeddings and more.
+  website: https://docs.x.ai/docs/api-reference
+  auth: Bearer API key
+  format: OpenAPI 3.1
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://docs.x.ai/openapi.json
+    baseUrl: https://api.x.ai
+    scheme: bearerAuth
+  first: GET /v1/models
+
+# ---- Cloud -----------------------------------------------------------------------------------
+
+- id: aws-api-gateway
+  name: Amazon API Gateway
+  category: cloud
+  description: REST APIs, resources, stages, deployments and API keys in API Gateway.
+  website: https://docs.aws.amazon.com/apigateway/latest/api/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/api-gateway/service/2015-07-09/api-gateway-2015-07-09.json
+  first: GetRestApis
+
+- id: aws-athena
+  name: Amazon Athena
+  category: cloud
+  description: Run SQL queries on data in S3 and manage workgroups and data catalogs.
+  website: https://docs.aws.amazon.com/athena/latest/APIReference/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/athena/service/2017-05-18/athena-2017-05-18.json
+  first: ListWorkGroups
+
+- id: aws-cloudfront
+  name: Amazon CloudFront
+  category: cloud
+  description: Distributions, cache policies, functions and invalidations.
+  website: https://docs.aws.amazon.com/cloudfront/latest/APIReference/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/cloudfront/service/2020-05-31/cloudfront-2020-05-31.json
+  first: ListDistributions
+
+- id: aws-cloudwatch
+  name: Amazon CloudWatch
+  category: cloud
+  description: Metrics, alarms and dashboards in CloudWatch.
+  website: https://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/cloudwatch/service/2010-08-01/cloudwatch-2010-08-01.json
+  first: ListMetrics
+
+- id: aws-cloudwatch-logs
+  name: Amazon CloudWatch Logs
+  category: cloud
+  description: Log groups, log streams, queries and subscriptions.
+  website: https://docs.aws.amazon.com/AmazonCloudWatchLogs/latest/APIReference/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/cloudwatch-logs/service/2014-03-28/cloudwatch-logs-2014-03-28.json
+  first: DescribeLogGroups
+
+- id: aws-cognito
+  name: Amazon Cognito User Pools
+  category: cloud
+  description: User pools, users, groups and app clients in Cognito.
+  website: https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/cognito-identity-provider/service/2016-04-18/cognito-identity-provider-2016-04-18.json
+  first: ListUserPools
+
+- id: aws-dynamodb
+  name: Amazon DynamoDB
+  category: cloud
+  description: Tables, items, queries, scans, streams and backups in DynamoDB.
+  website: https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/dynamodb/service/2012-08-10/dynamodb-2012-08-10.json
+  first: ListTables
+
+- id: aws-ec2
+  name: Amazon EC2
+  category: cloud
+  description: Instances, images, volumes, VPCs, security groups and the rest of EC2.
+  website: https://docs.aws.amazon.com/AWSEC2/latest/APIReference/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/ec2/service/2016-11-15/ec2-2016-11-15.json
+  first: DescribeInstances
+
+- id: aws-ecr
+  name: Amazon ECR
+  category: cloud
+  description: Container image repositories, images and lifecycle policies.
+  website: https://docs.aws.amazon.com/AmazonECR/latest/APIReference/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/ecr/service/2015-09-21/ecr-2015-09-21.json
+  first: DescribeRepositories
+
+- id: aws-ecs
+  name: Amazon ECS
+  category: cloud
+  description: Clusters, services, task definitions and tasks in ECS.
+  website: https://docs.aws.amazon.com/AmazonECS/latest/APIReference/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/ecs/service/2014-11-13/ecs-2014-11-13.json
+  first: ListClusters
+
+- id: aws-eks
+  name: Amazon EKS
+  category: cloud
+  description: Kubernetes clusters, node groups and add-ons in EKS.
+  website: https://docs.aws.amazon.com/eks/latest/APIReference/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/eks/service/2017-11-01/eks-2017-11-01.json
+  first: ListClusters
+
+- id: aws-eventbridge
+  name: Amazon EventBridge
+  category: cloud
+  description: Event buses, rules, targets and archives.
+  website: https://docs.aws.amazon.com/eventbridge/latest/APIReference/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/eventbridge/service/2015-10-07/eventbridge-2015-10-07.json
+  first: ListRules
+
+- id: aws-kinesis
+  name: Amazon Kinesis Data Streams
+  category: cloud
+  description: Data streams, shards and records.
+  website: https://docs.aws.amazon.com/kinesis/latest/APIReference/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/kinesis/service/2013-12-02/kinesis-2013-12-02.json
+  first: ListStreams
+
+- id: aws-rds
+  name: Amazon RDS
+  category: cloud
+  description: Database instances, clusters, snapshots and parameter groups.
+  website: https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/rds/service/2014-10-31/rds-2014-10-31.json
+  first: DescribeDBInstances
+
+- id: aws-route53
+  name: Amazon Route 53
+  category: cloud
+  description: Hosted zones, DNS records and health checks.
+  website: https://docs.aws.amazon.com/Route53/latest/APIReference/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/route-53/service/2013-04-01/route-53-2013-04-01.json
+  first: ListHostedZones
+
+- id: aws-s3
+  name: Amazon S3
+  category: cloud
+  description: Buckets, objects, multipart uploads and bucket settings.
+  website: https://docs.aws.amazon.com/AmazonS3/latest/API/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/s3/service/2006-03-01/s3-2006-03-01.json
+  first: ListBuckets
+
+- id: aws-ses
+  name: Amazon SES
+  category: cloud
+  description: Send email and manage identities, configuration sets and contacts (SES v2).
+  website: https://docs.aws.amazon.com/ses/latest/APIReference-V2/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/sesv2/service/2019-09-27/sesv2-2019-09-27.json
+  first: ListEmailIdentities
+
+- id: aws-sns
+  name: Amazon SNS
+  category: cloud
+  description: Topics, subscriptions and publishing notifications.
+  website: https://docs.aws.amazon.com/sns/latest/api/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/sns/service/2010-03-31/sns-2010-03-31.json
+  first: ListTopics
+
+- id: aws-sqs
+  name: Amazon SQS
+  category: cloud
+  description: Queues and sending, receiving and deleting messages.
+  website: https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/sqs/service/2012-11-05/sqs-2012-11-05.json
+  first: ListQueues
+
+- id: aws-cloudformation
+  name: AWS CloudFormation
+  category: cloud
+  description: Stacks, change sets, stack sets and templates.
+  website: https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/cloudformation/service/2010-05-15/cloudformation-2010-05-15.json
+  first: ListStacks
+
+- id: aws-glue
+  name: AWS Glue
+  category: cloud
+  description: Data catalog databases and tables, crawlers and ETL jobs.
+  website: https://docs.aws.amazon.com/glue/latest/webapi/WebAPI_Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/glue/service/2017-03-31/glue-2017-03-31.json
+  first: GetDatabases
+
+- id: aws-iam
+  name: AWS IAM
+  category: cloud
+  description: Users, groups, roles, policies and access keys.
+  website: https://docs.aws.amazon.com/IAM/latest/APIReference/welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/iam/service/2010-05-08/iam-2010-05-08.json
+  first: ListUsers
+
+- id: aws-kms
+  name: AWS KMS
+  category: cloud
+  description: Encryption keys, aliases, grants and cryptographic operations.
+  website: https://docs.aws.amazon.com/kms/latest/APIReference/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/kms/service/2014-11-01/kms-2014-11-01.json
+  first: ListKeys
+
+- id: aws-lambda
+  name: AWS Lambda
+  category: cloud
+  description: Functions, versions, aliases, layers and invocations.
+  website: https://docs.aws.amazon.com/lambda/latest/api/welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/lambda/service/2015-03-31/lambda-2015-03-31.json
+  first: ListFunctions
+
+- id: aws-secrets-manager
+  name: AWS Secrets Manager
+  category: cloud
+  description: Secrets, their values, versions and rotation.
+  website: https://docs.aws.amazon.com/secretsmanager/latest/apireference/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/secrets-manager/service/2017-10-17/secrets-manager-2017-10-17.json
+  first: ListSecrets
+
+- id: aws-step-functions
+  name: AWS Step Functions
+  category: cloud
+  description: State machines, executions and activities.
+  website: https://docs.aws.amazon.com/step-functions/latest/apireference/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/sfn/service/2016-11-23/sfn-2016-11-23.json
+  first: ListStateMachines
+
+- id: aws-sts
+  name: AWS STS
+  category: cloud
+  description: Temporary credentials, assumed roles and the caller's identity.
+  website: https://docs.aws.amazon.com/STS/latest/APIReference/welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/sts/service/2011-06-15/sts-2011-06-15.json
+  first: GetCallerIdentity
+
+- id: aws-ssm
+  name: AWS Systems Manager
+  category: cloud
+  description: Parameter Store, Run Command, sessions and managed instances.
+  website: https://docs.aws.amazon.com/systems-manager/latest/APIReference/Welcome.html
+  auth: AWS Signature (access key ID and secret access key)
+  format: AWS Smithy
+  license:
+    name: Apache-2.0
+    url: https://github.com/aws/api-models-aws/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/aws/api-models-aws/main/models/ssm/service/2014-11-06/ssm-2014-11-06.json
+  first: DescribeParameters
+
+- id: cloudflare
+  name: Cloudflare
+  category: cloud
+  description: Zones, DNS, Workers, R2, security and every other part of Cloudflare.
+  website: https://developers.cloudflare.com/api/
+  auth: Bearer API token
+  format: OpenAPI 3.0
+  license:
+    name: BSD-3-Clause
+    url: https://github.com/cloudflare/api-schemas/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/cloudflare/api-schemas/main/openapi.json
+    groups: [Zone, DNS Records for a Zone, Worker Script, User API Tokens]
+    scheme: api_token
+  first: GET /user/tokens/verify
+
+- id: digitalocean
+  name: DigitalOcean
+  category: cloud
+  description: Droplets, Kubernetes, databases, apps, networking and storage.
+  website: https://docs.digitalocean.com/reference/api/
+  auth: Bearer personal access token
+  format: OpenAPI 3.0
+  license:
+    name: Apache-2.0
+    url: https://github.com/digitalocean/openapi/blob/main/LICENSE
+  source:
+    type: download
+    url: https://api-engineering.nyc3.cdn.digitaloceanspaces.com/spec-ci/DigitalOcean-public.v2.yaml
+  first: GET /v2/account
+
+- id: docker-engine
+  name: Docker Engine
+  category: cloud
+  description: Containers, images, networks, volumes and Swarm on a Docker daemon.
+  website: https://docs.docker.com/reference/api/engine/
+  auth: None (a daemon listening on TCP, e.g. localhost:2375)
+  format: Swagger 2.0
+  license:
+    name: Apache-2.0
+    url: https://github.com/moby/moby/blob/master/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/moby/moby/master/api/swagger.yaml
+    baseUrl: http://localhost:2375
+  first: GET /containers/json
+
+- id: firebase
+  name: Firebase Management
+  category: cloud
+  description: Firebase projects and their Android, iOS and web apps.
+  website: https://firebase.google.com/docs/reference/firebase-management/rest
+  auth: OAuth 2.0 (a Google Cloud access token)
+  format: Google Discovery
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://firebase.googleapis.com/$discovery/rest?version=v1beta1
+  first: GET /v1beta1/projects
+
+- id: fly-machines
+  name: Fly.io Machines
+  category: cloud
+  description: Apps, Machines, volumes, secrets and certificates on Fly.io.
+  website: https://fly.io/docs/machines/api/
+  auth: Bearer API token
+  format: OpenAPI 3.1
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+  source:
+    type: download
+    url: https://docs.fly.io/api/machines/openapi.json
+  first: GET /v1/apps
+
+- id: pubsub
+  name: Google Cloud Pub/Sub
+  category: cloud
+  description: Topics, subscriptions, publishing and pulling messages on Google Cloud.
+  website: https://cloud.google.com/pubsub/docs/reference/rest
+  auth: OAuth 2.0 (a Google Cloud access token)
+  format: Google Discovery
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://pubsub.googleapis.com/$discovery/rest?version=v1
+  first: GET /v1/projects/{projectsId}/topics
+
+- id: google-cloud-storage
+  name: Google Cloud Storage
+  category: cloud
+  description: Buckets, objects and access control on Google Cloud Storage.
+  website: https://cloud.google.com/storage/docs/json_api
+  auth: OAuth 2.0 (a Google Cloud access token)
+  format: Google Discovery
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://storage.googleapis.com/$discovery/rest?version=v1
+  first: GET /b
+
+- id: compute-engine
+  name: Google Compute Engine
+  category: cloud
+  description: Virtual machines, disks, images and networks on Google Cloud.
+  website: https://cloud.google.com/compute/docs/reference/rest/v1
+  auth: OAuth 2.0 (a Google Cloud access token)
+  format: Google Discovery
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://www.googleapis.com/discovery/v1/apis/compute/v1/rest
+    groups: [instances, disks, zones, machineTypes, images, networks]
+  first: GET /projects/{project}/zones/{zone}/instances
+
+- id: heroku
+  name: Heroku
+  category: cloud
+  description: Apps, dynos, add-ons, releases and config vars.
+  website: https://devcenter.heroku.com/articles/platform-api-reference
+  auth: Bearer API key
+  format: JSON Hyper-Schema
+  source:
+    type: link
+    reason: Heroku describes its API in JSON Hyper-Schema, a format Zorvik can't import.
+
+- id: hetzner-cloud
+  name: Hetzner Cloud
+  category: cloud
+  description: Servers, volumes, networks, load balancers, firewalls and DNS zones.
+  website: https://docs.hetzner.cloud
+  auth: Bearer API token
+  format: OpenAPI 3.1
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://docs.hetzner.cloud/cloud.spec.json
+  first: GET /servers
+
+- id: kubernetes
+  name: Kubernetes
+  category: cloud
+  description: Pods, deployments, services and every other resource of a Kubernetes cluster.
+  website: https://kubernetes.io/docs/reference/kubernetes-api/
+  auth: Bearer token in the Authorization header (none through kubectl proxy)
+  format: Swagger 2.0
+  license:
+    name: Apache-2.0
+    url: https://github.com/kubernetes/kubernetes/blob/master/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/kubernetes/kubernetes/master/api/openapi-spec/swagger.json
+    baseUrl: http://localhost:8001
+    groups: [core_v1, apps_v1]
+  first: GET /api/v1/namespaces
+
+- id: linode
+  name: Linode
+  category: cloud
+  description: Akamai cloud compute instances, volumes, networking, databases and Kubernetes.
+  website: https://techdocs.akamai.com/linode-api/reference/api
+  auth: Bearer personal access token
+  format: OpenAPI 3.0
+  license:
+    name: Apache-2.0
+    url: https://github.com/linode/linode-api-openapi/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/linode/linode-api-openapi/main/openapi.json
+    scheme: personalAccessToken
+    variables:
+      - key: apiVersion
+        value: v4
+  first: GET /{apiVersion}/profile
+
+- id: netlify
+  name: Netlify
+  category: cloud
+  description: Sites, deploys, DNS, forms, functions and environment variables.
+  website: https://open-api.netlify.com
+  auth: Bearer personal access token (or OAuth 2.0)
+  format: Swagger 2.0
+  license:
+    name: MIT
+    url: https://github.com/netlify/open-api/blob/master/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/netlify/open-api/master/swagger.yml
+    auth: {type: bearer, token: "{{accessToken}}"}
+    variables:
+      - {key: accessToken, value: "", secret: true}
+  first: GET /user
+
+- id: railway
+  name: Railway
+  category: cloud
+  description: Projects, services, deployments and variables on Railway, through its GraphQL API.
+  website: https://docs.railway.com/reference/public-api
+  auth: Bearer API token
+  format: GraphQL
+  source:
+    type: graphql
+    url: https://backboard.railway.com/graphql/v2
+    query: |
+      query {
+        me {
+          name
+          email
+        }
+      }
+    auth:
+      type: bearer
+      token: "{{railwayToken}}"
+    variables:
+      - key: railwayToken
+        value: ""
+        secret: true
+
+- id: render
+  name: Render
+  category: cloud
+  description: Services, deploys, Postgres, Key Value, environment groups and logs on Render.
+  website: https://api-docs.render.com
+  auth: Bearer API key
+  format: OpenAPI 3.0
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://api-docs.render.com/openapi/render-public-api-1.json
+  first: GET /services
+
+- id: vercel
+  name: Vercel
+  category: cloud
+  description: Projects, deployments, domains, environment variables and teams on Vercel.
+  website: https://vercel.com/docs/rest-api
+  auth: Bearer access token
+  format: OpenAPI 3.0
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://openapi.vercel.sh
+    scheme: bearerToken
+  first: GET /v2/user
+
+# ---- Developer tools ---------------------------------------------------------------------
+
+- id: bitbucket
+  name: Bitbucket Cloud
+  category: devTools
+  description: Repositories, pull requests, pipelines, issues and workspaces on Bitbucket.
+  website: https://developer.atlassian.com/cloud/bitbucket/rest/
+  auth: Basic (Atlassian account email and API token)
+  format: OpenAPI 3.0
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://dac-static.atlassian.com/cloud/bitbucket/swagger.v3.json
+    scheme: basic
+  first: GET /user
+
+- id: circleci
+  name: CircleCI
+  category: devTools
+  description: Pipelines, workflows, jobs, contexts and insights on CircleCI.
+  website: https://circleci.com/docs/api/v2/
+  auth: API token in the Circle-Token header
+  format: OpenAPI 3.0
+  license:
+    name: MIT
+    url: https://opensource.org/license/MIT
+  source:
+    type: download
+    url: https://circleci.com/api/v2/openapi.json
+  first: GET /me
+
+- id: docker-hub
+  name: Docker Hub
+  category: devTools
+  description: Repositories, tags, organizations and access tokens on Docker Hub.
+  website: https://docs.docker.com/reference/api/hub/latest/
+  auth: Bearer token (exchange a personal access token at /v2/auth/token)
+  format: OpenAPI 3.2
+  license:
+    name: Apache-2.0
+    url: https://github.com/docker/docs/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/docker/docs/main/content/reference/api/hub/latest.yaml
+    scheme: bearerAuth
+  first: GET /v2/namespaces/{namespace}/repositories
+
+- id: github
+  name: GitHub
+  category: devTools
+  description: Repositories, issues, pull requests, actions, users and organizations.
+  website: https://docs.github.com/en/rest
+  auth: Bearer token (personal access token or GitHub App)
+  format: OpenAPI 3.0
+  license:
+    name: MIT
+    url: https://github.com/github/rest-api-description/blob/main/LICENSE.md
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json
+    groups: [repos, issues, pulls, users]
+  first: GET /user
+
+- id: github-graphql
+  name: GitHub GraphQL
+  category: devTools
+  description: The GitHub GraphQL API, with schema completion in the editor.
+  website: https://docs.github.com/en/graphql
+  auth: Bearer token (personal access token)
+  format: GraphQL
+  source:
+    type: graphql
+    url: https://api.github.com/graphql
+    query: |
+      query {
+        viewer {
+          login
+          name
+        }
+      }
+    auth:
+      type: bearer
+      token: "{{githubToken}}"
+    variables:
+      - key: githubToken
+        value: ""
+        secret: true
+
+- id: gitlab
+  name: GitLab
+  category: devTools
+  description: Projects, merge requests, issues, pipelines and users on GitLab.com or your own GitLab.
+  website: https://docs.gitlab.com/api/rest/
+  auth: Bearer personal access token
+  format: OpenAPI 3.0
+  license:
+    name: CC-BY-SA-4.0
+    url: https://gitlab.com/gitlab-org/gitlab/-/blob/master/LICENSE
+  source:
+    type: download
+    url: https://gitlab.com/gitlab-org/gitlab/-/raw/master/doc/api/openapi/openapi_v3.yaml
+    groups: [Projects, Users, Merge requests, Issues, Pipelines]
+  first: GET /api/v4/user
+
+- id: gitlab-graphql
+  name: GitLab GraphQL
+  category: devTools
+  description: The GitLab GraphQL API, with schema completion in the editor.
+  website: https://docs.gitlab.com/api/graphql/
+  auth: Bearer personal access token
+  format: GraphQL
+  source:
+    type: graphql
+    url: https://gitlab.com/api/graphql
+    query: |
+      query {
+        currentUser {
+          username
+          name
+        }
+      }
+    auth:
+      type: bearer
+      token: "{{gitlabToken}}"
+    variables:
+      - key: gitlabToken
+        value: ""
+        secret: true
+
+- id: vault
+  name: HashiCorp Vault
+  category: devTools
+  description: Secrets engines, auth methods, policies and system settings of a Vault server.
+  website: https://developer.hashicorp.com/vault/api-docs
+  auth: Vault token in the X-Vault-Token header
+  format: OpenAPI 3.0
+  license:
+    name: MPL-2.0
+    url: https://github.com/hashicorp/vault-client-go/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/hashicorp/vault-client-go/main/openapi.json
+    baseUrl: http://127.0.0.1:8200/v1
+    auth: {type: apiKey, key: X-Vault-Token, value: "{{vaultToken}}", location: header}
+    variables:
+      - {key: vaultToken, value: "", secret: true}
+  first: GET /auth/token/lookup-self
+
+- id: hcp-terraform
+  name: HCP Terraform
+  category: devTools
+  description: Workspaces, runs, variables and state in HCP Terraform and Terraform Enterprise.
+  website: https://developer.hashicorp.com/terraform/cloud-docs/api-docs
+  auth: Bearer API token
+  format: Not published
+  source:
+    type: link
+    reason: HashiCorp publishes no machine-readable description of the HCP Terraform API.
+
+- id: jira
+  name: Jira Cloud
+  category: devTools
+  description: Issues, projects, boards, workflows, users and search in Jira.
+  website: https://developer.atlassian.com/cloud/jira/platform/rest/v3/
+  auth: Basic (Atlassian account email and API token)
+  format: OpenAPI 3.0
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0.html
+  source:
+    type: download
+    url: https://dac-static.atlassian.com/cloud/jira/platform/swagger-v3.v3.json
+    scheme: basicAuth
+  first: GET /rest/api/3/myself
+
+- id: linear
+  name: Linear
+  category: devTools
+  description: Issues, projects, cycles and teams in Linear, through its GraphQL API.
+  website: https://linear.app/developers/graphql
+  auth: API key in the Authorization header (no Bearer prefix)
+  format: GraphQL
+  source:
+    type: graphql
+    url: https://api.linear.app/graphql
+    query: |
+      query {
+        viewer {
+          id
+          name
+          email
+        }
+      }
+    auth:
+      type: apiKey
+      key: Authorization
+      value: "{{linearApiKey}}"
+      location: header
+    variables:
+      - key: linearApiKey
+        value: ""
+        secret: true
+
+# ---- Monitoring ----------------------------------------------------------------------------
+
+- id: datadog
+  name: Datadog
+  category: monitoring
+  description: Metrics, monitors, dashboards, logs, synthetics and SLOs (API v1).
+  website: https://docs.datadoghq.com/api/latest/
+  auth: API key in DD-API-KEY and application key in DD-APPLICATION-KEY
+  format: OpenAPI 3.0
+  license:
+    name: Apache-2.0
+    url: https://github.com/DataDog/datadog-api-client-go/blob/master/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/DataDog/datadog-api-client-go/master/.generator/schemas/v1/openapi.yaml
+  first: GET /api/v1/validate
+
+- id: datadog-v2
+  name: Datadog API v2
+  category: monitoring
+  description: Users, incidents, security monitoring, metrics, teams and the rest of Datadog API v2.
+  website: https://docs.datadoghq.com/api/latest/
+  auth: API key in DD-API-KEY and application key in DD-APPLICATION-KEY
+  format: OpenAPI 3.0
+  license:
+    name: Apache-2.0
+    url: https://github.com/DataDog/datadog-api-client-go/blob/master/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/DataDog/datadog-api-client-go/master/.generator/schemas/v2/openapi.yaml
+    groups: [Users, Metrics, Incidents, Logs]
+  first: GET /api/v2/current_user
+
+- id: grafana
+  name: Grafana
+  category: monitoring
+  description: Dashboards, data sources, folders, alerting and users of a Grafana server.
+  website: https://grafana.com/docs/grafana/latest/developers/http_api/
+  auth: Basic (user and password) or a service account token
+  format: OpenAPI 3.0
+  license:
+    name: AGPL-3.0
+    url: https://github.com/grafana/grafana/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/grafana/grafana/main/public/openapi3.json
+    baseUrl: http://localhost:3000/api
+  first: GET /search
+
+- id: new-relic
+  name: New Relic
+  category: monitoring
+  description: NerdGraph, New Relic's GraphQL API for data, entities, alerts and accounts.
+  website: https://docs.newrelic.com/docs/apis/nerdgraph/get-started/introduction-new-relic-nerdgraph/
+  auth: User API key in the API-Key header
+  format: GraphQL
+  source:
+    type: graphql
+    url: https://api.newrelic.com/graphql
+    query: |
+      query {
+        actor {
+          user {
+            name
+            email
+          }
+        }
+      }
+    auth:
+      type: apiKey
+      key: API-Key
+      value: "{{newRelicApiKey}}"
+      location: header
+    variables:
+      - key: newRelicApiKey
+        value: ""
+        secret: true
+
+- id: pagerduty
+  name: PagerDuty
+  category: monitoring
+  description: Incidents, services, schedules, escalation policies and users.
+  website: https://developer.pagerduty.com/api-reference/
+  auth: API key in the Authorization header ("Token token=<key>")
+  format: OpenAPI 3.0
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/PagerDuty/api-schema/main/reference/REST/openapiv3.json
+  first: GET /abilities
+
+- id: sentry
+  name: Sentry
+  category: monitoring
+  description: Organizations, projects, issues, events, releases and alerts.
+  website: https://docs.sentry.io/api/
+  auth: Bearer auth token
+  format: OpenAPI 3.0
+  license:
+    name: FSL-1.1-Apache-2.0
+    url: https://github.com/getsentry/sentry-api-schema/blob/main/LICENSE.md
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/getsentry/sentry-api-schema/main/openapi-derefed.json
+    scheme: auth_token
+  first: GET /api/0/organizations/
+
+# ---- Data ------------------------------------------------------------------------------------
+
+- id: algolia
+  name: Algolia Search
+  category: data
+  description: Search indices, records, settings, synonyms and rules.
+  website: https://www.algolia.com/doc/rest-api/search/
+  auth: Application id and API key in the x-algolia-application-id and x-algolia-api-key headers
+  format: OpenAPI 3.0
+  license:
+    name: MIT
+    url: https://github.com/algolia/api-clients-automation/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/algolia/api-clients-automation/main/specs/bundled/search.yml
+  first: GET /1/indexes
+
+- id: bigquery
+  name: BigQuery
+  category: data
+  description: Datasets, tables, jobs and queries in Google BigQuery.
+  website: https://cloud.google.com/bigquery/docs/reference/rest
+  auth: OAuth 2.0 (a Google Cloud access token)
+  format: Google Discovery
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://bigquery.googleapis.com/$discovery/rest?version=v2
+  first: GET /projects/{projectsId}/datasets
+
+- id: firestore
+  name: Cloud Firestore
+  category: data
+  description: Documents, collections, queries and indexes in Cloud Firestore.
+  website: https://cloud.google.com/firestore/docs/reference/rest
+  auth: OAuth 2.0 (a Google Cloud access token)
+  format: Google Discovery
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://firestore.googleapis.com/$discovery/rest?version=v1
+    variables:
+      - key: databasesId
+        value: (default)
+  first: GET /v1/projects/{projectsId}/databases/{databasesId}/documents/{collectionId}
+
+- id: elasticsearch
+  name: Elasticsearch
+  category: data
+  description: Indices, documents, search, cluster and the rest of an Elasticsearch server.
+  website: https://www.elastic.co/docs/api/doc/elasticsearch/
+  auth: Basic (user and password) or an API key (none on a local server without security)
+  format: OpenAPI 3.0
+  license:
+    name: Apache-2.0
+    url: https://github.com/elastic/elasticsearch-specification/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/elastic/elasticsearch-specification/main/output/openapi/elasticsearch-openapi.json
+    baseUrl: http://localhost:9200
+    groups: [info, document, search, indices, cluster]
+  first: GET /
+
+- id: google-places
+  name: Google Places
+  category: data
+  description: Places API (New) from Google Maps Platform for text and nearby search, details and photos.
+  website: https://developers.google.com/maps/documentation/places/web-service/op-overview
+  auth: API key (most requests also need an X-Goog-FieldMask header)
+  format: Google Discovery
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://places.googleapis.com/$discovery/rest?version=v1
+    scheme: apiKey
+  first: POST /v1/places:searchText
+
+- id: mapbox
+  name: Mapbox
+  category: data
+  description: Maps, geocoding, directions, isochrones and static images.
+  website: https://docs.mapbox.com/api/overview/
+  auth: Access token in the access_token query parameter
+  format: Not published
+  source:
+    type: link
+    reason: Mapbox publishes no machine-readable description of its APIs.
+
+- id: mongodb-atlas
+  name: MongoDB Atlas
+  category: data
+  description: Clusters, projects, database users and backups in MongoDB Atlas.
+  website: https://www.mongodb.com/docs/atlas/reference/api-resources-spec/v2/
+  auth: Service account (OAuth 2.0) or HTTP Digest API keys
+  format: OpenAPI 3.0
+  source:
+    type: link
+    reason: MongoDB licenses its Atlas Admin API description for non-commercial use only (CC BY-NC-SA).
+
+- id: neon
+  name: Neon
+  category: data
+  description: Serverless Postgres projects, branches, databases and endpoints.
+  website: https://api-docs.neon.tech/reference/getting-started-with-neon-api
+  auth: Bearer API key
+  format: OpenAPI 3.0
+  source:
+    type: link
+    reason: Neon's API description is proprietary and not licensed for use outside Neon.
+
+- id: openweathermap
+  name: OpenWeatherMap
+  category: data
+  description: Current weather, 5-day forecasts and geocoding.
+  website: https://openweathermap.org/api
+  auth: API key in the appid query parameter
+  format: Written for Zorvik
+  source:
+    type: starter
+    file: openweathermap.yaml
+  first: GET /data/2.5/weather
+
+- id: supabase
+  name: Supabase Management
+  category: data
+  description: Supabase projects, databases, auth settings, edge functions and secrets.
+  website: https://supabase.com/docs/reference/api/introduction
+  auth: Bearer personal access token
+  format: OpenAPI 3.0
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://api.supabase.com/api/v1-json
+    scheme: bearer
+  first: GET /v1/projects
+
+- id: upstash
+  name: Upstash
+  category: data
+  description: Redis, Vector, Search and QStash databases on Upstash.
+  website: https://upstash.com/docs/devops/developer-api/introduction
+  auth: Basic (account email and management API key)
+  format: OpenAPI 3.0
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0.html
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/upstash/docs/main/devops/developer-api/openapi.yaml
+    scheme: basicAuth
+  first: GET /redis/databases
+
+# ---- Messaging -------------------------------------------------------------------------------
+
+- id: discord
+  name: Discord
+  category: messaging
+  description: Bots, channels, messages, guilds, members and application commands.
+  website: https://discord.com/developers/docs/reference
+  auth: Bot token in the Authorization header ("Bot <token>")
+  format: OpenAPI 3.1
+  license:
+    name: MIT
+    url: https://github.com/discord/discord-api-spec/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/discord/discord-api-spec/main/specs/openapi.json
+    scheme: BotToken
+  first: GET /users/@me
+
+- id: intercom
+  name: Intercom
+  category: messaging
+  description: Contacts, conversations, companies, tickets and articles in Intercom.
+  website: https://developers.intercom.com/docs/references/rest-api/api.intercom.io
+  auth: Bearer access token
+  format: OpenAPI 3.0
+  license:
+    name: MIT
+    url: https://github.com/intercom/Intercom-OpenAPI/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/intercom/Intercom-OpenAPI/main/descriptions/2.17/api.intercom.io.yaml
+  first: GET /me
+
+- id: mailgun
+  name: Mailgun
+  category: messaging
+  description: Send email, and manage domains, templates, mailing lists and suppressions.
+  website: https://documentation.mailgun.com/docs/mailgun/api-reference/send/mailgun
+  auth: Basic (user "api" and your API key)
+  format: OpenAPI 3.1
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://documentation.mailgun.com/_bundle/docs/mailgun/api-reference/send/mailgun.json
+    scheme: basicAuth
+  first: GET /v4/domains
+
+- id: postmark
+  name: Postmark
+  category: messaging
+  description: Send transactional email and read messages, bounces, templates and stats.
+  website: https://postmarkapp.com/developer
+  auth: Server token in the X-Postmark-Server-Token header
+  format: Swagger 2.0
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://postmarkapp.com/swagger/server.yml
+    auth: {type: apiKey, key: X-Postmark-Server-Token, value: "{{serverToken}}", location: header}
+    variables:
+      - {key: serverToken, value: "", secret: true}
+  first: GET /server
+
+- id: resend
+  name: Resend
+  category: messaging
+  description: Send email, and manage domains, contacts, broadcasts and webhooks.
+  website: https://resend.com/docs/api-reference/introduction
+  auth: Bearer API key
+  format: OpenAPI 3.1
+  license:
+    name: MIT
+    url: https://github.com/resend/resend-openapi/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/resend/resend-openapi/main/resend.yaml
+  first: GET /domains
+
+- id: sendgrid
+  name: SendGrid Mail Send
+  category: messaging
+  description: Send email through Twilio SendGrid's v3 Mail Send API.
+  website: https://www.twilio.com/docs/sendgrid/api-reference
+  auth: Bearer API key
+  format: OpenAPI 3.1
+  license:
+    name: MIT
+    url: https://github.com/twilio/sendgrid-oai/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/twilio/sendgrid-oai/main/spec/json/tsg_mail_v3.json
+  first: POST /v3/mail/send
+
+- id: slack
+  name: Slack
+  category: messaging
+  description: The Slack Web API for messages, conversations, users, files and admin.
+  website: https://docs.slack.dev/reference/methods
+  auth: Bearer token (bot or user token)
+  format: Swagger 2.0
+  license:
+    name: MIT
+    url: https://github.com/slackapi/slack-api-specs/blob/master/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/slackapi/slack-api-specs/master/web-api/slack_web_openapi_v2.json
+    scheme: slackAuth
+    auth: {type: bearer, token: "{{accessToken}}"}
+    variables:
+      - {key: accessToken, value: "", secret: true}
+  first: GET /auth.test
+
+- id: telegram
+  name: Telegram Bot API
+  category: messaging
+  description: Telegram bots that read updates and send and edit messages, photos and files.
+  website: https://core.telegram.org/bots/api
+  auth: Bot token in the URL path
+  format: Written for Zorvik
+  source:
+    type: starter
+    file: telegram.yaml
+    secrets: [botToken]
+  first: GET /bot{botToken}/getMe
+
+- id: twilio
+  name: Twilio
+  category: messaging
+  description: Messages, calls, phone numbers, recordings and accounts (the 2010-04-01 API).
+  website: https://www.twilio.com/docs/usage/api
+  auth: Basic (Account SID and auth token, or an API key and secret)
+  format: OpenAPI 3.0
+  license:
+    name: MIT
+    url: https://github.com/twilio/twilio-oai/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/twilio/twilio-oai/main/spec/json/twilio_api_v2010.json
+  first: GET /2010-04-01/Accounts.json
+
+- id: whatsapp
+  name: WhatsApp Cloud API
+  category: messaging
+  description: Send WhatsApp messages and manage templates, phone numbers and flows.
+  website: https://developers.facebook.com/docs/whatsapp/cloud-api
+  auth: Bearer access token (a system user token)
+  format: OpenAPI 3.1
+  license:
+    name: MIT
+    url: https://github.com/facebook/openapi/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/facebook/openapi/main/business-messaging-api_v23.0.yaml
+    scheme: bearerAuth
+    variables:
+      - key: version
+        value: v23.0
+  first: POST /{Version}/{Phone-Number-ID}/messages
+
+- id: zendesk
+  name: Zendesk Support
+  category: messaging
+  description: Tickets, users, organizations, groups and views in Zendesk Support.
+  website: https://developer.zendesk.com/api-reference/
+  auth: Basic (email/token and API token) or OAuth 2.0
+  format: OpenAPI 3.0
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://developer.zendesk.com/zendesk/oas.yaml
+    baseUrl: https://your-subdomain.zendesk.com
+  first: GET /api/v2/tickets
+
+- id: zoom
+  name: Zoom
+  category: messaging
+  description: Meetings, webinars, users, recordings and reports.
+  website: https://developers.zoom.us/docs/api/
+  auth: OAuth 2.0 (Server-to-Server or user apps)
+  format: OpenAPI 3.0
+  source:
+    type: link
+    reason: Zoom offers its API descriptions only through the download button of its API hub, not at a stable address.
+
+# ---- Productivity ----------------------------------------------------------------------------
+
+- id: airtable
+  name: Airtable
+  category: productivity
+  description: Bases, table schemas and records in Airtable.
+  website: https://airtable.com/developers/web/api/introduction
+  auth: Bearer personal access token
+  format: Written for Zorvik
+  source:
+    type: starter
+    file: airtable.yaml
+  first: GET /v0/meta/bases
+
+- id: asana
+  name: Asana
+  category: productivity
+  description: Tasks, projects, portfolios, goals and teams in Asana.
+  website: https://developers.asana.com/reference/rest-api-reference
+  auth: Bearer personal access token (or OAuth 2.0)
+  format: OpenAPI 3.0
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/Asana/openapi/master/defs/asana_oas.yaml
+  first: GET /users/{user_gid}
+
+- id: box
+  name: Box
+  category: productivity
+  description: Files, folders, metadata, collaborations and users in Box.
+  website: https://developer.box.com/reference/
+  auth: OAuth 2.0 (or a developer token as Bearer)
+  format: OpenAPI 3.0
+  license:
+    name: Apache-2.0
+    url: https://github.com/box/box-openapi/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/box/box-openapi/main/openapi.json
+    auth: {type: bearer, token: "{{accessToken}}"}
+    variables:
+      - {key: accessToken, value: "", secret: true}
+  first: GET /users/me
+
+- id: calendly
+  name: Calendly
+  category: productivity
+  description: Scheduled events, event types, invitees and webhooks.
+  website: https://developer.calendly.com/api-docs
+  auth: Bearer personal access token (or OAuth 2.0)
+  format: Not published
+  source:
+    type: link
+    reason: Calendly publishes no downloadable description of its API.
+
+- id: clickup
+  name: ClickUp
+  category: productivity
+  description: Workspaces, spaces, lists, tasks, comments and time tracking in ClickUp.
+  website: https://developer.clickup.com/reference
+  auth: API token in the Authorization header
+  format: OpenAPI 3.1
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://developer.clickup.com/openapi/clickup-api-v2-reference.json
+  first: GET /v2/user
+
+- id: confluence
+  name: Confluence Cloud
+  category: productivity
+  description: Spaces, pages, blog posts, comments and attachments in Confluence.
+  website: https://developer.atlassian.com/cloud/confluence/rest/v2/
+  auth: Basic (Atlassian account email and API token)
+  format: OpenAPI 3.0
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://dac-static.atlassian.com/cloud/confluence/openapi-v2.v3.json
+    baseUrl: https://your-domain.atlassian.net/wiki/api/v2
+    scheme: basicAuth
+  first: GET /spaces
+
+- id: dropbox
+  name: Dropbox
+  category: productivity
+  description: Files, folders, sharing and users in Dropbox.
+  website: https://www.dropbox.com/developers/documentation/http/documentation
+  auth: OAuth 2.0 (Bearer access token)
+  format: Stone
+  source:
+    type: link
+    reason: Dropbox describes its API in its own Stone format, which Zorvik can't import.
+
+- id: figma
+  name: Figma
+  category: productivity
+  description: Files, comments, components, styles, variables and webhooks in Figma.
+  website: https://developers.figma.com/docs/rest-api/
+  auth: Personal access token in the X-Figma-Token header (or OAuth 2.0)
+  format: OpenAPI 3.1
+  license:
+    name: MIT
+    url: https://github.com/figma/rest-api-spec/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/figma/rest-api-spec/main/openapi/openapi.yaml
+    scheme: PersonalAccessToken
+  first: GET /v1/me
+
+- id: gmail
+  name: Gmail
+  category: productivity
+  description: Messages, threads, labels, drafts and settings of a Gmail mailbox.
+  website: https://developers.google.com/workspace/gmail/api/reference/rest
+  auth: OAuth 2.0 (Google account)
+  format: Google Discovery
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://gmail.googleapis.com/$discovery/rest?version=v1
+    variables:
+      - key: userId
+        value: me
+  first: GET /gmail/v1/users/{userId}/messages
+
+- id: google-calendar
+  name: Google Calendar
+  category: productivity
+  description: Calendars, events, free/busy and access control in Google Calendar.
+  website: https://developers.google.com/workspace/calendar/api/v3/reference
+  auth: OAuth 2.0 (Google account)
+  format: Google Discovery
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://calendar-json.googleapis.com/$discovery/rest?version=v3
+    variables:
+      - key: calendarId
+        value: primary
+  first: GET /calendars/{calendarId}/events
+
+- id: google-docs
+  name: Google Docs
+  category: productivity
+  description: Create, read and edit Google Docs documents.
+  website: https://developers.google.com/workspace/docs/api/reference/rest
+  auth: OAuth 2.0 (Google account)
+  format: Google Discovery
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://docs.googleapis.com/$discovery/rest?version=v1
+  first: GET /v1/documents/{documentId}
+
+- id: google-drive
+  name: Google Drive
+  category: productivity
+  description: Files, folders, permissions, comments and shared drives in Google Drive.
+  website: https://developers.google.com/workspace/drive/api/reference/rest/v3
+  auth: OAuth 2.0 (Google account)
+  format: Google Discovery
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://www.googleapis.com/discovery/v1/apis/drive/v3/rest
+  first: GET /files
+
+- id: google-forms
+  name: Google Forms
+  category: productivity
+  description: Create and update Google Forms and read their responses.
+  website: https://developers.google.com/workspace/forms/api/reference/rest
+  auth: OAuth 2.0 (Google account)
+  format: Google Discovery
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://forms.googleapis.com/$discovery/rest?version=v1
+  first: GET /v1/forms/{formId}
+
+- id: google-people
+  name: Google People
+  category: productivity
+  description: Contacts, contact groups and profiles of a Google account.
+  website: https://developers.google.com/people/api/rest
+  auth: OAuth 2.0 (Google account)
+  format: Google Discovery
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://people.googleapis.com/$discovery/rest?version=v1
+    variables:
+      - key: peopleId
+        value: me
+  first: GET /v1/people/{peopleId}/connections
+
+- id: google-sheets
+  name: Google Sheets
+  category: productivity
+  description: Read and write spreadsheet values, sheets and formatting in Google Sheets.
+  website: https://developers.google.com/workspace/sheets/api/reference/rest
+  auth: OAuth 2.0 (Google account)
+  format: Google Discovery
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://sheets.googleapis.com/$discovery/rest?version=v4
+  first: GET /v4/spreadsheets/{spreadsheetId}/values/{range}
+
+- id: google-tasks
+  name: Google Tasks
+  category: productivity
+  description: Task lists and tasks in Google Tasks.
+  website: https://developers.google.com/workspace/tasks/reference/rest
+  auth: OAuth 2.0 (Google account)
+  format: Google Discovery
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://tasks.googleapis.com/$discovery/rest?version=v1
+  first: GET /tasks/v1/users/@me/lists
+
+- id: microsoft-graph
+  name: Microsoft Graph
+  category: productivity
+  description: Microsoft 365 users, mail, calendars, OneDrive files, Teams and groups.
+  website: https://learn.microsoft.com/en-us/graph/api/overview
+  auth: OAuth 2.0 (Microsoft Entra ID access token)
+  format: OpenAPI 3.0
+  license:
+    name: MIT
+    url: https://github.com/microsoftgraph/msgraph-metadata/blob/master/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/microsoftgraph/msgraph-metadata/master/openapi/v1.0/openapi.yaml
+    groups: [me.user, me.message, me.event, me.drive, users.user, groups.group]
+    auth: {type: bearer, token: "{{accessToken}}"}
+    variables:
+      - {key: accessToken, value: "", secret: true}
+  first: GET /me
+
+- id: miro
+  name: Miro
+  category: productivity
+  description: Boards, items, members, teams and projects in Miro.
+  website: https://developers.miro.com/reference
+  auth: OAuth 2.0 (Bearer access token)
+  format: OpenAPI 3.0
+  license:
+    name: MIT
+    url: https://github.com/miroapp/api-clients/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/miroapp/api-clients/main/packages/generator/spec.json
+    scheme: oAuth2AuthCode
+    auth: {type: bearer, token: "{{accessToken}}"}
+    variables:
+      - {key: accessToken, value: "", secret: true}
+  first: GET /v2/boards
+
+- id: monday
+  name: monday.com
+  category: productivity
+  description: Boards, items, columns, users and workspaces, through monday.com's GraphQL API.
+  website: https://developer.monday.com/api-reference/docs
+  auth: API token in the Authorization header (no Bearer prefix)
+  format: GraphQL
+  source:
+    type: graphql
+    url: https://api.monday.com/v2
+    query: |
+      query {
+        me {
+          id
+          name
+          email
+        }
+      }
+    auth:
+      type: apiKey
+      key: Authorization
+      value: "{{mondayToken}}"
+      location: header
+    variables:
+      - key: mondayToken
+        value: ""
+        secret: true
+
+- id: notion
+  name: Notion
+  category: productivity
+  description: Pages, databases, blocks, comments and users in Notion.
+  website: https://developers.notion.com/reference/intro
+  auth: Bearer integration token
+  format: OpenAPI 3.1
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://developers.notion.com/openapi.json
+  first: GET /v1/users/me
+
+- id: todoist
+  name: Todoist
+  category: productivity
+  description: Tasks, projects, sections, labels and comments in Todoist.
+  website: https://developer.todoist.com/api/v1/
+  auth: Bearer API token
+  format: Not published
+  source:
+    type: link
+    reason: Todoist publishes no downloadable description of its API.
+
+- id: trello
+  name: Trello
+  category: productivity
+  description: Boards, lists, cards, members and checklists in Trello.
+  website: https://developer.atlassian.com/cloud/trello/rest/
+  auth: API key and token in the key and token query parameters
+  format: OpenAPI 3.0
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://dac-static.atlassian.com/cloud/trello/swagger.v3.json
+    scheme: APIKey
+  first: GET /members/{id}
+
+- id: typeform
+  name: Typeform
+  category: productivity
+  description: Forms, responses, themes, images and webhooks in Typeform.
+  website: https://www.typeform.com/developers/
+  auth: Bearer personal access token
+  format: Not published
+  source:
+    type: link
+    reason: Typeform publishes no downloadable description of its API.
+
+# ---- Payments --------------------------------------------------------------------------------
+
+- id: adyen-checkout
+  name: Adyen Checkout
+  category: payments
+  description: Payment methods, payments, sessions, modifications and payment links (test environment).
+  website: https://docs.adyen.com/api-explorer/Checkout/latest/overview
+  auth: API key in the X-API-Key header
+  format: OpenAPI 3.1
+  license:
+    name: MIT
+    url: https://github.com/Adyen/adyen-openapi/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/Adyen/adyen-openapi/main/json/CheckoutService-v72.json
+    scheme: ApiKeyAuth
+  first: POST /paymentMethods
+
+- id: braintree
+  name: Braintree
+  category: payments
+  description: Payments, customers and vaulted payment methods in the Braintree sandbox, through GraphQL.
+  website: https://graphql.braintreepayments.com
+  auth: Basic (public key and private key) with a Braintree-Version header
+  format: GraphQL
+  source:
+    type: graphql
+    url: https://payments.sandbox.braintree-api.com/graphql
+    query: |
+      query {
+        ping
+      }
+    auth:
+      type: basic
+      username: "{{braintreePublicKey}}"
+      password: "{{braintreePrivateKey}}"
+    headers:
+      - key: Braintree-Version
+        value: "2019-01-01"
+    variables:
+      - key: braintreePublicKey
+        value: ""
+      - key: braintreePrivateKey
+        value: ""
+        secret: true
+
+- id: cashfree
+  name: Cashfree Payments
+  category: payments
+  description: Orders, payments, refunds, payment links and subscriptions (sandbox by default).
+  website: https://www.cashfree.com/docs/api-reference
+  auth: Client id and secret in the x-client-id and x-client-secret headers
+  format: OpenAPI 3.0
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0.html
+  source:
+    type: download
+    url: https://www.cashfree.com/docs/openapi/payments/v2025-01-01.yaml
+  first: POST /orders
+
+- id: coinbase-cdp
+  name: Coinbase Developer Platform
+  category: payments
+  description: Onchain accounts, transfers, payments, onramp and policies on Coinbase's developer platform.
+  website: https://docs.cdp.coinbase.com/api-reference/v2/introduction
+  auth: Bearer JWT signed with your CDP API key
+  format: OpenAPI 3.1
+  license:
+    name: MIT
+    url: https://github.com/coinbase/cdp-sdk/blob/main/LICENSE.md
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/coinbase/cdp-sdk/main/openapi.yaml
+  first: GET /v2/accounts
+
+- id: paypal-orders
+  name: PayPal Orders
+  category: payments
+  description: Create, update, authorize and capture PayPal checkout orders.
+  website: https://developer.paypal.com/docs/api/orders/v2/
+  auth: OAuth 2.0 client credentials
+  format: OpenAPI 3.0
+  license:
+    name: Apache-2.0
+    url: https://github.com/paypal/paypal-rest-api-specifications/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/paypal/paypal-rest-api-specifications/main/openapi/checkout_orders_v2.json
+    scheme: Oauth2
+  first: POST /v2/checkout/orders
+
+- id: paypal-payments
+  name: PayPal Payments
+  category: payments
+  description: Authorizations, captures and refunds of PayPal payments.
+  website: https://developer.paypal.com/docs/api/payments/v2/
+  auth: OAuth 2.0 client credentials
+  format: OpenAPI 3.0
+  license:
+    name: Apache-2.0
+    url: https://github.com/paypal/paypal-rest-api-specifications/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/paypal/paypal-rest-api-specifications/main/openapi/payments_payment_v2.json
+    scheme: Oauth2
+  first: GET /v2/payments/captures/{capture_id}
+
+- id: plaid
+  name: Plaid
+  category: payments
+  description: Bank account links, transactions, balances, identity and auth (sandbox by default).
+  website: https://plaid.com/docs/api/
+  auth: Client id and secret in the PLAID-CLIENT-ID and PLAID-SECRET headers
+  format: OpenAPI 3.0
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/plaid/plaid-openapi/master/2020-09-14.yml
+    baseUrl: https://sandbox.plaid.com
+  first: POST /institutions/get
+
+- id: razorpay
+  name: Razorpay
+  category: payments
+  description: Orders, payments, refunds, subscriptions and payment links.
+  website: https://razorpay.com/docs/api/
+  auth: Basic (key id and key secret)
+  format: Postman collection
+  source:
+    type: link
+    reason: Razorpay publishes its API only as a Postman workspace, not as a file to download.
+
+- id: square
+  name: Square
+  category: payments
+  description: Payments, orders, catalog, customers, inventory and locations.
+  website: https://developer.squareup.com/reference/square
+  auth: Bearer access token (or OAuth 2.0)
+  format: OpenAPI 3.0
+  license:
+    name: Apache-2.0
+    url: https://github.com/square/connect-api-specification/blob/master/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/square/connect-api-specification/master/api.json
+    scheme: oauth2
+    auth: {type: bearer, token: "{{accessToken}}"}
+    variables:
+      - {key: accessToken, value: "", secret: true}
+  first: GET /v2/locations
+
+- id: stripe
+  name: Stripe
+  category: payments
+  description: Payments, customers, subscriptions, invoices and payouts.
+  website: https://docs.stripe.com/api
+  auth: Bearer secret key
+  format: OpenAPI 3.0
+  license:
+    name: MIT
+    url: https://github.com/stripe/openapi/blob/master/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/stripe/openapi/master/latest/openapi.spec3.json
+  first: GET /v1/balance
+
+# ---- Commerce --------------------------------------------------------------------------------
+
+- id: bigcommerce
+  name: BigCommerce Catalog
+  category: commerce
+  description: Products, variants, images, custom fields and reviews in a BigCommerce store's catalog.
+  website: https://docs.bigcommerce.com/developer/api-reference/openapi-specifications
+  auth: Access token in the X-Auth-Token header
+  format: OpenAPI 3.1
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://docs.bigcommerce.com/openapi/admin-catalog-products.json
+    scheme: X-Auth-Token
+  first: GET /stores/{store_hash}/v3/catalog/products
+
+- id: shopify
+  name: Shopify Admin
+  category: commerce
+  description: Products, orders, customers and inventory of a Shopify store, through the Admin GraphQL API.
+  website: https://shopify.dev/docs/api/admin-graphql
+  auth: Access token in the X-Shopify-Access-Token header
+  format: GraphQL
+  source:
+    type: graphql
+    url: https://{{shopDomain}}/admin/api/2026-10/graphql.json
+    query: |
+      query {
+        shop {
+          name
+          email
+          myshopifyDomain
+        }
+      }
+    auth:
+      type: apiKey
+      key: X-Shopify-Access-Token
+      value: "{{shopifyAccessToken}}"
+      location: header
+    variables:
+      - key: shopDomain
+        value: your-store.myshopify.com
+      - key: shopifyAccessToken
+        value: ""
+        secret: true
+
+- id: woocommerce
+  name: WooCommerce
+  category: commerce
+  description: Products, orders, customers and coupons of a WooCommerce store.
+  website: https://woocommerce.github.io/woocommerce-rest-api-docs/
+  auth: Basic (consumer key and consumer secret)
+  format: Not published
+  source:
+    type: link
+    reason: WooCommerce publishes no machine-readable description of its REST API.
+
+# ---- Marketing and CRM -------------------------------------------------------------------
+
+- id: amplitude
+  name: Amplitude
+  category: marketing
+  description: Send events and query analytics, cohorts and user profiles.
+  website: https://amplitude.com/docs/apis
+  auth: API key (and secret key for the export and dashboard APIs)
+  format: Not published
+  source:
+    type: link
+    reason: Amplitude publishes no machine-readable description of its APIs.
+
+- id: hubspot
+  name: HubSpot
+  category: marketing
+  description: CRM objects, marketing, sales and service.
+  website: https://developers.hubspot.com/docs/api/overview
+  auth: Bearer token (private app) or OAuth 2.0
+  format: OpenAPI 3.0
+  source:
+    type: link
+    reason: HubSpot's API descriptions are not licensed for use outside HubSpot.
+
+- id: klaviyo
+  name: Klaviyo
+  category: marketing
+  description: Profiles, lists, segments, events, campaigns, flows and catalogs in Klaviyo.
+  website: https://developers.klaviyo.com/en/reference/api_overview
+  auth: Private API key in the Authorization header ("Klaviyo-API-Key <key>")
+  format: OpenAPI 3.0
+  license:
+    name: MIT
+    url: https://github.com/klaviyo/openapi/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/klaviyo/openapi/main/openapi/stable.json
+  first: GET /api/accounts
+
+- id: mailchimp
+  name: Mailchimp Marketing
+  category: marketing
+  description: Audiences, members, campaigns, templates and automations.
+  website: https://mailchimp.com/developer/marketing/api/
+  auth: Basic (any user name and your API key) or OAuth 2.0
+  format: OpenAPI 3.0
+  source:
+    type: link
+    reason: Mailchimp's API description comes under a proprietary license agreement.
+
+- id: mixpanel
+  name: Mixpanel Ingestion
+  category: marketing
+  description: Track and import events and update user and group profiles in Mixpanel.
+  website: https://developer.mixpanel.com/reference/overview
+  auth: Project token in the request (import uses a service account)
+  format: OpenAPI 3.0
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/mixpanel/docs/main/openapi/ingestion.openapi.yaml
+  first: POST /track
+
+- id: salesforce
+  name: Salesforce Platform
+  category: marketing
+  description: REST, Bulk, Composite, Metadata, Tooling and other Salesforce Platform APIs.
+  website: https://developer.salesforce.com/docs/apis
+  auth: OAuth 2.0
+  format: Postman collection
+  license:
+    name: CC0-1.0
+    url: https://github.com/forcedotcom/postman-salesforce-apis/blob/master/LICENSE
+  source:
+    type: download
+    url: https://www.postman.com/collections/12721794-67cb9baa-e0da-4986-957e-88d8734647e2
+  first: Limits
+
+- id: segment
+  name: Segment
+  category: marketing
+  description: Sources, destinations, tracking plans and warehouses in Twilio Segment.
+  website: https://docs.segmentapis.com
+  auth: Bearer token
+  format: OpenAPI 3.0
+  source:
+    type: link
+    reason: Segment publishes no downloadable description of its Public API.
+
+# ---- Identity --------------------------------------------------------------------------------
+
+- id: auth0
+  name: Auth0 Management
+  category: identity
+  description: Users, roles, applications, connections and logs of an Auth0 tenant.
+  website: https://auth0.com/docs/api/management/v2
+  auth: Bearer Management API access token
+  format: Not published
+  source:
+    type: link
+    reason: Auth0 publishes no maintained description of its Management API.
+
+- id: clerk
+  name: Clerk
+  category: identity
+  description: Users, sessions, organizations, invitations and instance settings (Backend API).
+  website: https://clerk.com/docs/reference/backend-api
+  auth: Bearer secret key
+  format: OpenAPI 3.0
+  license:
+    name: MIT
+    url: https://github.com/clerk/openapi-specs/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/clerk/openapi-specs/main/bapi/2026-08-20.yml
+  first: GET /users
+
+- id: okta
+  name: Okta Management
+  category: identity
+  description: Users, groups, applications, policies and authenticators of an Okta org.
+  website: https://developer.okta.com/docs/api/
+  auth: API token in the Authorization header ("SSWS <token>") or OAuth 2.0
+  format: OpenAPI 3.0
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0.html
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/okta/okta-management-openapi-spec/master/dist/current/management-minimal.yaml
+    baseUrl: https://your-domain.okta.com
+    scheme: apiToken
+  first: GET /api/v1/users
+
+# ---- Media -----------------------------------------------------------------------------------
+
+- id: cloudinary
+  name: Cloudinary
+  category: media
+  description: Upload, manage, search and transform images and videos in Cloudinary.
+  website: https://cloudinary.com/documentation/admin_api
+  auth: Basic (API key and API secret)
+  format: OpenAPI 3.1
+  license:
+    name: MIT
+    url: https://github.com/cloudinary/api-schemas/blob/main/LICENSE
+  source:
+    type: download
+    url: https://raw.githubusercontent.com/cloudinary/api-schemas/main/api/schema.yml
+  first: GET /v1_1/{cloud_name}/resources/image
+
+- id: contentful
+  name: Contentful
+  category: media
+  description: Published content of a Contentful space, through the GraphQL Content API.
+  website: https://www.contentful.com/developers/docs/references/graphql/
+  auth: Bearer Content Delivery API access token
+  format: GraphQL
+  source:
+    type: graphql
+    url: https://graphql.contentful.com/content/v1/spaces/{{spaceId}}
+    query: |
+      query {
+        assetCollection(limit: 5) {
+          items {
+            title
+            url
+          }
+        }
+      }
+    auth:
+      type: bearer
+      token: "{{contentfulAccessToken}}"
+    variables:
+      - key: spaceId
+        value: ""
+      - key: contentfulAccessToken
+        value: ""
+        secret: true
+
+- id: reddit
+  name: Reddit
+  category: media
+  description: Subreddits, posts, comments, users and messages.
+  website: https://www.reddit.com/dev/api/
+  auth: OAuth 2.0
+  format: Not published
+  source:
+    type: link
+    reason: Reddit publishes no machine-readable description of its API.
+
+- id: sanity
+  name: Sanity
+  category: media
+  description: Query and mutate documents and assets in a Sanity content lake.
+  website: https://www.sanity.io/docs/http-api
+  auth: Bearer API token
+  format: Not published
+  source:
+    type: link
+    reason: Sanity publishes no machine-readable description of its HTTP API.
+
+- id: spotify
+  name: Spotify Web API
+  category: media
+  description: Search, albums, artists, tracks, playlists, playback and your library.
+  website: https://developer.spotify.com/documentation/web-api
+  auth: OAuth 2.0
+  format: OpenAPI 3.0
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://developer.spotify.com/reference/web-api/open-api-schema.yaml
+    scheme: oauth_2_0
+  first: GET /search
+
+- id: x
+  name: X
+  category: media
+  description: Posts, users, timelines, lists and direct messages on X (formerly Twitter).
+  website: https://docs.x.com/x-api/introduction
+  auth: Bearer token or OAuth 2.0
+  format: OpenAPI 3.0
+  source:
+    type: link
+    reason: X's API and its description are used under the X Developer Agreement, which doesn't allow their use outside it.
+
+- id: youtube
+  name: YouTube Data
+  category: media
+  description: Search, videos, channels, playlists, comments and subscriptions on YouTube.
+  website: https://developers.google.com/youtube/v3/docs
+  auth: API key for public data, OAuth 2.0 for your account
+  format: Google Discovery
+  license:
+    name: Not stated
+  source:
+    type: download
+    url: https://youtube.googleapis.com/$discovery/rest?version=v3
+    scheme: apiKey
+  first: GET /youtube/v3/search

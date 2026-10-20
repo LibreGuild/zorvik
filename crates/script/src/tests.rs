@@ -8,13 +8,14 @@ fn pre() -> ScriptInput {
             request_id: "users/get.yaml".into(),
             iteration: 0,
             iteration_count: 1,
+            ..Default::default()
         },
         environment_name: Some("Dev".into()),
         request: ScriptRequest {
             url: "https://api.test/users?page=1#top".into(),
             method: "GET".into(),
             headers: vec![ScriptHeader::new("Accept", "application/json")],
-            body: String::new(),
+            ..Default::default()
         },
         response: None,
         variables: Variables::default(),
@@ -61,7 +62,12 @@ fn failure(body: &str, input: &ScriptInput) -> String {
 }
 
 fn change(scope: Scope, key: &str, value: Option<&str>) -> VariableChange {
-    VariableChange { scope, key: key.into(), value: value.map(str::to_string) }
+    VariableChange { scope, key: key.into(), value: value.map(str::to_string), json: None }
+}
+
+/// A change to a value that isn't text: kept as JSON too.
+fn typed_change(scope: Scope, key: &str, json: serde_json::Value) -> VariableChange {
+    VariableChange { scope, key: key.into(), value: Some(json.to_string()), json: Some(json) }
 }
 
 #[test]
@@ -105,8 +111,8 @@ fn console_and_variables() {
         out.variables,
         [
             change(Scope::Environment, "token", Some("abc")),
-            change(Scope::Environment, "count", Some("5")),
-            change(Scope::Environment, "obj", Some(r#"{"x":1}"#)),
+            typed_change(Scope::Environment, "count", serde_json::json!(5)),
+            typed_change(Scope::Environment, "obj", serde_json::json!({ "x": 1 })),
             change(Scope::Collection, "ver", Some("v3")),
             change(Scope::Globals, "g", None),
             change(Scope::Local, "local", Some("yes")),
@@ -145,7 +151,7 @@ fn variable_precedence_and_helpers() {
             "layer0 7",
             "layer2-x-{{only3}} Get user prerequest",
             "36 true",
-            "undefined 0 1 users/get.yaml"
+            "function 0 1 users/get.yaml"
         ]
     );
 
@@ -707,6 +713,204 @@ fn legacy_postman_api() {
 }
 
 #[test]
+fn legacy_sandbox_globals() {
+    let mut input = post(200, "OK", "{}");
+    input.cookies = vec![ScriptCookie {
+        name: "sid".into(),
+        value: "abc".into(),
+        domain: "api.test".into(),
+        path: "/".into(),
+        expires: None,
+        secure: false,
+        http_only: true,
+    }];
+    input.request.mode = "urlencoded".into();
+    input.request.form = vec![ScriptField::text("a", "1"), ScriptField::text("a", "2"), ScriptField::text("b", "x")];
+    input.variables.environment.insert("e".into(), "1".into());
+    input.variables.globals.insert("g".into(), "2".into());
+    input.request.description = "Gets a user".into();
+    let out = run_ok(
+        r#"
+        console.log(request.name, request.description === pm.request.description, request.description);
+        console.log(request.method, request.url, request.headers.Accept, JSON.stringify(request.data));
+        console.log(postman.getResponseCookie('sid').value, responseCookies[0].name, responseCode.code, responseCode.name);
+        // The legacy setters store text (but 0 as it is), and update the `environment` and `globals` objects.
+        postman.setEnvironmentVariable('obj', { a: 1 });
+        postman.setEnvironmentVariable('zero', 0);
+        postman.clearEnvironmentVariable('e');
+        postman.clearGlobalVariables();
+        console.log(environment.obj, environment.zero, 'e' in environment, Object.keys(globals).length, typeof pm.environment.get('zero'));
+        tests['passes'] = 1;
+        tests['fails'] = 0;
+        "#,
+        &input,
+    );
+    assert_eq!(
+        logs(&out),
+        [
+            "Get user true Gets a user",
+            r#"GET https://api.test/users?page=1#top application/json {"a":["1","2"],"b":"x"}"#,
+            "abc sid 200 OK",
+            "[object Object] 0 false 0 number",
+        ]
+    );
+    assert_eq!(
+        out.tests.iter().map(|t| (t.name.as_str(), t.passed, t.error.as_deref())).collect::<Vec<_>>(),
+        [("passes", true, None), ("fails", false, Some("expected 0 to be truthy"))]
+    );
+    // Before the response, there is no getResponseCookie (as in Postman).
+    assert_eq!(
+        logs(&run_ok("console.log(typeof postman.getResponseCookie, typeof responseBody);", &pre())),
+        ["undefined undefined"]
+    );
+}
+
+#[test]
+fn values_that_are_not_text_keep_their_type_between_scripts() {
+    let first = run_ok(
+        r#"
+        pm.environment.set('n', 5);
+        pm.collectionVariables.set('ids', [1, 2, 3]);
+        pm.globals.set('flag', true);
+        pm.variables.set('obj', { a: { b: 1 } });
+        pm.environment.set('text', 'five');
+        pm.environment.set('nan', NaN);
+        "#,
+        &pre(),
+    );
+    let mut input = pre();
+    for change in &first.variables {
+        input.variables.apply(change);
+    }
+    // `{{name}}` and kept values use the text.
+    assert_eq!(input.variables.collection["ids"], "[1,2,3]");
+    let source = r#"
+        const ids = pm.collectionVariables.get('ids');
+        console.log(typeof pm.environment.get('n'), ids.shift(), ids.length, pm.globals.get('flag') === true);
+        console.log(pm.variables.get('obj').a.b, pm.environment.get('text'), pm.environment.get('nan'));
+        console.log(pm.variables.replaceIn('{{ids}} {{n}}'));
+    "#;
+    // (The array itself, as in Postman: changing it changes the variable for this script.)
+    assert_eq!(logs(&run_ok(source, &input)), ["number 1 2 true", "1 five NaN", "[2,3] 5"]);
+    // Changed since (by a person, say): the new text it is.
+    input.variables.environment.insert("n".into(), "6".into());
+    assert_eq!(logs(&run_ok("console.log(typeof pm.environment.get('n'));", &input)), ["string"]);
+    // Unset: gone from both.
+    input.variables.apply(&change(Scope::Collection, "ids", None));
+    assert!(!input.variables.typed.contains_key("collection:ids"));
+}
+
+#[test]
+fn values_nested_too_deep_for_json_travel_as_text() {
+    // The results are read with serde_json, which stops at 128 levels: a deeper value
+    // must not lose the script's tests and other changes.
+    let out = run_ok(
+        r#"
+        let deep = [];
+        for (let i = 0, at = deep; i < 200; i++) at.push((at = []));
+        pm.environment.set('deep', deep);
+        pm.environment.set('ok', [[1]]);
+        pm.test('runs', () => {});
+        "#,
+        &pre(),
+    );
+    assert_eq!(out.tests.len(), 1);
+    let deep = out.variables.iter().find(|c| c.key == "deep").unwrap();
+    assert!(deep.json.is_none() && deep.value.as_deref().is_some_and(|v| v.starts_with("[[[[")));
+    let ok = out.variables.iter().find(|c| c.key == "ok").unwrap();
+    assert_eq!(ok.json, Some(serde_json::json!([[1]])));
+}
+
+#[test]
+fn request_bodies_and_path_variables() {
+    let mut input = pre();
+    input.request.url = "https://api.test/users/:id/posts".into();
+    input.request.path_variables = vec![ScriptHeader::new("id", "7")];
+    input.request.mode = "urlencoded".into();
+    input.request.form = vec![ScriptField::text("a", "1")];
+    let out = run_ok(
+        r#"
+        const body = pm.request.body;
+        console.log(body.mode, body.raw, body.urlencoded.get('a'), body.formdata, body.toString(), body.isEmpty());
+        body.urlencoded.add({ key: 'b', value: 2 });
+        body.urlencoded.upsert({ key: 'a', value: 'one' });
+        console.log(body.toString(), JSON.stringify(body.toJSON()));
+        console.log(pm.request.url.variables.get('id'), pm.request.url.getPath(), pm.request.url.getPath(true));
+        pm.request.url.variables.upsert({ key: 'id', value: 8 });
+        "#,
+        &input,
+    );
+    assert_eq!(
+        logs(&out),
+        [
+            "urlencoded undefined 1 undefined a=1 false",
+            r#"a=one&b=2 {"mode":"urlencoded","urlencoded":[{"key":"a","value":"one","type":"text"},{"key":"b","value":"2","type":"text"}]}"#,
+            "7 /users/7/posts /users/:id/posts",
+        ]
+    );
+    let request = out.request.unwrap();
+    assert_eq!(request.form, [ScriptField::text("a", "one"), ScriptField::text("b", "2")]);
+    assert_eq!(request.path_variables, [ScriptHeader::new("id", "8")]);
+
+    // Switching modes, and form-data files.
+    input.request.mode = "formdata".into();
+    input.request.form = vec![ScriptField::file("photo", "a.png")];
+    let out = run_ok(
+        r#"
+        const f = pm.request.body.formdata.one('photo');
+        console.log(f.type, f.src, pm.request.body.urlencoded);
+        pm.request.body.update({ mode: 'raw', raw: '{"x":1}' });
+        console.log(pm.request.body.mode, pm.request.body.raw, pm.request.body.formdata);
+        "#,
+        &input,
+    );
+    assert_eq!(logs(&out), ["file a.png undefined", r#"raw {"x":1} undefined"#]);
+    let request = out.request.unwrap();
+    assert_eq!((request.mode.as_str(), request.body.as_str(), request.form.len()), ("raw", r#"{"x":1}"#, 0));
+}
+
+#[test]
+fn execution_location_and_response_details() {
+    let mut input = post(201, "Created", r#"{"id": 1}"#);
+    input.info.location = vec!["Shop".into(), "Users".into(), "Get user".into()];
+    input.info.current = "Users".into();
+    input
+        .response
+        .as_mut()
+        .unwrap()
+        .headers
+        .push(ScriptHeader::new("Content-Disposition", "attachment; filename=\"u.json\""));
+    input.variables.data.insert("row".into(), serde_json::json!(1));
+    let out = run_ok(
+        r#"
+        console.log(JSON.stringify(pm.execution.location), pm.execution.location.current);
+        console.log(JSON.stringify(pm.response.details()), pm.response.size().body, pm.response.size().total > 9);
+        const info = pm.response.contentInfo();
+        console.log(info.mimeType, info.mimeFormat, info.charset, info.fileName);
+        pm.iterationData.set('row', 2);
+        console.log(pm.iterationData.get('row'), pm.response.stream.toString() === pm.response.text());
+        const name = (value) => {
+            pm.response.headers.upsert({ key: 'Content-Disposition', value });
+            return pm.response.contentInfo().fileName;
+        };
+        console.log(name('attachment; filename="100%.txt"'), name("attachment; filename*=UTF-8''r%C3%A9sum%C3%A9.pdf"));
+        "#,
+        &input,
+    );
+    assert_eq!(
+        logs(&out),
+        [
+            r#"["Shop","Users","Get user"] Users"#,
+            r#"{"code":201,"name":"Created","detail":"Created"} 9 true"#,
+            "application json utf-8 u.json",
+            "2 true",
+            "100%.txt résumé.pdf",
+        ]
+    );
+    assert!(out.variables.is_empty(), "iteration data changes are not kept: {:?}", out.variables);
+}
+
+#[test]
 fn top_level_return_and_strictness() {
     let out = run_ok("undeclared = 1; if (undeclared) return; console.log('not reached');", &pre());
     assert!(out.console.is_empty());
@@ -847,7 +1051,150 @@ fn json_schema_assertion() {
     let error = out.tests[0].error.clone().unwrap();
     assert!(!out.tests[0].passed);
     assert!(
-        error.contains("body/id must be integer") && error.contains("must have required property 'name'"),
+        error.starts_with("expected data to satisfy schema but found following errors: \n")
+            && error.contains("data/id must be integer")
+            && error.contains("must have required property 'name'"),
         "{error}"
     );
+}
+
+#[test]
+fn chai_forms_postman_scripts_use() {
+    // Each line is a passing assertion in Postman (chai 4 and chai-postman).
+    let cases = r#"
+        pm.expect(pm.response.code).to.be.oneOf([200, 201]);
+        pm.expect(pm.response.responseTime).to.be.below(200);
+        pm.expect({ a: 1, b: 2 }).to.include({ a: 1 });
+        pm.expect({ a: 1, b: 2 }).to.have.all.keys('a', 'b');
+        pm.expect({ a: 1, b: 2 }).to.have.any.keys('a', 'c');
+        pm.expect({ a: 1, b: 2 }).to.not.have.any.keys('c', 'd');
+        pm.expect({ a: 1, b: 2 }).to.be.an('object').that.has.all.keys('a', 'b');
+        pm.expect({ a: 1, b: 2 }).to.include.all.keys('a');
+        pm.expect('Postman').to.have.lengthOf(7);
+        pm.expect([1, 2, 3]).to.have.members([2, 1, 3]);
+        pm.expect([1, 2, 3]).to.include.members([1, 2]);
+        pm.expect([1, 2, 3]).to.have.ordered.members([1, 2, 3]);
+        pm.expect([{ a: 1 }]).to.deep.include.members([{ a: 1 }]);
+        pm.expect([{ a: 1 }, { b: 2 }]).to.deep.include({ a: 1 });
+        pm.expect({ a: { b: [5] } }).to.have.nested.property('a.b[0]', 5);
+        pm.expect({ a: { b: 1 } }).to.nested.include({ 'a.b': 1 });
+        pm.expect({ a: { b: 1 } }).to.have.deep.property('a', { b: 1 });
+        pm.expect({ a: { b: 1 } }).to.deep.equal({ a: { b: 1 } });
+        pm.expect([]).to.be.an('array').that.is.empty;
+        pm.expect([1, 2]).to.be.an('array').that.includes(1);
+        pm.expect([1, 2]).to.have.lengthOf.at.least(1);
+        pm.expect('abc').to.have.lengthOf.above(2);
+        pm.expect(5).to.be.above(2).and.below(10);
+        pm.expect(1).to.be.within(0, 2);
+        pm.expect(1.5).to.be.closeTo(1, 0.6);
+        pm.expect('foo').to.have.string('oo');
+        pm.expect('2020-01-31').to.match(/^\d{4}-\d{2}-\d{2}$/);
+        pm.expect({ a: 'x' }).to.have.property('a').that.is.a('string');
+        pm.expect({ a: 1 }).to.have.own.property('a');
+        pm.expect({ a: 1 }).to.have.ownPropertyDescriptor('a');
+        pm.expect(Object.freeze({})).to.be.frozen;
+        pm.expect(Object.seal({})).to.be.sealed;
+        pm.expect({}).to.be.extensible;
+        pm.expect({ go() {} }).to.respondTo('go');
+        pm.expect(Array).itself.to.respondTo('isArray');
+        pm.expect((function () { return arguments; })()).to.be.arguments;
+        pm.expect(() => { throw new TypeError('bad thing'); }).to.throw(TypeError, 'bad');
+        pm.expect(() => {}).to.not.throw();
+        pm.expect(NaN).to.be.NaN;
+        pm.expect(1).to.be.finite;
+        pm.expect(undefined).to.not.exist;
+        pm.expect('x').to.not.be.undefined;
+        pm.expect([1, 2]).to.be.instanceOf(Array);
+        pm.expect(2).to.satisfy((n) => n % 2 === 0);
+        pm.expect(new Set([1])).to.include(1);
+        pm.expect(new Map([['k', 1]])).to.have.any.keys('k');
+        const box = { n: 1 };
+        pm.expect(() => { box.n += 2; }).to.change(box, 'n');
+        pm.expect(() => { box.n += 2; }).to.increase(box, 'n').by(2);
+        pm.expect(() => { box.n -= 1; }).to.decrease(box, 'n');
+        pm.expect({ a: 1 }).to.be.ok;
+        pm.expect(true).to.be.true;
+        pm.expect(null).to.be.null;
+        pm.expect('a').to.be.oneOf(['a', 'b']);
+        pm.expect([1, 2]).to.include.oneOf([2, 3]);
+        pm.expect('Postman').to.contain.oneOf(['man', 'x']);
+        pm.expect({ a: 1 }).to.not.be.empty;
+        pm.expect({ a: 1, b: 2 }).to.have.keys(['a', 'b']);
+        pm.expect([1, [2]]).to.deep.equal([1, [2]]);
+        pm.expect(pm.response).to.have.status(200);
+        pm.expect(pm.response).to.be.ok;
+        pm.response.to.have.statusCode(200);
+        pm.response.to.have.statusReason('OK');
+        pm.response.to.have.statusCodeClass(2);
+        pm.response.to.be.success;
+        pm.response.to.be.json;
+        pm.response.to.have.responseTime.below(1000);
+        pm.response.to.have.responseSize.above(0);
+        pm.response.to.have.header('content-type');
+        pm.response.to.be.a.postmanResponse;
+        pm.response.to.not.be.a.postmanRequest;
+        pm.request.to.be.a.postmanRequest;
+        pm.request.to.have.header('Accept', 'application/json');
+        pm.expect({ a: 1 }).to.have.jsonSchema({ type: 'object', required: ['a'] });
+        pm.expect('x').to.not.be.jsonSchema({ type: 'number' });
+        pm.expect([1, 2]).to.be.an('array').which.has.lengthOf(2).and.does.not.include(3).but.still.is.not.empty;
+        pm.expect([1, 2]).to.have.been.with.same.members([2, 1]).also.at.of.length(2);
+        pm.expect(pm.expect(5)._obj).to.equal(5);
+    "#;
+    let source: String = cases
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .enumerate()
+        .map(|(i, line)| {
+            if line.starts_with("pm.") {
+                format!("pm.test({:?}, () => {{ {line} }});\n", format!("{i}: {line}"))
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect();
+    let out = run_ok(&source, &post(200, "OK", r#"{"id": 1}"#));
+    let failed: Vec<String> =
+        out.tests.iter().filter(|t| !t.passed).map(|t| format!("{} -> {:?}", t.name, t.error)).collect();
+    assert!(failed.is_empty(), "{failed:#?}");
+    assert!(out.tests.len() > 70);
+}
+
+#[test]
+fn chai_typos_and_more_assertions_fail_clearly() {
+    let input = post(200, "OK", "{}");
+    // A property no assertion has fails, as in Postman, instead of passing silently.
+    assert_eq!(
+        failure("pm.expect(true).to.be.ture;", &input),
+        "Error: Invalid Chai property: ture. Did you mean \"true\"?"
+    );
+    assert_eq!(failure("pm.response.to.be.okay;", &input), "Error: Invalid Chai property: okay. Did you mean \"ok\"?");
+    assert_eq!(failure("pm.expect(1).to.be.zzzzzzzz;", &input), "Error: Invalid Chai property: zzzzzzzz");
+    assert_eq!(failure("pm.expect({}).to.be.frozen;", &input), "expected {} to be frozen");
+    assert_eq!(failure("pm.expect(Object.freeze({})).to.not.be.frozen;", &input), "expected {} to not be frozen");
+    assert_eq!(failure("pm.expect([]).to.be.arguments;", &input), "expected [] to be arguments but got array");
+    assert_eq!(failure("pm.expect({}).to.respondTo('go');", &input), "expected {} to respond to 'go'");
+    let box_ = "const b = { n: 1 };";
+    assert_eq!(failure(&format!("{box_} pm.expect(() => {{}}).to.change(b, 'n');"), &input), "expected .n to change");
+    assert_eq!(
+        failure(&format!("{box_} pm.expect(() => {{ b.n++; }}).to.increase(b, 'n').by(2);"), &input),
+        "expected .n to increase by 2"
+    );
+    assert_eq!(
+        failure("pm.expect({ a: { b: 1 } }).to.nested.include({ 'a.b': 2 });", &input),
+        "expected { a: { b: 1 } } to nested include { 'a.b': 2 }"
+    );
+    assert_eq!(failure("pm.expect.fail('nope');", &input), "nope");
+    assert_eq!(
+        failure("pm.expect({ a: 1 }).to.have.status(200);", &input),
+        "expecting a postman response object but got { a: 1 }"
+    );
+    assert_eq!(
+        failure("pm.expect({}).to.have.header('x');", &input),
+        "expecting a postman request or response object but got {}"
+    );
+    // Returning an assertion from a test is fine (it isn't a promise).
+    let out = run_ok("pm.test('t', () => pm.expect(1).to.equal(1));", &input);
+    assert!(out.tests[0].passed, "{:?}", out.tests);
 }

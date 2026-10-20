@@ -25,7 +25,7 @@ import {
   syntaxHighlighting,
 } from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
-import { Compartment, EditorState, type Extension, Prec, StateEffect } from "@codemirror/state";
+import { Compartment, EditorState, type Extension, Prec, StateEffect, StateField, type Text } from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
@@ -38,6 +38,7 @@ import {
   placeholder as cmPlaceholder,
   ViewPlugin,
   type ViewUpdate,
+  WidgetType,
 } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
 
@@ -93,6 +94,108 @@ function languageExtension(lang: EditorLanguage): Extension {
       return StreamLanguage.define(LEGACY_MODES[lang]);
   }
 }
+
+// ---- very long lines --------------------------------------------------------------
+// A browser lays out a line as one piece: a single line of megabytes (an image as base64 in a
+// JSON response) takes WebKit about a minute to draw, and every time the editor is shown again.
+// Such a line keeps all its text in the document (copying, selecting and searching see all of
+// it), but only its start and end are drawn, with a marker that shows more on request.
+
+/** Lines longer than this are shortened. */
+export const LONG_LINE = 10_000;
+/** What a shortened line shows of its start and end, and how much more each "Show more" adds. */
+const KEEP_START = 1_000;
+const KEEP_END = 80;
+const SHOW_MORE = 50_000;
+
+/** "Show more" on the line starting at `from`. */
+export const showMore = StateEffect.define<number>();
+
+class HiddenText extends WidgetType {
+  constructor(
+    readonly hidden: number,
+    readonly lineFrom: number,
+  ) {
+    super();
+  }
+  eq(other: HiddenText) {
+    return other.hidden === this.hidden && other.lineFrom === this.lineFrom;
+  }
+  toDOM(view: EditorView) {
+    const wrap = document.createElement("span");
+    wrap.className = "zv-hidden-text";
+    wrap.textContent = `… ${hiddenSize(this.hidden)} more `;
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "zv-show-more";
+    more.textContent = "Show more";
+    more.title = "Draw more of this line (very long lines are slow to draw; Copy and Save have all of it)";
+    more.addEventListener("mousedown", (e) => e.preventDefault());
+    more.addEventListener("click", () => view.dispatch({ effects: showMore.of(this.lineFrom) }));
+    wrap.append(more);
+    return wrap;
+  }
+  ignoreEvent() {
+    return true;
+  }
+}
+
+function hiddenSize(chars: number): string {
+  if (chars < 10_000) return `${chars.toLocaleString()} characters`;
+  const mb = chars / (1024 * 1024);
+  return mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.round(chars / 1024)} KB`;
+}
+
+type LongLines = { shown: Map<number, number>; decorations: DecorationSet };
+
+/** Decorations shortening the long lines among lines `first` to `last` (1-based), in order. */
+function shortenRange(doc: Text, first: number, last: number, shown: Map<number, number>) {
+  const ranges = [];
+  for (let n = first; n <= last; n++) {
+    const line = doc.line(n);
+    if (line.length <= LONG_LINE) continue;
+    const start = line.from + Math.min(line.length, KEEP_START + (shown.get(line.from) ?? 0));
+    const end = line.to - KEEP_END;
+    if (end - start < KEEP_START) continue;
+    ranges.push(Decoration.replace({ widget: new HiddenText(end - start, line.from) }).range(start, end));
+  }
+  return ranges;
+}
+
+function shortenLines(doc: Text, shown: Map<number, number>): DecorationSet {
+  // Most documents have no long line: skip the walk when even the whole text is short.
+  return doc.length > LONG_LINE ? Decoration.set(shortenRange(doc, 1, doc.lines, shown)) : Decoration.none;
+}
+
+export const longLines = StateField.define<LongLines>({
+  create: (state) => ({ shown: new Map(), decorations: shortenLines(state.doc, new Map()) }),
+  update(value, tr) {
+    const more = tr.effects.filter((e) => e.is(showMore));
+    if (!tr.docChanged && !more.length) return value;
+    // Keep each line's "Show more" through edits (by where the line starts now).
+    let shown = tr.docChanged ? new Map([...value.shown].map(([from, n]) => [tr.changes.mapPos(from), n])) : value.shown;
+    if (more.length) {
+      shown = new Map(shown);
+      for (const e of more) shown.set(e.value, (shown.get(e.value) ?? 0) + SHOW_MORE);
+      return { shown, decorations: shortenLines(tr.state.doc, shown) };
+    }
+    // Typing: look again only at the lines the change touched, not the whole document.
+    const doc = tr.state.doc;
+    let decorations = value.decorations.map(tr.changes);
+    tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+      const first = doc.lineAt(fromB);
+      const last = doc.lineAt(toB);
+      decorations = decorations.update({
+        filterFrom: first.from,
+        filterTo: last.to,
+        filter: () => false,
+        add: shortenRange(doc, first.number, last.number, shown),
+      });
+    });
+    return { shown, decorations };
+  },
+  provide: (field) => EditorView.decorations.from(field, (v) => v.decorations),
+});
 
 // ---- {{variable}} highlighting ------------------------------------------------
 
@@ -205,6 +308,7 @@ export function CodeEditor({
       highlightSelectionMatches(),
       search({ top: true }),
       syntaxHighlighting(highlight),
+      longLines,
       // ⌘/Ctrl+Enter submits. An editor with its own onSubmit owns the shortcut: stop it reaching the
       // app-wide ⌘Enter handler, which would send the request a second time (or reconnect a WebSocket).
       Prec.highest(

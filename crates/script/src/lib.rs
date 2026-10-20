@@ -95,6 +95,48 @@ pub struct ScriptRequest {
     pub headers: Vec<ScriptHeader>,
     /// Raw body text (`pm.request.body.raw`).
     pub body: String,
+    /// Postman's body mode (`pm.request.body.mode`): `raw`, `urlencoded`, `formdata`,
+    /// `file` or `graphql`; empty for no body (`raw` when there is body text).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mode: String,
+    /// The enabled fields of a `urlencoded` or `formdata` body.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub form: Vec<ScriptField>,
+    /// The URL's `:name` path variables (`pm.request.url.variables`).
+    #[serde(default, rename = "pathVariables", skip_serializing_if = "Vec::is_empty")]
+    pub path_variables: Vec<ScriptHeader>,
+    /// The request's docs (`pm.request.description`), read-only.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+}
+
+/// A field of a form body (`pm.request.body.urlencoded`, `.formdata`).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ScriptField {
+    pub key: String,
+    /// The text, for `text` fields.
+    #[serde(default)]
+    pub value: String,
+    /// `text` or `file` (form-data only).
+    #[serde(rename = "type", default)]
+    pub kind: String,
+    /// The file's path, for `file` fields.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub src: String,
+}
+
+impl ScriptField {
+    pub fn text(key: impl Into<String>, value: impl Into<String>) -> Self {
+        Self { key: key.into(), value: value.into(), kind: "text".into(), src: String::new() }
+    }
+
+    pub fn file(key: impl Into<String>, src: impl Into<String>) -> Self {
+        Self { key: key.into(), value: String::new(), kind: "file".into(), src: src.into() }
+    }
+
+    pub fn is_file(&self) -> bool {
+        self.kind == "file"
+    }
 }
 
 /// The response (`pm.response`), for post-response scripts.
@@ -142,6 +184,12 @@ pub struct Variables {
     /// Workspace variables (`pm.collectionVariables`).
     pub collection: BTreeMap<String, String>,
     pub globals: BTreeMap<String, String>,
+    /// Values scripts set that are not text (numbers, booleans, arrays, objects), by
+    /// `scope:key`. Later scripts of the same send or run get them back as they were set,
+    /// as in Postman; `{{name}}` and kept values use the text. A value is only given back
+    /// while its text is unchanged.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub typed: BTreeMap<String, serde_json::Value>,
 }
 
 impl Variables {
@@ -156,6 +204,11 @@ impl Variables {
         match &change.value {
             Some(value) => map.insert(change.key.clone(), value.clone()),
             None => map.remove(&change.key),
+        };
+        let id = format!("{}:{}", change.scope.name(), change.key);
+        match (&change.value, &change.json) {
+            (Some(_), Some(json)) => self.typed.insert(id, json.clone()),
+            _ => self.typed.remove(&id),
         };
     }
 
@@ -190,6 +243,13 @@ pub struct Info {
     /// 0-based.
     pub iteration: u32,
     pub iteration_count: u32,
+    /// The names of the folders the request is in, outermost first, then the request's
+    /// (`pm.execution.location`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub location: Vec<String>,
+    /// The name of the folder (or request) whose script runs (`pm.execution.location.current`).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub current: String,
 }
 
 /// Everything a script can read.
@@ -218,6 +278,18 @@ pub enum Scope {
     Globals,
 }
 
+impl Scope {
+    /// The name in JSON (`Variables::typed` keys).
+    pub fn name(self) -> &'static str {
+        match self {
+            Scope::Local => "local",
+            Scope::Environment => "environment",
+            Scope::Collection => "collection",
+            Scope::Globals => "globals",
+        }
+    }
+}
+
 /// A `set` or `unset` by a script (the last one per scope and key).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VariableChange {
@@ -225,6 +297,9 @@ pub struct VariableChange {
     pub key: String,
     /// `None`: unset.
     pub value: Option<String>,
+    /// The value as the script set it, when it wasn't text (`value` is its JSON).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub json: Option<serde_json::Value>,
 }
 
 /// One `pm.test`.
@@ -420,7 +495,15 @@ fn execute(
     let bytecode = prelude_bytecode()?;
 
     context.with(|ctx| {
-        let failed = |e: CaughtError| format!("The script API failed to load: {e}");
+        let failed = |e: CaughtError| {
+            let text = e.to_string();
+            // Out of memory (thrown as null) with a limit too small for the API itself.
+            if text.contains("out of memory") || text.contains("Null") {
+                format!("The script ran out of memory (limit {} MB)", mb(limits.memory))
+            } else {
+                format!("The script API failed to load: {text}")
+            }
+        };
         // SAFETY: the bytecode was written by this same engine from our own prelude.
         let prelude = unsafe { Module::load(ctx.clone(), bytecode) }.catch(&ctx).map_err(failed)?;
         let (prelude, done) = prelude.eval().catch(&ctx).map_err(failed)?;
@@ -428,7 +511,8 @@ fn execute(
         let setup: Function = prelude.get("default").catch(&ctx).map_err(failed)?;
         let host: Object = libs::host(&ctx).catch(&ctx).map_err(failed)?;
         host::install(&ctx, &host, app, deadline.clone()).catch(&ctx).map_err(failed)?;
-        let finish: Function = setup.call((input_json, body, host)).catch(&ctx).map_err(failed)?;
+        // The source too: the prelude prepares what it names (SugarJS's methods).
+        let finish: Function = setup.call((input_json, body, host, source)).catch(&ctx).map_err(failed)?;
         let tick: Function = finish.get("tick").catch(&ctx).map_err(failed)?;
 
         let started = Instant::now();

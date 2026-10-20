@@ -49,6 +49,8 @@ test("OpenAPI import asks for the base URL, checks responses and updates from a 
   const tree = page.getByTestId("collection-tree");
   await page.getByRole("button", { name: "New", exact: true }).click();
   await page.getByRole("menuitem", { name: "Import…" }).click();
+  // The window opens on the API catalog.
+  await page.getByRole("tab", { name: "File" }).click();
   await dropFile(page, "spec.json", spec(1));
   // No full server URL: the dialog asks for it, then imports.
   const ask = page.getByTestId("import-base-url");

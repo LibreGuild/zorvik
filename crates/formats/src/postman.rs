@@ -1,7 +1,10 @@
-//! Postman import: collections (schema v2.0 and v2.1) and environment exports.
+//! Postman import: collections (schema v2.0 and v2.1, and v1 exports, converted
+//! first: `v1.rs`), environment and globals exports.
 //!
 //! Postman files are loosely typed, so they are read as `serde_json::Value` and anything
 //! odd becomes a warning instead of failing the whole import.
+
+mod v1;
 
 use std::collections::{HashMap, VecDeque};
 
@@ -15,14 +18,53 @@ use crate::model::{
     RequestKind, RequestSettings, Scripts, Variable,
 };
 
-/// Import a Postman collection (schema v2.0 or v2.1).
+/// Whether `json` is a Postman collection: v2.0, v2.1 or v1, or the Postman API's
+/// `{"collection": …}` wrapper around one.
+pub fn is_collection(json: &Value) -> bool {
+    let Some(obj) = unwrap_api_export(json, "collection").as_object() else { return false };
+    let schema = obj.get("info").and_then(|i| i.get("schema")).and_then(Value::as_str).unwrap_or_default();
+    if schema.contains("getpostman.com") || schema.contains("postman.com/") {
+        return true;
+    }
+    if obj.contains_key("openapi") || obj.contains_key("swagger") {
+        return false;
+    }
+    if let Some(item) = obj.get("item") {
+        // `info` is optional for Postman's own tools; without it the items must look like requests or folders.
+        let item_like = |i: &Value| ["request", "item", "name"].iter().any(|k| i.get(*k).is_some());
+        let items = item.as_array().map(Vec::as_slice).unwrap_or_default();
+        return obj.contains_key("info") || (!items.is_empty() && items.iter().all(item_like));
+    }
+    v1::is_v1(obj) && ["name", "id", "order", "folders"].iter().any(|k| obj.contains_key(*k))
+}
+
+/// Whether `json` is a Postman environment or globals export (or the Postman API's
+/// `{"environment": …}` wrapper around one).
+pub fn is_environment(json: &Value) -> bool {
+    let Some(obj) = unwrap_api_export(json, "environment").as_object() else { return false };
+    let Some(values) = obj.get("values").and_then(Value::as_array) else { return false };
+    // Without a name or scope, the values must look like variables.
+    let variable_like = |v: &Value| v.get("key").is_some_and(Value::is_string);
+    obj.contains_key("name")
+        || obj.contains_key("_postman_variable_scope")
+        || (!values.is_empty() && values.iter().all(variable_like))
+}
+
+/// Import a Postman collection (schema v2.0 or v2.1, or a v1 export).
 pub fn import_postman_collection(json: &str) -> Result<ImportedCollection, ImportError> {
     let root = parse_json(json)?;
     let obj = unwrap_api_export(&root, "collection")
         .as_object()
         .ok_or_else(|| ImportError::new("Not a Postman collection: expected a JSON object."))?;
+    if v1::is_v1(obj) {
+        let converted = v1::to_v2(obj);
+        return import_collection(converted.as_object().unwrap_or(&Map::new()));
+    }
     check_collection_shape(obj)?;
+    import_collection(obj)
+}
 
+fn import_collection(obj: &Map<String, Value>) -> Result<ImportedCollection, ImportError> {
     let mut imp = Importer::default();
     let info = obj.get("info");
     if let Some(schema) = info.and_then(|i| i.get("schema")).and_then(Value::as_str)
@@ -37,19 +79,18 @@ pub fn import_postman_collection(json: &str) -> Result<ImportedCollection, Impor
         Auth::Inherit => Auth::None,
         auth => auth,
     };
-    let settings = settings(obj.get("protocolProfileBehavior"), &RequestSettings::default());
-    let items = imp.items(obj.get("item"), "", &settings);
+    let inherited = Inherited {
+        auth_header: auth_header(&auth, None),
+        ..imp.inherit(obj.get("protocolProfileBehavior"), &Inherited::default(), "Collection")
+    };
+    let items = imp.items(obj.get("item"), "", &inherited);
 
     let mut warnings = imp.warnings;
-    for (api, places) in imp.unsupported {
+    for (note, places) in imp.notes {
         let n = places.len();
         let shown: Vec<&str> = places.iter().take(3).map(String::as_str).collect();
         let more = if n > 3 { ", …" } else { "" };
-        let (s, verb) = if n == 1 { ("", "uses") } else { ("s", "use") };
-        warnings.push(format!(
-            "{n} script{s} {verb} {api}, which Zorvik does not support (it fails when run): {}{more}.",
-            shown.join(", ")
-        ));
+        warnings.push(format!("{}: {}{more}.", note.message(n), shown.join(", ")));
     }
     Ok(ImportedCollection {
         name,
@@ -60,6 +101,7 @@ pub fn import_postman_collection(json: &str) -> Result<ImportedCollection, Impor
         scripts,
         items,
         warnings,
+        docs: description(info.and_then(|i| i.get("description"))),
     })
 }
 
@@ -89,7 +131,8 @@ pub fn import_postman_environment(json: &str) -> Result<Environment, ImportError
             Some(Variable {
                 key: key_of(o)?,
                 value: o.get("value").map(text).unwrap_or_default(),
-                enabled: o.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+                // Postman writes `enabled: false`; some tools write `disabled: true`.
+                enabled: o.get("enabled").and_then(Value::as_bool).unwrap_or(true) && !flag(o.get("disabled")),
                 secret: is_secret(o),
             })
         })
@@ -115,14 +158,7 @@ fn check_collection_shape(obj: &Map<String, Value>) -> Result<(), ImportError> {
     if obj.contains_key("item") {
         return Ok(());
     }
-    let is_array = |k: &str| obj.get(k).is_some_and(Value::is_array);
-    if is_array("requests") || is_array("order") {
-        return Err(ImportError::new(
-            "This is a Postman Collection v1 file, which is not supported. In Postman, export the \
-             collection again as \"Collection v2.1\" and import that file.",
-        ));
-    }
-    if is_array("values") {
+    if obj.get("values").is_some_and(Value::is_array) {
         return Err(ImportError::new(
             "This looks like a Postman environment, not a collection. Import it as an environment instead.",
         ));
@@ -137,11 +173,74 @@ fn check_collection_shape(obj: &Map<String, Value>) -> Result<(), ImportError> {
 const UNSUPPORTED_APIS: &[(&str, &str)] =
     &[("pm.vault", "pm.vault"), ("pm.execution.runRequest", "pm.execution.runRequest")];
 
+/// Postman request settings (`protocolProfileBehavior`) Zorvik doesn't have, with the
+/// value that is Postman's default (anything else gets a warning).
+const UNSUPPORTED_BEHAVIORS: &[(&str, &str)] = &[
+    ("followOriginalHttpMethod", "Zorvik follows redirects like browsers do (a 301, 302 or 303 changes POST to GET)"),
+    ("followAuthorizationHeader", "Zorvik drops the Authorization header when a redirect goes to another site"),
+    ("disableUrlEncoding", "Zorvik always encodes URLs"),
+    ("disableCookies", "cookies follow the cookie jar setting (Settings → Requests)"),
+    ("insecureHTTPParser", "Zorvik always parses responses strictly"),
+    ("tlsPreferServerCiphers", "Zorvik uses its own TLS cipher order"),
+    ("tlsDisabledProtocols", "Zorvik uses TLS 1.2 and 1.3"),
+    ("tlsCipherSelection", "Zorvik uses its own TLS cipher order"),
+    ("disabledSystemHeaders", "Zorvik always sends its default headers unless the request sets them"),
+];
+
+/// Things the import changed or can't do, reported as one warning for all the places.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Note {
+    /// A script uses an API Zorvik doesn't have.
+    UnsupportedApi(&'static str),
+    /// A request had an explicit header that its auth replaces in Postman.
+    ReplacedAuthHeader,
+    /// A GET (…) request had a body, which Postman doesn't send.
+    PrunedBody,
+    /// A `protocolProfileBehavior` setting Zorvik doesn't have (index in UNSUPPORTED_BEHAVIORS).
+    Behavior(usize),
+}
+
+impl Note {
+    fn message(self, n: usize) -> String {
+        let (s, verb) = if n == 1 { ("", "uses") } else { ("s", "use") };
+        match self {
+            Note::UnsupportedApi(api) => {
+                format!("{n} script{s} {verb} {api}, which Zorvik does not support (it fails when run)")
+            }
+            Note::ReplacedAuthHeader => {
+                let (whose, those) = if n == 1 { ("its", "header was") } else { ("their", "headers were") };
+                format!(
+                    "{n} request{s} had {whose} own auth header as well as an auth setting; Postman sends the \
+                     auth setting's header, so the request's {those} turned off"
+                )
+            }
+            Note::PrunedBody => format!(
+                "{n} GET, HEAD, COPY, PURGE or UNLOCK request{s} had a body, which Postman doesn't send \
+                 (\"disableBodyPruning\" was off); the body was kept but set to None"
+            ),
+            Note::Behavior(i) => {
+                let (name, why) = UNSUPPORTED_BEHAVIORS[i];
+                format!("{n} place{s} {verb} the Postman setting \"{name}\", which was not imported ({why})")
+            }
+        }
+    }
+}
+
+/// What requests inherit from their folders and the collection.
+#[derive(Debug, Clone, Default)]
+struct Inherited {
+    settings: RequestSettings,
+    /// Postman's `disableBodyPruning`: GET (…) requests send their body.
+    keep_body: bool,
+    /// The header the nearest auth sets: Postman replaces a request's own header of that name.
+    auth_header: Option<String>,
+}
+
 #[derive(Default)]
 struct Importer {
     warnings: Vec<String>,
-    /// Scripts using unsupported APIs, by API (reported as one warning each).
-    unsupported: Vec<(&'static str, Vec<String>)>,
+    /// Reported as one warning each, with the places.
+    notes: Vec<(Note, Vec<String>)>,
 }
 
 impl Importer {
@@ -149,8 +248,48 @@ impl Importer {
         self.warnings.push(message);
     }
 
+    fn note(&mut self, note: Note, label: &str) {
+        match self.notes.iter_mut().find(|(n, _)| *n == note) {
+            Some((_, places)) if places.last().map(String::as_str) != Some(label) => places.push(label.into()),
+            Some(_) => {}
+            None => self.notes.push((note, vec![label.into()])),
+        }
+    }
+
+    /// Overlay Postman's `protocolProfileBehavior` on what the parents set.
+    fn inherit(&mut self, v: Option<&Value>, parent: &Inherited, label: &str) -> Inherited {
+        let mut out = parent.clone();
+        let Some(p) = v.and_then(Value::as_object) else { return out };
+        let s = &mut out.settings;
+        if let Some(b) = p.get("followRedirects").and_then(Value::as_bool) {
+            s.follow_redirects = Some(b);
+        }
+        if let Some(b) = p.get("strictSSL").and_then(Value::as_bool) {
+            s.verify_tls = Some(b);
+        }
+        if let Some(n) = p.get("maxRedirects").and_then(Value::as_u64) {
+            s.max_redirects = Some(u32::try_from(n).unwrap_or(u32::MAX));
+        }
+        if let Some(b) = p.get("disableBodyPruning").and_then(Value::as_bool) {
+            out.keep_body = b;
+        }
+        for (i, (name, _)) in UNSUPPORTED_BEHAVIORS.iter().enumerate() {
+            let set = match p.get(*name) {
+                Some(Value::Bool(b)) => *b,
+                Some(Value::Array(a)) => !a.is_empty(),
+                Some(Value::Object(o)) => o.values().any(|v| v.as_bool() == Some(true)),
+                Some(Value::String(s)) => !s.trim().is_empty(),
+                _ => false,
+            };
+            if set {
+                self.note(Note::Behavior(i), label);
+            }
+        }
+        out
+    }
+
     /// Convert an `item` list. `parent` is the " / "-joined folder path, used in warnings.
-    fn items(&mut self, v: Option<&Value>, parent: &str, inherited: &RequestSettings) -> Vec<ImportedItem> {
+    fn items(&mut self, v: Option<&Value>, parent: &str, inherited: &Inherited) -> Vec<ImportedItem> {
         let entries = match v {
             Some(Value::Array(list)) => list.as_slice(),
             Some(single @ Value::Object(_)) => std::slice::from_ref(single),
@@ -185,7 +324,7 @@ impl Importer {
         seq: u32,
         name: String,
         parent: &str,
-        inherited: &RequestSettings,
+        inherited: &Inherited,
     ) -> ImportedItem {
         let path = join_path(parent, &name);
         let label = format!("Folder '{path}'");
@@ -194,8 +333,11 @@ impl Importer {
         if obj.get("variable").and_then(Value::as_array).is_some_and(|v| !v.is_empty()) {
             self.warn(format!("{label}: folder variables are not supported and were skipped."));
         }
-        let settings = settings(obj.get("protocolProfileBehavior"), inherited);
-        let children = self.items(obj.get("item"), &path, &settings);
+        let inherited = Inherited {
+            auth_header: auth_header(&auth, inherited.auth_header.clone()),
+            ..self.inherit(obj.get("protocolProfileBehavior"), inherited, &label)
+        };
+        let children = self.items(obj.get("item"), &path, &inherited);
         let docs = description(obj.get("description"));
         ImportedItem::Folder {
             meta: FolderMeta { name, seq, auth, headers: Vec::new(), scripts, docs, openapi: None },
@@ -209,14 +351,15 @@ impl Importer {
         seq: u32,
         name: String,
         parent: &str,
-        inherited: &RequestSettings,
+        inherited: &Inherited,
     ) -> ImportedItem {
         let label = format!("Request '{}'", join_path(parent, &name));
         let scripts = self.scripts(obj, &label);
         let mut req = Request::new(name, RequestKind::Http);
         req.scripts = scripts;
         req.seq = seq;
-        req.settings = settings(obj.get("protocolProfileBehavior"), inherited);
+        let inherited = self.inherit(obj.get("protocolProfileBehavior"), inherited, &label);
+        req.settings = inherited.settings.clone();
         match obj.get("request") {
             Some(Value::String(url)) => req.url = url.trim().to_string(),
             Some(Value::Object(r)) => {
@@ -230,6 +373,23 @@ impl Importer {
                 req.docs = description(r.get("description"));
             }
             _ => {}
+        }
+        // Postman's auth replaces a header of the same name the request sets itself.
+        if let Some(name) = auth_header(&req.auth, inherited.auth_header.clone()) {
+            let mut replaced = false;
+            for h in req.headers.iter_mut().filter(|h| h.enabled && h.key.trim().eq_ignore_ascii_case(&name)) {
+                h.enabled = false;
+                replaced = true;
+            }
+            if replaced {
+                self.note(Note::ReplacedAuthHeader, &label);
+            }
+        }
+        // Postman doesn't send a body with these methods (unless `disableBodyPruning`).
+        let prunes = ["GET", "HEAD", "COPY", "PURGE", "UNLOCK"].contains(&req.method.as_str());
+        if prunes && !inherited.keep_body && req.body.body_type != BodyType::None {
+            req.body.body_type = BodyType::None;
+            self.note(Note::PrunedBody, &label);
         }
         if req.docs.is_empty() {
             req.docs = description(obj.get("description"));
@@ -285,13 +445,7 @@ impl Importer {
             target.push_str(&code);
             for (needle, api) in UNSUPPORTED_APIS {
                 if code.contains(needle) {
-                    match self.unsupported.iter_mut().find(|(a, _)| a == api) {
-                        Some((_, places)) if places.last().map(String::as_str) != Some(label) => {
-                            places.push(label.into())
-                        }
-                        Some(_) => {}
-                        None => self.unsupported.push((api, vec![label.into()])),
-                    }
+                    self.note(Note::UnsupportedApi(api), label);
                 }
             }
         }
@@ -300,9 +454,6 @@ impl Importer {
 
     fn body(&mut self, v: Option<&Value>, headers: &[KeyValue], label: &str) -> Body {
         let Some(b) = v.and_then(Value::as_object) else { return Body::default() };
-        if flag(b.get("disabled")) {
-            return Body::default();
-        }
         let mut body = Body::default();
         match b.get("mode").and_then(Value::as_str).unwrap_or("") {
             "raw" => {
@@ -370,6 +521,10 @@ impl Importer {
             }
             "" | "none" => {}
             other => self.warn(format!("{label}: body mode '{other}' is not supported; imported without a body.")),
+        }
+        // A body Postman doesn't send: kept, but not sent either.
+        if flag(b.get("disabled")) {
+            body.body_type = BodyType::None;
         }
         body
     }
@@ -553,6 +708,14 @@ impl Importer {
             ));
             return Auth::Bearer { token: saved_token, prefix: header_prefix };
         }
+        // A token from a variable (that a script sets): Postman sends just that, so it stays a token.
+        if saved_token.contains("{{") {
+            self.warn(format!(
+                "{label}: OAuth 2.0 sends the access token {saved_token}, as in Postman; it was imported as a Bearer \
+                 token, without the other OAuth 2.0 settings."
+            ));
+            return Auth::Bearer { token: saved_token, prefix: header_prefix };
+        }
 
         let (grant_type, pkce) = match get("grant_type").trim() {
             "client_credentials" => (GrantType::ClientCredentials, true),
@@ -651,20 +814,22 @@ fn join_path(parent: &str, name: &str) -> String {
     if parent.is_empty() { name.to_string() } else { format!("{parent} / {name}") }
 }
 
-/// Overlay Postman `protocolProfileBehavior` on the settings inherited from parents.
-fn settings(v: Option<&Value>, inherited: &RequestSettings) -> RequestSettings {
-    let mut s = inherited.clone();
-    let Some(p) = v.and_then(Value::as_object) else { return s };
-    if let Some(b) = p.get("followRedirects").and_then(Value::as_bool) {
-        s.follow_redirects = Some(b);
+/// The header `auth` sets (`inherited` for `Inherit`); Postman's auth replaces a request
+/// header of that name.
+fn auth_header(auth: &Auth, inherited: Option<String>) -> Option<String> {
+    match auth {
+        Auth::Inherit => inherited,
+        Auth::None => None,
+        // Without a name, Postman adds no header.
+        Auth::ApiKey { key, location: ApiKeyLocation::Header, .. } => {
+            Some(key.trim().to_string()).filter(|k| !k.is_empty())
+        }
+        Auth::ApiKey { .. } => None,
+        Auth::OAuth1(c) if c.location == ApiKeyLocation::Query => None,
+        Auth::AwsSigV4(c) if c.location == ApiKeyLocation::Query => None,
+        Auth::Jwt(c) if c.location == ApiKeyLocation::Query => None,
+        _ => Some("Authorization".into()),
     }
-    if let Some(b) = p.get("strictSSL").and_then(Value::as_bool) {
-        s.verify_tls = Some(b);
-    }
-    if let Some(n) = p.get("maxRedirects").and_then(Value::as_u64) {
-        s.max_redirects = Some(u32::try_from(n).unwrap_or(u32::MAX));
-    }
-    s
 }
 
 /// A `url.query` entry as written in the file (not decoded).
@@ -1325,9 +1490,12 @@ mod tests {
             {"name": "Weird", "request": {"method": "POST", "url": "https://x.test", "body": {"mode": "carrier-pigeon"}}}
             "#,
         ));
-        for r in all_requests(&c.items) {
+        for r in all_requests(&c.items).into_iter().filter(|r| r.name != "Disabled") {
             assert_eq!(r.body, Body::default(), "{}", r.name);
         }
+        // Postman doesn't send a disabled body; it is kept for when it's needed again.
+        let disabled = &request(&c, "Disabled").body;
+        assert_eq!((disabled.body_type, disabled.text.as_str()), (BodyType::None, "{}"));
         assert_eq!(c.warnings.len(), 1);
         assert!(c.warnings[0].contains("'Weird'") && c.warnings[0].contains("carrier-pigeon"));
     }
@@ -1533,7 +1701,11 @@ mod tests {
                 {"key": "authUrl", "value": "https://id.example.com/authorize"},
                 {"key": "redirect_uri", "value": "http://localhost:8080/cb"}]}}},
             {"name": "Saved token", "request": {"url": "https://x.test", "auth": {"type": "oauth2", "oauth2": [
-                {"key": "accessToken", "value": "eyJhbGciOi"}, {"key": "tokenType", "value": "Bearer"}]}}}
+                {"key": "accessToken", "value": "eyJhbGciOi"}, {"key": "tokenType", "value": "Bearer"}]}}},
+            {"name": "Script token", "request": {"url": "https://x.test", "auth": {"type": "oauth2", "oauth2": [
+                {"key": "accessToken", "value": "{{access_token}}"},
+                {"key": "accessTokenUrl", "value": "https://id.example.com/token"},
+                {"key": "grant_type", "value": "client_credentials"}]}}}
             "#,
         ));
         let Auth::OAuth2(pkce) = &request(&c, "PKCE").auth else { panic!("oauth2") };
@@ -1583,7 +1755,13 @@ mod tests {
         assert!(warned("'PKCE'", "resource"));
         assert!(!c.warnings.iter().any(|w| w.contains("ignored")));
         assert!(warned("'Saved token'", "Bearer"));
-        assert_eq!(c.warnings.len(), 3, "{:?}", c.warnings);
+        // A token a script keeps in a variable: Postman sends just that.
+        assert_eq!(
+            request(&c, "Script token").auth,
+            Auth::Bearer { token: "{{access_token}}".into(), prefix: "Bearer".into() }
+        );
+        assert!(warned("'Script token'", "{{access_token}}"));
+        assert_eq!(c.warnings.len(), 4, "{:?}", c.warnings);
     }
 
     #[test]
@@ -1697,6 +1875,98 @@ mod tests {
     }
 
     #[test]
+    fn auth_replaces_the_requests_own_auth_header() {
+        let c = import(&format!(
+            r#"{{"info": {{"name": "T", "schema": "{V21}"}},
+                "auth": {{"type": "bearer", "bearer": [{{"key": "token", "value": "t"}}]}},
+                "item": [
+                {{"name": "Inherits", "request": {{"url": "https://x.test",
+                    "header": [{{"key": "authorization", "value": "Bearer stale"}}, {{"key": "Accept", "value": "*/*"}}]}}}},
+                {{"name": "No auth", "request": {{"url": "https://x.test", "auth": {{"type": "noauth"}},
+                    "header": [{{"key": "Authorization", "value": "Custom x"}}]}}}},
+                {{"name": "Hawk", "request": {{"url": "https://x.test",
+                    "auth": {{"type": "hawk", "hawk": [{{"key": "authId", "value": "a"}}]}},
+                    "header": [{{"key": "Authorization", "value": "Hawk id=\"old\""}}]}}}},
+                {{"name": "Key", "request": {{"url": "https://x.test",
+                    "auth": {{"type": "apikey", "apikey": [{{"key": "key", "value": "X-Key"}}, {{"key": "value", "value": "k"}}]}},
+                    "header": [{{"key": "X-Key", "value": "old"}}, {{"key": "Authorization", "value": "Mine"}}]}}}},
+                {{"name": "Signed URL", "request": {{"url": "https://x.test",
+                    "auth": {{"type": "awsv4", "awsv4": [{{"key": "addAuthDataToQuery", "value": true}}]}},
+                    "header": [{{"key": "Authorization", "value": "Mine"}}]}}}}
+            ]}}"#
+        ));
+        let enabled = |name: &str| -> Vec<String> {
+            request(&c, name).headers.iter().filter(|h| h.enabled).map(|h| h.key.clone()).collect()
+        };
+        assert_eq!(enabled("Inherits"), ["Accept"]);
+        assert_eq!(request(&c, "Inherits").headers[0].value, "Bearer stale");
+        assert_eq!(enabled("No auth"), ["Authorization"]);
+        assert!(enabled("Hawk").is_empty());
+        assert_eq!(enabled("Key"), ["Authorization"]);
+        assert_eq!(enabled("Signed URL"), ["Authorization"]);
+        assert_eq!(c.warnings.len(), 1);
+        assert!(
+            c.warnings[0].starts_with("3 requests had their own auth header as well as an auth setting"),
+            "{}",
+            c.warnings[0]
+        );
+        assert!(c.warnings[0].ends_with("Request 'Inherits', Request 'Hawk', Request 'Key'."), "{}", c.warnings[0]);
+    }
+
+    #[test]
+    fn bodies_postman_does_not_send_are_kept_but_off() {
+        let c = import(&collection(
+            r#"
+            {"name": "Get", "request": {"method": "GET", "url": "https://x.test",
+                "body": {"mode": "raw", "raw": "{\"a\": 1}", "options": {"raw": {"language": "json"}}}}},
+            {"name": "Head", "request": {"method": "head", "url": "https://x.test",
+                "body": {"mode": "urlencoded", "urlencoded": [{"key": "a", "value": "1"}]}}},
+            {"name": "Delete", "request": {"method": "DELETE", "url": "https://x.test", "body": {"mode": "raw", "raw": "x"}}},
+            {"name": "Kept", "protocolProfileBehavior": {"disableBodyPruning": true},
+             "request": {"method": "GET", "url": "https://x.test", "body": {"mode": "raw", "raw": "x"}}},
+            {"name": "Folder", "protocolProfileBehavior": {"disableBodyPruning": true}, "item": [
+                {"name": "Inner", "request": {"method": "GET", "url": "https://x.test", "body": {"mode": "raw", "raw": "x"}}}
+            ]}
+            "#,
+        ));
+        let get = &request(&c, "Get").body;
+        assert_eq!((get.body_type, get.text.as_str()), (BodyType::None, "{\"a\": 1}"));
+        let head = &request(&c, "Head").body;
+        assert_eq!((head.body_type, head.form[0].key.as_str()), (BodyType::None, "a"));
+        for sent in ["Delete", "Kept", "Inner"] {
+            assert_eq!(request(&c, sent).body.body_type, BodyType::Text, "{sent}");
+        }
+        assert_eq!(c.warnings.len(), 1);
+        assert!(
+            c.warnings[0].starts_with("2 GET, HEAD, COPY, PURGE or UNLOCK requests had a body"),
+            "{}",
+            c.warnings[0]
+        );
+    }
+
+    #[test]
+    fn unsupported_request_settings_are_reported() {
+        let c = import(&format!(
+            r#"{{"info": {{"name": "T", "schema": "{V21}"}},
+                "protocolProfileBehavior": {{"disableUrlEncoding": true, "followRedirects": true}},
+                "item": [
+                {{"name": "A", "protocolProfileBehavior": {{"followOriginalHttpMethod": true, "tlsDisabledProtocols": []}},
+                  "request": {{"url": "https://x.test"}}}},
+                {{"name": "B", "protocolProfileBehavior": {{"followOriginalHttpMethod": false, "disableCookies": true}},
+                  "request": {{"url": "https://x.test"}}}}
+            ]}}"#
+        ));
+        assert_eq!(request(&c, "A").settings.follow_redirects, Some(true));
+        let mut warnings = c.warnings.clone();
+        warnings.sort();
+        assert_eq!(warnings.len(), 3, "{warnings:?}");
+        assert!(warnings[0].starts_with("1 place uses the Postman setting \"disableCookies\""), "{}", warnings[0]);
+        assert!(warnings[1].starts_with("1 place uses the Postman setting \"disableUrlEncoding\""), "{}", warnings[1]);
+        assert!(warnings[1].ends_with(": Collection."), "{}", warnings[1]);
+        assert!(warnings[2].contains("\"followOriginalHttpMethod\"") && warnings[2].ends_with(": Request 'A'."));
+    }
+
+    #[test]
     fn odd_entries_are_skipped_with_warnings() {
         let c = import(&collection(
             r#"
@@ -1734,11 +2004,140 @@ mod tests {
     }
 
     #[test]
-    fn v1_collection_is_rejected() {
-        let v1 = r#"{"id": "3b1c...", "name": "Old", "order": ["r1"], "folders": [],
-            "requests": [{"id": "r1", "name": "Ping", "url": "https://x.test", "method": "GET"}]}"#;
-        let err = import_postman_collection(v1).unwrap_err();
-        assert!(err.0.contains("v1") && err.0.contains("Collection v2.1"), "{err}");
+    fn v1_collections_are_converted() {
+        // Folders nest through `folders_order`; root requests follow the folders.
+        let v1 = r#"{"id": "c1", "name": "Old", "description": "From 2016",
+            "order": ["r1"], "folders_order": ["f1"],
+            "folders": [
+                {"id": "f1", "name": "Users", "order": ["r2"], "folders_order": ["f2"],
+                 "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{token}}"}]}},
+                {"id": "f2", "name": "Admin", "order": ["r3"], "folders_order": [], "description": "Admins only"}
+            ],
+            "variables": [{"key": "base", "value": "https://x.test"}],
+            "requests": [
+                {"id": "r1", "name": "Ping", "url": "{{base}}/ping?a=1", "method": "GET",
+                 "headers": "Accept: */*\n// X-Off: 1\n", "dataMode": "params", "data": [],
+                 "queryParams": [{"key": "a", "value": "1", "equals": true},
+                                 {"key": "b", "value": "2", "equals": true, "enabled": false}],
+                 "tests": "tests['ok'] = responseCode.code === 200;", "preRequestScript": "",
+                 "responses": [{"id": "x1", "name": "Pong", "responseCode": {"code": 200, "name": "OK"},
+                                "headers": [{"key": "Content-Type", "value": "text/plain"}], "text": "pong"}]},
+                {"id": "r2", "name": "Create user", "url": "{{base}}/users/:id", "method": "POST",
+                 "pathVariables": {"id": "7"},
+                 "headerData": [{"key": "Content-Type", "value": "application/json"},
+                                {"key": "X-Debug", "value": "1", "enabled": false}],
+                 "dataMode": "raw", "rawModeData": "{\"name\": \"Ann\"}", "dataOptions": {"raw": {"language": "json"}},
+                 "currentHelper": "basicAuth", "helperAttributes": {"id": "basic", "username": "u", "password": "p"},
+                 "events": [{"listen": "prerequest", "script": {"exec": ["pm.variables.set('n', 1);"]}}]},
+                {"id": "r3", "name": "Upload", "url": "{{base}}/files", "method": "POST",
+                 "dataMode": "params", "data": [{"key": "file", "value": "a.txt", "type": "file", "enabled": true},
+                                                {"key": "note", "value": "hi", "type": "text", "enabled": false}],
+                 "currentHelper": "hawkAuth", "helperAttributes": "{\"hawk_id\": \"id1\", \"hawk_key\": \"k\", \"algorithm\": \"sha1\"}"},
+                {"id": "r4", "name": "Orphan", "url": "{{base}}/form", "method": "PUT",
+                 "dataMode": "urlencoded", "data": [{"key": "q", "value": "1", "type": "text"}]},
+                {"id": "r5", "name": "Query", "url": "{{base}}/graphql", "method": "POST",
+                 "dataMode": "graphql", "graphqlModeData": {"query": "{ me { id } }", "variables": "{}"}}
+            ]}"#;
+        assert!(is_collection(&serde_json::from_str(v1).unwrap()));
+        let c = import(v1);
+        assert_eq!(c.name, "Old");
+        assert!(c.warnings.is_empty(), "{:?}", c.warnings);
+        assert_eq!(names(&c.items), ["1 Users/", "2 Ping", "3 Orphan", "4 Query"]);
+        let (users, children) = folder(&c.items, "Users");
+        assert_eq!(names(children), ["1 Admin/", "2 Create user"]);
+        assert!(matches!(&users.auth, Auth::Bearer { token, .. } if token == "{{token}}"));
+        assert_eq!(folder(children, "Admin").0.docs, "Admins only");
+        assert_eq!(c.workspace_variables[0].key, "base");
+
+        let ping = request(&c, "Ping");
+        assert_eq!(ping.url, "{{base}}/ping?a=1");
+        assert_eq!(ping.disabled_params[0].key, "b");
+        assert_eq!(
+            ping.headers,
+            [KeyValue::new("Accept", "*/*"), KeyValue { enabled: false, ..KeyValue::new("X-Off", "1") }]
+        );
+        assert_eq!(ping.scripts.post_response, "tests['ok'] = responseCode.code === 200;");
+        assert_eq!(
+            (ping.examples[0].name.as_str(), ping.examples[0].status, ping.examples[0].body.as_str()),
+            ("Pong", 200, "pong")
+        );
+
+        let create = request(&c, "Create user");
+        assert_eq!(create.path_params[0].key, "id");
+        assert_eq!(create.path_params[0].value, "7");
+        assert!(!create.headers[1].enabled);
+        assert_eq!((create.body.body_type, create.body.text.as_str()), (BodyType::Json, "{\"name\": \"Ann\"}"));
+        assert!(matches!(&create.auth, Auth::Basic { username, password } if username == "u" && password == "p"));
+        assert_eq!(create.scripts.pre_request, "pm.variables.set('n', 1);");
+
+        let upload = request(&c, "Upload");
+        assert_eq!(upload.body.multipart[0].value, "a.txt");
+        assert!(upload.body.multipart[0].file);
+        assert!(!upload.body.multipart[1].enabled);
+        assert!(matches!(&upload.auth, Auth::Hawk(h) if h.id == "id1" && h.algorithm == HawkAlgorithm::Sha1));
+        assert_eq!(request(&c, "Orphan").body.form[0].key, "q");
+        assert_eq!(request(&c, "Query").body.graphql.query, "{ me { id } }");
+    }
+
+    #[test]
+    fn v1_folders_listing_themselves_end() {
+        let v1 = r#"{"name": "Loop", "folders": [{"id": "f", "name": "F", "order": [], "folders_order": ["f"]}],
+            "order": [], "requests": []}"#;
+        assert_eq!(names(&import(v1).items), ["1 F/"]);
+    }
+
+    #[test]
+    fn v1_responses_listed_again_are_taken_once() {
+        // A 1 MB example named 2000 times must not become 2 GB of examples.
+        let mut order: Vec<Value> = (0..2000).map(|_| json!("x1")).collect();
+        order.extend([json!("x2"), json!("nope")]);
+        let big = "x".repeat(1 << 20);
+        let v1 = json!({"name": "Old", "order": ["r1"], "requests": [
+            {"id": "r1", "name": "Big", "url": "https://x.test", "method": "GET",
+             "responses": [{"id": "x1", "name": "One", "text": big}, {"id": "x2", "name": "Two"}],
+             "responses_order": order},
+            {"name": "No id", "url": "https://x.test/2", "method": "GET"}
+        ]});
+        let c = import(&v1.to_string());
+        let examples: Vec<&str> = request(&c, "Big").examples.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(examples, ["One", "Two"]);
+        // A request without an id to list it by is kept too.
+        assert_eq!(names(&c.items), ["1 Big", "2 No id"]);
+    }
+
+    #[test]
+    fn detects_postman_files() {
+        let yes = [
+            format!(r#"{{"info": {{"name": "A", "schema": "{V21}"}}, "item": []}}"#),
+            r#"{"info": {"name": "No schema"}, "item": []}"#.to_string(),
+            r#"{"name": "No info", "item": [{"name": "R", "request": "https://x.test"}]}"#.to_string(),
+            r#"{"collection": {"info": {"name": "API"}, "item": []}}"#.to_string(),
+            r#"{"name": "Old", "order": [], "requests": []}"#.to_string(),
+        ];
+        for text in &yes {
+            assert!(is_collection(&serde_json::from_str(text).unwrap()), "{text}");
+        }
+        let envs = [
+            r#"{"name": "Dev", "values": []}"#,
+            r#"{"values": [{"key": "a", "value": "1"}], "_postman_variable_scope": "globals"}"#,
+            r#"{"environment": {"name": "Dev", "values": []}}"#,
+            r#"{"values": [{"key": "a", "value": "1"}]}"#,
+        ];
+        for text in envs {
+            let json = serde_json::from_str(text).unwrap();
+            assert!(is_environment(&json) && !is_collection(&json), "{text}");
+        }
+        let no = [
+            r#"{"openapi": "3.0.0", "item": []}"#,
+            r#"{"item": [1, 2]}"#,
+            r#"{"item": []}"#,
+            r#"{"values": [1]}"#,
+            r#"[]"#,
+        ];
+        for text in no {
+            let json = serde_json::from_str(text).unwrap();
+            assert!(!is_collection(&json) && !is_environment(&json), "{text}");
+        }
     }
 
     #[test]
@@ -1770,6 +2169,7 @@ mod tests {
                     {"key": "baseUrl", "value": "https://staging.example.com", "type": "default", "enabled": true},
                     {"key": "token", "value": "abc", "type": "secret", "enabled": true},
                     {"key": "old", "value": "x", "enabled": false},
+                    {"key": "also old", "value": "y", "disabled": true},
                     {"key": "port", "value": 8080},
                     {"key": "", "value": "dropped"},
                     "garbage"
@@ -1791,6 +2191,7 @@ mod tests {
                 },
                 Variable { key: "token".into(), value: "abc".into(), enabled: true, secret: true },
                 Variable { key: "old".into(), value: "x".into(), enabled: false, secret: false },
+                Variable { key: "also old".into(), value: "y".into(), enabled: false, secret: false },
                 Variable { key: "port".into(), value: "8080".into(), enabled: true, secret: false },
             ]
         );
@@ -1818,7 +2219,7 @@ mod tests {
                         json!({
                             "name": format!("Request {f}-{r}"),
                             "request": {
-                                "method": if r % 2 == 0 { "GET" } else { "POST" },
+                                "method": if r % 2 == 0 { "PUT" } else { "POST" },
                                 "header": [{"key": "Accept", "value": "application/json"}],
                                 "url": {
                                     "raw": format!("{{{{baseUrl}}}}/items/{r}?page=1&debug=1"),

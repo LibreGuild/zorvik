@@ -83,3 +83,24 @@ test("the auth editor has every auth type", async ({ page }) => {
     await expect(page.getByText(field, { exact: true }).first()).toBeVisible();
   }
 });
+
+test("a body with a line of megabytes shows at once, and shows more on request", async ({ page }) => {
+  // Like an image an API returns as base64: drawn whole, WebKit took about a minute.
+  await send(page, `${HTTP}/long-json?bytes=2500000`);
+  const response = page.getByTestId("response");
+  // The editor draws only what is in view: scroll to the end of the body to see what follows.
+  const toEnd = () => response.locator(".cm-scroller").evaluate((el) => el.scrollTo(0, el.scrollHeight));
+  const marker = response.locator(".zv-hidden-text");
+  await expect(marker).toHaveCount(1);
+  await expect(marker).toContainText("2.4 MB more");
+  await marker.getByRole("button", { name: "Show more" }).click();
+  await toEnd();
+  await expect(marker).toContainText("2.3 MB more");
+  await expect(response).toContainText("revised_prompt");
+  // Switching tabs and back draws it again just as quickly.
+  await response.getByRole("tab", { name: "Timing" }).click();
+  await response.getByRole("tab", { name: "Body" }).click();
+  await toEnd();
+  await expect(marker).toHaveCount(1);
+  await expect(response).toContainText("revised_prompt");
+});

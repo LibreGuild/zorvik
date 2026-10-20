@@ -1,0 +1,27 @@
+name: API catalog
+
+# Once a week: download every API in the catalog from its publisher and import it, so a moved or
+# changed description shows up here before users meet it (see docs/ci-release.md). The check
+# needs the internet, so it isn't part of CI; a failure doesn't block anything.
+on:
+  schedule:
+    - cron: "41 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  catalog:
+    name: Every catalog API imports
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Download and import every API
+        run: cargo test -p zorvik-api --test catalog_live -- --ignored --nocapture

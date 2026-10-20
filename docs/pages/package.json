@@ -14,5 +14,10 @@
     "@astrojs/markdown-remark": "^7.3.0",
     "@astrojs/starlight": "^0.42.4",
     "astro": "^7.3.5"
+  },
+  "overrides": {
+    "postcss-nested": {
+      "postcss-selector-parser": "^7.1.6"
+    }
   }
 }

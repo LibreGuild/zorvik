@@ -36,10 +36,14 @@ const LIBRARIES = [
   },
   { name: 'xml2js', source: "module.exports = require('xml2js');" },
   { name: 'cheerio', source: "export * from 'cheerio/slim';" },
+  // SugarJS 1.3.9, as in Postman's sandbox: it extends the built-in prototypes
+  // ('text'.has('x'), (5).hex(), …). The prelude loads it when a script first uses one.
+  { name: 'sugar', source: "require('sugar');" },
   // Templates, with the compiler (`Handlebars.compile`); also renders `pm.visualizer`.
   // Without source-map, which it only tries (for precompiling to files).
   { name: 'handlebars', source: "module.exports = require('handlebars');", external: ['source-map'] },
   // Node's own modules, as their browser versions.
+  { name: 'assert', source: "module.exports = require('assert/');", external: ['util/'] },
   { name: 'buffer', source: "module.exports = require('buffer/');" },
   { name: 'events', source: "module.exports = require('events/');" },
   { name: 'path', source: "module.exports = require('path-browserify');" },
@@ -63,7 +67,18 @@ function packageOf(input) {
   return { dir, name, version: pkg.version, pkg };
 }
 
+// Packages whose package.json names no license, checked by hand: their LICENSE file is
+// the license given here (exact versions, so an update is checked again).
+const LICENSE_OF = { 'sugar@1.3.9': 'MIT' };
+// Notices a package's license asks to keep with the code (SugarJS: "all the attributions in
+// every file"), carried in the bundle's header and in THIRD_PARTY_LICENSES.md.
+const NOTICE_OF = {
+  'sugar@1.3.9': 'Sugar Library: freely distributable and licensed under the MIT-style license. Copyright (c) 2013 Andrew Plummer. http://sugarjs.com/',
+};
+
 function licenseOf(pkg) {
+  const known = LICENSE_OF[pkg.name + '@' + pkg.version];
+  if (known) return known;
   if (typeof pkg.license === 'string') return pkg.license;
   const list = [pkg.license, pkg.licenses].find(Array.isArray);
   if (list) return list.map((l) => l.type || l).join(' OR ');
@@ -94,7 +109,7 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.`;
 function licenseText(p, license) {
   const files = readdirSync(p.dir);
   const file = files.find((f) => /^(licen[cs]e|copying)([-.][\w.-]*)?$/i.test(f));
-  if (file) return readFileSync(join(p.dir, file), 'utf8').trim();
+  if (file) return readFileSync(join(p.dir, file), 'utf8').replace(/\r\n?/g, '\n').trim();
   const readme = files.find((f) => /^readme(\.md)?$/i.test(f));
   const section =
     readme && /^#+ *licen[cs]e\s*\n([\s\S]*?)(?=\n#+ |$(?![\s\S]))/im.exec(readFileSync(join(p.dir, readme), 'utf8'));
@@ -142,10 +157,13 @@ for (const lib of LIBRARIES) {
     else packages.set(p.name + '@' + p.version, { ...p, license, text: licenseText(p, license), usedBy: [lib.name] });
   }
   const list = [...used.values()].sort((a, b) => a.name.localeCompare(b.name)).map((p) => `${p.name}@${p.version} (${licenseOf(p.pkg)})`);
+  const notices = [...used.values()].map((p) => NOTICE_OF[p.name + '@' + p.version]).filter(Boolean);
   const header =
     `/* Zorvik built-in library "${lib.name}"` +
     (list.length ? `: ${list.join(', ')}` : '') +
-    '. Licenses: crates/script/vendor/THIRD_PARTY_LICENSES.md */\n';
+    '. Licenses: crates/script/vendor/THIRD_PARTY_LICENSES.md' +
+    notices.map((n) => `\n * ${n}`).join('') +
+    ' */\n';
   const code = header + result.outputFiles[0].text;
   const out = join(dist, lib.name + '.js');
   mkdirSync(dirname(out), { recursive: true });
@@ -162,6 +180,8 @@ md += '| Package | Version | License | Built into |\n|---|---|---|---|\n';
 for (const p of sorted) md += `| ${p.name} | ${p.version} | ${p.license} | ${p.usedBy.join(', ')} |\n`;
 for (const p of sorted) {
   md += `\n## ${p.name} ${p.version}\n\n`;
+  const notice = NOTICE_OF[p.name + '@' + p.version];
+  if (notice) md += notice + '\n\n';
   md += '```text\n' + p.text.replace(/```/g, "'''") + '\n```\n';
 }
 writeFileSync(join(root, 'THIRD_PARTY_LICENSES.md'), md);

@@ -680,3 +680,60 @@ async fn agent_never_reads_secrets_from_a_connection() {
         .await;
     assert_eq!(got["timedOut"], true, "{text}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_failures_never_show_an_agent_a_secret() {
+    let server = TestServer::start().await;
+    let (_api, mut agent, _asked, _data, _ws, _listener) = connected("Run secrets").await;
+    let (err, _, text) = agent
+        .call(
+            "save_environment",
+            json!({ "name": "Local", "activate": true, "variables": [{ "key": "token", "value": "s3cret-token-value", "secret": true }] }),
+        )
+        .await;
+    assert!(!err, "{text}");
+    let script = "pm.test('token', () => pm.expect(pm.environment.get('token')).to.eql('other'));";
+    let (err, _, text) = agent
+        .call(
+            "save_requests",
+            json!({ "requests": [{ "name": "Check", "url": server.url("/json"), "scripts": { "postResponse": script } }] }),
+        )
+        .await;
+    assert!(!err, "{text}");
+    let (err, run, text) = agent.call("run_collection", json!({ "waitSeconds": 30 })).await;
+    assert!(!err, "{text}");
+    assert_eq!(run["summary"]["failed"], 1, "{text}");
+    assert!(!text.contains("s3cret") && text.contains("token"), "{text}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn agent_finds_and_imports_a_catalog_api() {
+    let (api, mut agent, asked, _data, _ws, _listener) = connected("Catalog").await;
+
+    let (err, found, text) = agent.call("search_catalog", json!({ "query": "claude" })).await;
+    assert!(!err, "{text}");
+    let apis = found["apis"].as_array().unwrap();
+    assert!(apis.iter().any(|a| a["id"] == "anthropic" && a["importable"] == true), "{text}");
+    let (_, ai, _) = agent.call("search_catalog", json!({ "category": "ai" })).await;
+    assert!(ai["apis"].as_array().unwrap().iter().all(|a| a["category"] == "ai"));
+
+    // A built-in starter: no download, so only the change is asked about.
+    let (err, imported, text) = agent.call("import_from_catalog", json!({ "id": "anthropic" })).await;
+    assert!(!err, "{text}");
+    assert!(imported["summary"]["requests"].as_u64().unwrap() >= 10, "{text}");
+    assert!(imported["open"].is_string(), "{text}");
+    let asked_kinds: Vec<ConfirmKind> = asked.lock().unwrap().iter().map(|(k, _)| *k).collect();
+    assert!(!asked_kinds.contains(&ConfirmKind::Traffic), "{asked_kinds:?}");
+    // Its environment is the active one, with the key as an empty secret.
+    let env_id = imported["summary"]["environmentId"].clone();
+    let current = api.call("workspace.current", json!({})).await.unwrap();
+    assert_eq!(current["activeEnvironment"], env_id);
+    let env = current["environments"].as_array().unwrap().iter().find(|e| e["id"] == env_id).unwrap().clone();
+    assert!(env.to_string().contains("\"secret\":true"), "{env}");
+
+    // Entries that can't be imported say why.
+    let (err, _, text) = agent.call("import_from_catalog", json!({ "id": "hubspot" })).await;
+    assert!(err && text.contains("not licensed"), "{text}");
+    let (err, _, text) = agent.call("import_from_catalog", json!({ "id": "nope" })).await;
+    assert!(err && text.contains("nope"), "{text}");
+}

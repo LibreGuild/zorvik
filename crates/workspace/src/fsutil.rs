@@ -124,6 +124,9 @@ pub fn is_reserved_name(name: &str) -> bool {
 }
 
 /// Turn a display name into a file-name stem that is valid on Windows, macOS and Linux.
+/// Longest file name stem, in bytes.
+const MAX_STEM_BYTES: usize = 200;
+
 pub fn sanitize_file_stem(name: &str) -> String {
     let mut out: String =
         name.chars()
@@ -136,8 +139,17 @@ pub fn sanitize_file_stem(name: &str) -> String {
             })
             .collect();
     out = out.trim().trim_end_matches(['.', ' ']).trim_start_matches('.').to_string();
-    if out.chars().count() > 80 {
-        out = out.chars().take(80).collect::<String>().trim_end_matches(['.', ' ']).to_string();
+    // 80 characters, and few enough bytes for any file system's 255-byte names (with room for
+    // a number and the extension), even in scripts whose letters take 3 or 4 bytes.
+    if out.chars().count() > 80 || out.len() > MAX_STEM_BYTES {
+        let mut cut = String::new();
+        for c in out.chars().take(80) {
+            if cut.len() + c.len_utf8() > MAX_STEM_BYTES {
+                break;
+            }
+            cut.push(c);
+        }
+        out = cut.trim_end_matches(['.', ' ']).to_string();
     }
     // `_Folder.yaml` is the folder settings file on case-insensitive file systems.
     if out.is_empty() || out.eq_ignore_ascii_case("_folder") {
@@ -224,6 +236,9 @@ mod tests {
         assert_eq!(sanitize_file_stem("_folder"), "untitled");
         assert_eq!(sanitize_file_stem(&"x".repeat(200)).len(), 80);
         assert_eq!(sanitize_file_stem("Ünïcödé ✓"), "Ünïcödé ✓");
+        // Letters of 4 bytes: 80 of them would be too long for a file name.
+        let wide = sanitize_file_stem(&"𝓐".repeat(80));
+        assert!(wide.len() <= MAX_STEM_BYTES && wide.chars().all(|c| c == '𝓐'), "{}", wide.len());
     }
 
     #[test]

@@ -6,13 +6,16 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Write as _};
 
 use indexmap::IndexMap;
+use serde::Serialize;
 use serde::de::{self, DeserializeSeed, Deserializer, EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor};
 use serde_json::{Map, Value};
+use ts_rs::TS;
 
+use crate::discovery;
 use crate::import::{ImportError, ImportedCollection, ImportedItem};
 use crate::model::{
     ApiKeyLocation, Auth, Body, BodyType, FolderMeta, GrantType, KeyValue, MultipartField, OAuth2Config,
-    OpenApiOperation, Request, RequestKind, Variable,
+    OpenApiOperation, OperationFilter, Request, RequestKind, Variable,
 };
 
 const METHODS: [&str; 8] = ["get", "put", "post", "delete", "options", "head", "patch", "trace"];
@@ -43,14 +46,127 @@ const EXAMPLE_TIMESTAMP: &str = "2024-01-01T12:00:00Z";
 const EXAMPLE_IP: &str = "203.0.113.10";
 const EXAMPLE_SECRET: &str = "secret-value";
 
-/// Import an OpenAPI 3.0/3.1 or Swagger 2.0 document (JSON or YAML).
+/// Import an OpenAPI 3.0/3.1 or Swagger 2.0 document (JSON or YAML), or a Google API
+/// Discovery document (converted to OpenAPI 3 first, see `discovery.rs`).
 pub fn import_openapi(text: &str) -> Result<ImportedCollection, ImportError> {
-    let doc = parse(text)?;
-    let swagger2 = is_swagger2(&doc)?;
-    Ok(Importer::new(&doc, swagger2).run())
+    import_openapi_only(text, &OperationFilter::default())
 }
 
-/// An OpenAPI 3 / Swagger 2 document (JSON or YAML) as JSON, checked to be one.
+/// [`import_openapi`], taking only the operations `only` lets through.
+pub fn import_openapi_only(text: &str, only: &OperationFilter) -> Result<ImportedCollection, ImportError> {
+    import_document(&parse(text)?, only)
+}
+
+/// [`import_openapi_only`] for a document [`parse_document`] read.
+pub fn import_document(doc: &Value, only: &OperationFilter) -> Result<ImportedCollection, ImportError> {
+    let swagger2 = is_swagger2(doc)?;
+    let mut importer = Importer::new(doc, swagger2);
+    importer.only = only.clone();
+    Ok(importer.run())
+}
+
+/// Make `scheme` the security of a parsed document that offers several (such as OAuth 2.0 or an
+/// API key): the root `security` becomes `[{scheme: []}]` and operations drop their own, so
+/// every request inherits it (an operation's own requirement would win). Operations marked as
+/// needing no auth (`security: []`) keep that. `false`, with nothing changed, when the document
+/// doesn't define `scheme`.
+pub fn prefer_scheme(doc: &mut Value, scheme: &str) -> bool {
+    let defined = doc.get("components").and_then(|c| c.get("securitySchemes")).and_then(|s| s.get(scheme)).is_some()
+        || doc.get("securityDefinitions").and_then(|s| s.get(scheme)).is_some();
+    if !defined {
+        return false;
+    }
+    // A document-wide requirement that combines the scheme with others (a key and a token) stays.
+    let combined = doc
+        .get("security")
+        .and_then(Value::as_array)
+        .and_then(|reqs| reqs.iter().find(|r| r.get(scheme).is_some()).cloned())
+        .unwrap_or_else(|| serde_json::json!({ scheme: [] }));
+    doc["security"] = serde_json::json!([combined]);
+    fn drop_own(item: &mut Value) {
+        for op in item.as_object_mut().into_iter().flat_map(|i| i.values_mut()).filter_map(Value::as_object_mut) {
+            if op.get("security").and_then(Value::as_array).is_some_and(|s| !s.is_empty()) {
+                op.remove("security");
+            }
+        }
+    }
+    // Path items the document keeps elsewhere (`$ref`, followed one level as `outline` does).
+    let mut refs = Vec::new();
+    for item in doc.get_mut("paths").and_then(Value::as_object_mut).into_iter().flat_map(|p| p.values_mut()) {
+        match item.get("$ref").and_then(Value::as_str).and_then(|r| r.strip_prefix('#')) {
+            Some(pointer) => refs.push(pointer.to_string()),
+            None => drop_own(item),
+        }
+    }
+    for pointer in refs {
+        if let Some(item) = doc.pointer_mut(&pointer) {
+            drop_own(item);
+        }
+    }
+    true
+}
+
+/// What a document holds, read without building any request: for choosing what to import.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct OpenApiOutline {
+    pub title: String,
+    pub operations: u32,
+    /// Operations by first tag, in the order folders get (`""` = without a tag, last).
+    pub groups: Vec<OperationGroup>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct OperationGroup {
+    pub tag: String,
+    pub operations: u32,
+}
+
+/// The outline of a parsed document (see [`parse_document`]).
+pub fn outline(doc: &Value) -> OpenApiOutline {
+    let mut groups: IndexMap<String, u32> = IndexMap::new();
+    for tag in doc.get("tags").and_then(Value::as_array).into_iter().flatten() {
+        if let Some(name) = tag.get("name").and_then(Value::as_str).map(str::trim) {
+            groups.entry(name.to_string()).or_default();
+        }
+    }
+    let mut untagged = 0;
+    for (path, item) in doc.get("paths").and_then(Value::as_object).into_iter().flatten() {
+        if path.starts_with("x-") {
+            continue;
+        }
+        // A path item `$ref` is followed one level, as most documents use it.
+        let item = match item.get("$ref").and_then(Value::as_str).and_then(|r| r.strip_prefix('#')) {
+            Some(pointer) => doc.pointer(pointer).unwrap_or(item),
+            None => item,
+        };
+        for (method, op) in item.as_object().into_iter().flatten() {
+            if !METHODS.contains(&method.to_ascii_lowercase().as_str()) || !op.is_object() {
+                continue;
+            }
+            match first_tag(op) {
+                Some(tag) => *groups.entry(tag.to_string()).or_default() += 1,
+                None => untagged += 1,
+            }
+        }
+    }
+    let mut groups: Vec<OperationGroup> = groups
+        .into_iter()
+        .filter(|(_, n)| *n > 0)
+        .map(|(tag, operations)| OperationGroup { tag, operations })
+        .collect();
+    if untagged > 0 {
+        groups.push(OperationGroup { tag: String::new(), operations: untagged });
+    }
+    let title = doc.pointer("/info/title").and_then(Value::as_str).map(str::trim).unwrap_or_default().to_string();
+    OpenApiOutline { title, operations: groups.iter().map(|g| g.operations).sum(), groups }
+}
+
+/// An OpenAPI 3 / Swagger 2 document (JSON or YAML) as JSON, checked to be one. A Discovery
+/// document comes back converted to OpenAPI 3.
 pub fn parse_document(text: &str) -> Result<Value, ImportError> {
     let doc = parse(text)?;
     is_swagger2(&doc)?;
@@ -95,6 +211,12 @@ pub(crate) fn mock_responses(text: &str) -> Result<(Vec<MockResponse>, Vec<Strin
 }
 
 fn parse(text: &str) -> Result<Value, ImportError> {
+    let doc = parse_text(text)?;
+    // Google API Discovery documents are converted, so every caller sees OpenAPI 3.
+    if discovery::is_discovery(&doc) { discovery::to_openapi(&doc) } else { Ok(doc) }
+}
+
+fn parse_text(text: &str) -> Result<Value, ImportError> {
     let text = text.trim_start_matches('\u{feff}');
     if text.trim().is_empty() {
         return Err(ImportError::new("The document is empty"));
@@ -286,6 +408,16 @@ struct Importer<'a> {
     output_left: usize,
     /// Generating response examples (read-only properties in, write-only ones out).
     for_response: bool,
+    /// The operations to import.
+    only: OperationFilter,
+    /// The security scheme of the document's own requirement (the collection's auth).
+    root_scheme: Option<String>,
+    /// The document-wide requirement that scheme comes from (its scopes and companions).
+    root_requirement: Option<&'a Map<String, Value>>,
+    /// The scopes that requirement asks for (none: every scope of the scheme).
+    root_scopes: HashSet<&'a str>,
+    /// More API keys that requirement needs: (in a header, the header or query name, variable).
+    extra: Vec<(bool, String, String)>,
 }
 
 impl<'a> Importer<'a> {
@@ -304,6 +436,11 @@ impl<'a> Importer<'a> {
             visits: 0,
             output_left: MAX_OUTPUT,
             for_response: false,
+            only: OperationFilter::default(),
+            root_scheme: None,
+            root_requirement: None,
+            root_scopes: HashSet::new(),
+            extra: Vec::new(),
         }
     }
 
@@ -318,7 +455,17 @@ impl<'a> Importer<'a> {
             .to_string();
         self.base_url = self.base_url();
         let auth = match doc.get("security").and_then(Value::as_array) {
-            Some(reqs) => self.requirements_auth(reqs).unwrap_or(Auth::None),
+            Some(reqs) => match self.requirements_auth(reqs) {
+                Some((scheme, auth, others)) => {
+                    // The first requirement naming the scheme is the one it was taken from.
+                    self.root_requirement = reqs.iter().filter_map(Value::as_object).find(|r| r.contains_key(&scheme));
+                    self.root_scopes = self.root_requirement.map(|r| scopes_of(r, &scheme)).unwrap_or_default();
+                    self.root_scheme = Some(scheme);
+                    self.extra_keys(&others);
+                    auth
+                }
+                None => Auth::None,
+            },
             None => Auth::None,
         };
 
@@ -341,7 +488,7 @@ impl<'a> Importer<'a> {
             let Some(ops) = item.as_object() else { continue };
             for (method, op) in ops {
                 let method = method.to_ascii_lowercase();
-                if !METHODS.contains(&method.as_str()) || !op.is_object() {
+                if !METHODS.contains(&method.as_str()) || !op.is_object() || !self.only.takes(first_tag(op), path) {
                     continue;
                 }
                 if self.output_left == 0 {
@@ -354,6 +501,14 @@ impl<'a> Importer<'a> {
                 let size =
                     serde_json::to_vec(&request).map_or(0, |json| json.len()) + first_tag(op).map_or(0, str::len);
                 self.afford(size.saturating_sub(before - self.output_left));
+                let mut request = request;
+                if request.auth == Auth::Inherit {
+                    for (in_header, key, var) in &self.extra {
+                        if !*in_header {
+                            request.url = with_query(&request.url, key, &format!("{{{{{var}}}}}"));
+                        }
+                    }
+                }
                 match first_tag(op) {
                     Some(tag) => folders.entry(tag.to_string()).or_default().1.push(request),
                     None => root.push(request),
@@ -400,6 +555,18 @@ impl<'a> Importer<'a> {
             enabled: true,
             secret: *secret,
         }));
+        variables.extend(self.extra.iter().map(|(_, _, var)| Variable {
+            key: var.clone(),
+            value: String::new(),
+            enabled: true,
+            secret: true,
+        }));
+        let headers = self
+            .extra
+            .iter()
+            .filter(|(in_header, _, _)| *in_header)
+            .map(|(_, key, var)| KeyValue::new(key.clone(), format!("{{{{{var}}}}}")))
+            .collect();
         // A path variable named like `baseUrl` or an auth placeholder shares that variable.
         let taken = variables.len();
         for (key, value) in self.path_vars {
@@ -407,15 +574,7 @@ impl<'a> Importer<'a> {
                 variables.push(Variable { key, value, enabled: true, secret: false });
             }
         }
-        ImportedCollection {
-            name,
-            variables,
-            auth,
-            headers: Vec::new(),
-            items,
-            warnings: self.warnings,
-            ..Default::default()
-        }
+        ImportedCollection { name, variables, auth, headers, items, warnings: self.warnings, ..Default::default() }
     }
 
     /// Every operation's canned answer, in document order.
@@ -678,6 +837,30 @@ impl<'a> Importer<'a> {
             }
         }
 
+        req.auth = self.operation_auth(op, auth);
+        // Keys the auth sends itself: documents often declare one as a parameter too, and the
+        // parameter (imported empty) would take the auth's place.
+        let inherits = req.auth == Auth::Inherit;
+        let mut auth_headers: Vec<String> = self
+            .extra
+            .iter()
+            .filter(|(in_header, ..)| *in_header)
+            .map(|(_, key, _)| key.to_ascii_lowercase())
+            .collect();
+        let mut auth_query: Vec<String> = self
+            .extra
+            .iter()
+            .filter(|(in_header, ..)| !*in_header && inherits)
+            .map(|(_, key, _)| key.clone())
+            .collect();
+        match if inherits { auth } else { &req.auth } {
+            Auth::ApiKey { key, location: ApiKeyLocation::Header, .. } => {
+                auth_headers.push(key.trim().to_ascii_lowercase())
+            }
+            Auth::ApiKey { key, location: ApiKeyLocation::Query, .. } => auth_query.push(key.trim().to_string()),
+            _ => {}
+        }
+
         let mut query = Vec::new();
         let mut cookies = Vec::new();
         let mut cookie_required = false;
@@ -685,6 +868,7 @@ impl<'a> Importer<'a> {
             let name = str_of(p, "name");
             let required = is_true(p, "required");
             match str_of(p, "in") {
+                "query" if auth_query.iter().any(|key| key == name.trim()) => {}
                 "query" => {
                     let value = self.param_value(p);
                     if required {
@@ -695,7 +879,8 @@ impl<'a> Importer<'a> {
                 }
                 // OpenAPI says these header parameters are ignored (media types and auth cover them).
                 "header"
-                    if !["accept", "content-type", "authorization"].contains(&name.to_ascii_lowercase().as_str()) =>
+                    if !["accept", "content-type", "authorization"].contains(&name.to_ascii_lowercase().as_str())
+                        && !auth_headers.contains(&name.trim().to_ascii_lowercase()) =>
                 {
                     let value = self.param_value(p);
                     req.headers.push(kv(name.to_string(), value, required, description_of(p)));
@@ -716,7 +901,6 @@ impl<'a> Importer<'a> {
         }
         req.url = url;
         req.body = if self.swagger2 { self.body_v2(op, &params) } else { self.body_v3(op, &label) };
-        req.auth = self.operation_auth(op, auth);
         req
     }
 
@@ -1090,27 +1274,103 @@ impl<'a> Importer<'a> {
         if reqs.iter().all(|r| r.as_object().is_none_or(|m| m.is_empty())) {
             return Auth::None;
         }
+        // One of the operation's alternatives is what the collection sends anyway.
+        if reqs.iter().any(|r| self.collection_meets(r)) {
+            return Auth::Inherit;
+        }
         match self.requirements_auth(reqs) {
-            Some(auth) if auth != *collection => auth,
-            _ => Auth::Inherit,
+            Some((scheme, auth, others)) => {
+                if !others.is_empty() {
+                    let list = [scheme].into_iter().chain(others).collect::<Vec<_>>().join(" + ");
+                    self.warn(format!("Security requirement {list} combines several schemes; only one was imported"));
+                }
+                if auth != *collection { auth } else { Auth::Inherit }
+            }
+            None => Auth::Inherit,
         }
     }
 
-    /// Auth for the first requirement whose scheme can be mapped.
-    fn requirements_auth(&mut self, reqs: &'a [Value]) -> Option<Auth> {
+    /// Whether the collection's auth meets a requirement: its scheme, without scopes the
+    /// collection's requirement doesn't ask for (none listed there means all of them), and no
+    /// scheme the collection's requirement doesn't combine it with.
+    fn collection_meets(&self, req: &'a Value) -> bool {
+        let (Some(scheme), Some(root), Some(req)) =
+            (self.root_scheme.as_deref(), self.root_requirement, req.as_object())
+        else {
+            return false;
+        };
+        req.contains_key(scheme)
+            && req.keys().all(|k| root.contains_key(k))
+            && (self.root_scopes.is_empty()
+                || scopes_of::<Vec<_>>(req, scheme).iter().all(|s| self.root_scopes.contains(s)))
+    }
+
+    /// Auth for the first requirement whose scheme can be mapped, that scheme's name, and the
+    /// other schemes the requirement combines it with. An OAuth 2.0 requirement that lists scopes
+    /// asks for those, not every scope the scheme has.
+    fn requirements_auth(&mut self, reqs: &'a [Value]) -> Option<(String, Auth, Vec<String>)> {
         for req in reqs {
             let Some(names) = req.as_object() else { continue };
-            if names.len() > 1 {
-                let list = names.keys().map(String::as_str).collect::<Vec<_>>().join(" + ");
-                self.warn(format!("Security requirement {list} combines several schemes; only one was imported"));
-            }
-            for name in names.keys() {
-                if let Some(auth) = self.scheme_auth(name) {
-                    return Some(auth);
+            for (name, scopes) in names {
+                if let Some(mut auth) = self.scheme_auth(name) {
+                    let scopes: Vec<&str> = scopes.as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+                    if let Auth::OAuth2(config) = &mut auth
+                        && !scopes.is_empty()
+                    {
+                        config.scope = scopes.join(" ");
+                    }
+                    let others = names.keys().filter(|n| *n != name).cloned().collect();
+                    return Some((name.clone(), auth, others));
                 }
             }
         }
         None
+    }
+
+    /// API keys the document-wide requirement needs besides its auth (an application id next
+    /// to a key, a token next to a key): each becomes a secret variable, sent in a header of
+    /// the collection or added to every request's query. Other schemes can't be combined.
+    fn extra_keys(&mut self, names: &[String]) {
+        let doc = self.doc;
+        let defs =
+            if self.swagger2 { doc.get("securityDefinitions") } else { doc.pointer("/components/securitySchemes") };
+        let mut skipped = Vec::new();
+        for name in names {
+            let scheme = defs.and_then(|d| d.get(name.as_str())).and_then(|s| self.resolve(s));
+            let (Some(scheme), true) = (scheme, scheme.is_some_and(|s| str_of(s, "type") == "apiKey")) else {
+                skipped.push(name.as_str());
+                continue;
+            };
+            let key = str_of(scheme, "name").trim().to_string();
+            let location = str_of(scheme, "in");
+            // A header name must be one, and braces would reference variables (`{{secret}}`).
+            let valid = match location {
+                "header" => is_token(&key),
+                "query" => !key.is_empty() && !key.contains(['{', '}']),
+                _ => false,
+            };
+            if !valid {
+                skipped.push(name.as_str());
+                continue;
+            }
+            // Its own variable: not one the auth or the server use.
+            let taken = |var: &str, extra: &[(bool, String, String)]| {
+                var.is_empty() || AUTH_VARIABLES.contains(&var) || extra.iter().any(|(_, _, v)| v == var)
+            };
+            let mut var = camel_case(&key);
+            if taken(&var, &self.extra) {
+                var = camel_case(name);
+            }
+            if taken(&var, &self.extra) {
+                skipped.push(name.as_str());
+                continue;
+            }
+            self.extra.push((location == "header", key, var));
+        }
+        if !skipped.is_empty() {
+            let list = skipped.join(" + ");
+            self.warn(format!("Security requirement combines {list} with the imported auth; set those up manually"));
+        }
     }
 
     fn scheme_auth(&mut self, name: &str) -> Option<Auth> {
@@ -1258,6 +1518,32 @@ fn multipart_field(f: Field) -> MultipartField {
 /// The first media type of an OpenAPI 3 parameter's `content`.
 fn param_media(p: &Value) -> Option<&Value> {
     p.get("content").and_then(Value::as_object).and_then(|c| c.values().next())
+}
+
+/// The scopes a security requirement lists for `scheme`.
+fn scopes_of<'v, C: FromIterator<&'v str>>(req: &'v Map<String, Value>, scheme: &str) -> C {
+    req.get(scheme).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect()
+}
+
+/// Variables the importer's auth and server use (see `map_scheme`).
+const AUTH_VARIABLES: [&str; 7] =
+    ["baseUrl", "apiKey", "bearerToken", "username", "password", "clientId", "clientSecret"];
+
+/// A valid header name (an HTTP token).
+fn is_token(name: &str) -> bool {
+    !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+.^_`|~-".contains(&b))
+}
+
+/// `url` with `key=value` added to its query (`value` is a `{{variable}}`, kept as written).
+fn with_query(url: &str, key: &str, value: &str) -> String {
+    let (base, fragment) = url.split_once('#').map_or((url, None), |(b, f)| (b, Some(f)));
+    let sep = if base.contains('?') { '&' } else { '?' };
+    let mut out = format!("{base}{sep}{}={value}", encode(key));
+    if let Some(f) = fragment {
+        out.push('#');
+        out.push_str(f);
+    }
+    out
 }
 
 fn first_tag(op: &Value) -> Option<&str> {
@@ -2262,7 +2548,8 @@ webhooks:
         assert_eq!(cfg.grant_type, GrantType::AuthorizationCode);
         assert_eq!(cfg.auth_url, "https://auth.example.com/authorize");
         assert_eq!(cfg.token_url, "https://auth.example.com/token");
-        assert_eq!(cfg.scope, "read write");
+        // The scopes the operation's requirement asks for, not all the scheme has.
+        assert_eq!(cfg.scope, "write");
         assert_eq!((cfg.client_id.as_str(), cfg.client_secret.as_str()), ("{{clientId}}", "{{clientSecret}}"));
 
         let avatar = find(&c, "Upload avatar");
@@ -2390,6 +2677,164 @@ paths:
 "#;
 
     #[test]
+    fn keys_a_requirement_combines_are_all_imported() {
+        let doc = r#"{
+            "openapi": "3.0.0", "servers": [{"url": "https://api.test"}],
+            "components": {"securitySchemes": {
+                "apiKeyAuth": {"type": "apiKey", "in": "header", "name": "DD-API-KEY"},
+                "appKeyAuth": {"type": "apiKey", "in": "header", "name": "DD-APPLICATION-KEY"},
+                "token": {"type": "apiKey", "in": "query", "name": "token"},
+                "oauth": {"type": "oauth2", "flows": {}}
+            }},
+            "security": [{"apiKeyAuth": [], "appKeyAuth": [], "token": [], "oauth": []}],
+            "paths": {"/a": {"get": {}}, "/b": {"get": {"security": [{"token": []}]}}}
+        }"#;
+        let c = import_openapi(doc).unwrap();
+        assert_eq!(
+            c.auth,
+            Auth::ApiKey { key: "DD-API-KEY".into(), value: "{{apiKey}}".into(), location: ApiKeyLocation::Header }
+        );
+        assert_eq!(c.headers, [KeyValue::new("DD-APPLICATION-KEY", "{{ddApplicationKey}}")]);
+        let vars: Vec<(&str, bool)> = c.variables.iter().map(|v| (v.key.as_str(), v.secret)).collect();
+        assert!(vars.contains(&("ddApplicationKey", true)) && vars.contains(&("token", true)), "{vars:?}");
+        // Requests that use the collection's auth carry the query key; others have their own.
+        let all = requests(&c.items);
+        let a = all.iter().find(|r| r.url.contains("/a")).unwrap();
+        assert_eq!(a.url, "{{baseUrl}}/a?token={{token}}");
+        let b = all.iter().find(|r| r.url.contains("/b")).unwrap();
+        assert!(!b.url.contains('?') && matches!(b.auth, Auth::ApiKey { .. }), "{b:?}");
+        assert!(c.warnings.iter().any(|w| w.contains("oauth") && w.contains("manually")), "{:?}", c.warnings);
+    }
+
+    #[test]
+    fn combined_key_names_cannot_reference_variables_or_share_auth_ones() {
+        let doc = r#"{
+            "openapi": "3.0.0", "servers": [{"url": "https://api.test"}],
+            "components": {"securitySchemes": {
+                "main": {"type": "apiKey", "in": "header", "name": "X-Key"},
+                "braced": {"type": "apiKey", "in": "header", "name": "X-{{githubToken}}"},
+                "spaced": {"type": "apiKey", "in": "header", "name": "X Key"},
+                "query": {"type": "apiKey", "in": "query", "name": "{{githubToken}}"},
+                "appPassword": {"type": "apiKey", "in": "header", "name": "Password"},
+                "client_id": {"type": "apiKey", "in": "query", "name": "client_id"}
+            }},
+            "security": [{"main": [], "braced": [], "spaced": [], "query": [], "appPassword": [], "client_id": []}],
+            "paths": {"/a": {"get": {}}}
+        }"#;
+        let c = import_openapi(doc).unwrap();
+        // `Password` would share the `{{password}}` of basic auth, so it is named after its scheme;
+        // `client_id` can't have a variable of its own and is left to the user, like the others.
+        assert_eq!(c.headers, [KeyValue::new("Password", "{{appPassword}}")]);
+        assert_eq!(requests(&c.items)[0].url, "{{baseUrl}}/a");
+        let warning = c.warnings.iter().find(|w| w.contains("manually")).unwrap();
+        for name in ["braced", "spaced", "query", "client_id"] {
+            assert!(warning.contains(name), "{warning}");
+        }
+        assert!(c.variables.iter().all(|v| !v.key.contains("ithub")), "{:?}", c.variables);
+    }
+
+    #[test]
+    fn parameters_repeating_the_auth_key_are_left_out() {
+        // Documents often declare the key as a parameter too; imported empty, it would stand in
+        // for the auth's own header or query parameter.
+        let doc = r#"{
+            "openapi": "3.0.0", "servers": [{"url": "https://api.test"}],
+            "components": {"securitySchemes": {
+                "key": {"type": "apiKey", "in": "header", "name": "X-Api-Key"},
+                "app": {"type": "apiKey", "in": "header", "name": "X-App-Id"},
+                "token": {"type": "apiKey", "in": "query", "name": "token"},
+                "qkey": {"type": "apiKey", "in": "query", "name": "api_key"}
+            }},
+            "security": [{"key": [], "app": [], "token": []}],
+            "paths": {
+                "/a": {"get": {"parameters": [
+                    {"name": "x-api-key", "in": "header", "required": true, "schema": {"type": "string"}},
+                    {"name": "X-App-Id", "in": "header", "required": true, "schema": {"type": "string"}},
+                    {"name": "token", "in": "query", "required": true, "schema": {"type": "string"}},
+                    {"name": "X-Trace", "in": "header", "schema": {"type": "string"}}
+                ]}},
+                "/b": {"get": {"security": [{"qkey": []}], "parameters": [
+                    {"name": "api_key", "in": "query", "required": true, "schema": {"type": "string"}},
+                    {"name": "token", "in": "query", "required": true, "example": "t"},
+                    {"name": "X-Api-Key", "in": "header", "required": true, "example": "k"}
+                ]}},
+                "/c": {"get": {"security": [], "parameters": [
+                    {"name": "X-Api-Key", "in": "header", "required": true, "example": "k"}
+                ]}}
+            }
+        }"#;
+        let c = import_openapi(doc).unwrap();
+        let find = |path: &str| requests(&c.items).into_iter().find(|r| r.url.contains(path)).unwrap();
+        let headers = |r: &Request| r.headers.iter().map(|h| h.key.clone()).collect::<Vec<_>>();
+        let a = find("/a");
+        assert_eq!(headers(a), ["X-Trace"]);
+        assert_eq!(a.url, "{{baseUrl}}/a?token={{token}}");
+        // Its own key in the query: the collection's header key is a parameter like any other.
+        let b = find("/b");
+        assert_eq!(b.url, "{{baseUrl}}/b?token=t");
+        assert_eq!(headers(b), ["X-Api-Key"]);
+        assert_eq!(headers(find("/c")), ["X-Api-Key"]);
+    }
+
+    #[test]
+    fn preferring_a_scheme_reaches_referenced_path_items() {
+        let mut doc: Value = serde_json::from_str(
+            r##"{
+            "openapi": "3.1.0", "servers": [{"url": "https://api.test"}],
+            "components": {
+                "securitySchemes": {
+                    "key": {"type": "apiKey", "in": "header", "name": "X-Key"},
+                    "oauth": {"type": "oauth2", "flows": {"clientCredentials": {"tokenUrl": "https://api.test/t", "scopes": {"a": "a"}}}}
+                },
+                "pathItems": {"Shared": {"get": {"security": [{"oauth": ["a"]}]}, "put": {"security": []}}}
+            },
+            "security": [{"oauth": ["a"]}],
+            "paths": {"/own": {"get": {"security": [{"oauth": ["a"]}]}}, "/shared": {"$ref": "#/components/pathItems/Shared"}}
+        }"##,
+        )
+        .unwrap();
+        assert!(prefer_scheme(&mut doc, "key"));
+        let c = import_document(&doc, &OperationFilter::default()).unwrap();
+        assert!(matches!(&c.auth, Auth::ApiKey { key, .. } if key == "X-Key"), "{:?}", c.auth);
+        let auth = |method: &str, path: &str| {
+            requests(&c.items).into_iter().find(|r| r.method == method && r.url.ends_with(path)).unwrap().auth.clone()
+        };
+        assert_eq!(auth("GET", "/own"), Auth::Inherit);
+        assert_eq!(auth("GET", "/shared"), Auth::Inherit);
+        // Still marked as needing no auth.
+        assert_eq!(auth("PUT", "/shared"), Auth::None);
+    }
+
+    #[test]
+    fn operations_needing_scopes_the_collection_lacks_ask_for_them() {
+        let doc = r#"{
+            "openapi": "3.0.0", "servers": [{"url": "https://api.test"}],
+            "components": {"securitySchemes": {"oauth": {"type": "oauth2", "flows": {"clientCredentials": {
+                "tokenUrl": "https://api.test/token", "scopes": {"read": "r", "write": "w", "admin": "a"}}}}}},
+            "security": [{"oauth": ["read"]}],
+            "paths": {
+                "/plain": {"get": {}},
+                "/read": {"get": {"security": [{"oauth": ["read"]}]}},
+                "/any": {"get": {"security": [{"oauth": ["write"]}, {"oauth": ["read"]}]}},
+                "/write": {"post": {"security": [{"oauth": ["write"]}]}},
+                "/both": {"post": {"security": [{"oauth": ["read", "admin"]}]}}
+            }
+        }"#;
+        let c = import_openapi(doc).unwrap();
+        let Auth::OAuth2(collection) = &c.auth else { panic!("{:?}", c.auth) };
+        assert_eq!(collection.scope, "read");
+        let auth = |path: &str| requests(&c.items).into_iter().find(|r| r.url.ends_with(path)).unwrap().auth.clone();
+        for path in ["/plain", "/read", "/any"] {
+            assert_eq!(auth(path), Auth::Inherit, "{path}");
+        }
+        // A token for `read` alone would be refused here.
+        for (path, scope) in [("/write", "write"), ("/both", "read admin")] {
+            let Auth::OAuth2(own) = auth(path) else { panic!("{path}") };
+            assert_eq!(own.scope, scope, "{path}");
+        }
+    }
+
+    #[test]
     fn security_mapping() {
         let c = import_openapi(SECURITY).unwrap();
         assert_eq!(c.auth, Auth::Bearer { token: "{{bearerToken}}".into(), prefix: "Bearer".into() });
@@ -2405,7 +2850,7 @@ paths:
         let Auth::OAuth2(cc) = auth("d") else { panic!() };
         assert_eq!(
             (cc.grant_type, cc.token_url.as_str(), cc.scope.as_str()),
-            (GrantType::ClientCredentials, "https://a.test/token", "read write")
+            (GrantType::ClientCredentials, "https://a.test/token", "read")
         );
         let Auth::OAuth2(ac) = auth("e") else { panic!() };
         assert_eq!(

@@ -1,11 +1,11 @@
 ---
 title: Import & export
-description: Import Postman collections and environments, OpenAPI 3 and Swagger 2 documents and cURL commands, update imported folders from a new API spec, and copy requests as cURL or code.
+description: Import Postman collections and environments, OpenAPI 3 and Swagger 2 documents, Google API Discovery documents, AWS service models and cURL commands, update imported folders from a new API spec, and copy requests as cURL or code.
 sidebar:
   order: 9
 ---
 
-Bring your requests from Postman, an OpenAPI document or a cURL command, and take any request out again as cURL or as code. Imports run entirely on your computer.
+Bring your requests from Postman, an OpenAPI document, a Google or AWS API description or a cURL command, or start from the [API catalog](../api-catalog/), and take any request out again as cURL or as code. Imports run entirely on your computer.
 
 ## The Import dialog
 
@@ -15,13 +15,16 @@ Open it from:
 - a folder: right-click → **Import into folder…**;
 - the start screen of the work area, or the empty collection: **Import…**.
 
-It has three tabs:
+It has four tabs:
 
 | Tab | Imports |
 |---|---|
-| **File** | Choose a file, or drop it on the box. Postman collections and environments, OpenAPI and Swagger documents (JSON or YAML) and saved cURL commands are recognized automatically. |
+| **File** | Choose a file, or drop it on the box. Postman collections and environments, OpenAPI and Swagger documents (JSON or YAML), Google API Discovery documents, AWS service models (Smithy JSON) and saved cURL commands are recognized automatically. |
 | **cURL** | A pasted cURL command, opened as a new request |
-| **OpenAPI URL** | An OpenAPI or Swagger document downloaded from a URL |
+| **OpenAPI URL** | An OpenAPI, Swagger or Google Discovery document downloaded from a URL |
+| **API catalog** | Well-known APIs in one step, downloaded from their publishers (see [API catalog](../api-catalog/)) |
+
+It opens on **File**.
 
 **Import into** chooses the folder the import goes into (**Workspace root** by default).
 
@@ -30,43 +33,50 @@ When an import finishes, the dialog shows *Imported "name"* with the number of r
 | Limit | |
 |---|---|
 | File or download size | 50 MB |
-| Unrecognized files | Refused: *Supported: Postman collection v2/v2.1, Postman environment, OpenAPI 3.x / Swagger 2.0 (JSON or YAML), cURL command.* |
+| Unrecognized files | Refused: *Supported: Postman collections and environments, OpenAPI 3.x and Swagger 2.0 documents (JSON or YAML), Google API Discovery documents, AWS service models (Smithy JSON), cURL commands.* |
 
 ## Postman collections
 
-Export the collection from Postman as **Collection v2.1** (v2.0 works too) and import the file. Exports downloaded from the Postman API, which wrap the collection in `{"collection": …}`, work as well.
+Export the collection from Postman as **Collection v2.1** and import the file. Collections in v2.0 and in the old v1 format (from before 2017) import too, as do exports from the Postman API, which wrap the collection in `{"collection": …}`, and collection files without an `info` block, as newman runs them.
 
 What you get:
 
 - A new folder named after the collection, holding its folders and requests in the same order.
-- The collection's auth and scripts on that folder; each folder's and request's auth, scripts and description on the folder or request.
-- Collection variables added to the [workspace variables](../../variables/variables-and-environments/#workspace-variables). A variable the workspace already has keeps its current value, and a note lists it.
+- The collection's auth, scripts and description on that folder; each folder's and request's auth, scripts and description on the folder or request.
+- Collection variables added to the [workspace variables](../../variables/variables-and-environments/#workspace-variables). A variable the workspace already has keeps its current value, and a note lists it. Values of **secret** variables go to this computer's secret store, never into the workspace files.
 
 | Postman | In Zorvik |
 |---|---|
 | Pre-request script | Pre-request script |
 | Tests script | Post-response script |
-| Other script events | Skipped, with a note |
+| Other script events, disabled scripts | Skipped (other events with a note) |
 | Auth: basic, bearer, API key, OAuth 1.0, OAuth 2.0 (every grant, implicit too), JWT Bearer, Digest, NTLM, AWS Signature, Hawk, Akamai EdgeGrid, ASAP, no auth, inherit | The same [auth type](../auth/), with its settings |
+| OAuth 2.0 whose access token is a `{{variable}}` (a token a script gets) | A Bearer token with that variable: Postman sends just the token. A note says so. |
+| OAuth 2.0 saved token without a token URL | A Bearer token, with a note |
+| OAuth 2.0 extra token or authorization parameters (other than `audience`), token added to the query string | Not imported, with a note: the token goes in the `Authorization` header |
 | Other auth types | **No auth**, with a note |
+| A request header that its auth also sets (an old `Authorization` header saved next to the auth) | Turned off, with a note: Postman replaces it with the auth's header, and so does the import |
 | Saved responses | [Examples](../responses/#examples) of the request (bodies up to 1 MB) |
 | OAuth 2.0 redirect URL on `oauth.pstmn.io` (or none) | `http://127.0.0.1:53682/callback`, with a note to register it |
 | Body: raw (JSON, XML, HTML, JavaScript, text), URL-encoded, form-data, file, GraphQL | The matching [body type](../bodies/) |
+| A body on a GET, HEAD, COPY, PURGE or UNLOCK request | Kept, but set to **None** with a note: Postman doesn't send it unless the collection's `disableBodyPruning` setting is on (then it is sent) |
+| A disabled body | Kept, but set to **None** |
 | Path variables (`:id`) with values | [Path variables](../http/#path-variables) |
 | Disabled query parameters, parameter descriptions | Switched-off parameters, with descriptions |
-| Settings: follow redirects, max redirects, SSL verification | The request's **Settings** |
+| Disabled headers and form fields | Switched off |
+| Settings (`protocolProfileBehavior`): follow redirects, max redirects, SSL verification | The request's **Settings** (a folder's or the collection's settings go to every request in it) |
+| Other settings: `followOriginalHttpMethod`, `followAuthorizationHeader`, `disableUrlEncoding`, `disableCookies`, `insecureHTTPParser`, TLS protocols and ciphers, `disabledSystemHeaders` | Not imported; a note says what Zorvik does instead |
 | Folder variables | Skipped, with a note |
-| Collection v1 files | Refused; export as v2.1 again |
 
-Scripts are imported as they are. Scripts that use APIs Zorvik doesn't have (`pm.sendRequest`, `setTimeout`, `setInterval`, `pm.cookies`, `pm.visualizer`) are listed in a note; they fail when run. See [pm API reference](../../scripting/pm-reference/).
+Scripts are imported as they are and run in Zorvik's Postman-compatible sandbox: the `pm` API, the older `postman.*` and `tests[…]` API, SugarJS and the libraries Postman's sandbox has. Scripts that use `pm.vault` or `pm.execution.runRequest`, which Zorvik doesn't have, are listed in a note; they fail when run. See [Postman compatibility](../../scripting/sandbox/#postman-compatibility).
 
 Files for form-data and binary bodies aren't part of a Postman export: choose them again after importing (a note says which).
 
 ## Postman environments
 
-Import an environment export file (Postman: **Export** on the environment) to create a new [environment](../../variables/variables-and-environments/#environments) with its variables. Variables of Postman's **secret** type become [secret variables](../../variables/secrets/): their values go to this computer's secret store, never into the workspace file.
+Import an environment export file (Postman: **Export** on the environment) to create a new [environment](../../variables/variables-and-environments/#environments) with its variables. Variables of Postman's **secret** type become [secret variables](../../variables/secrets/): their values go to this computer's secret store, never into the workspace file. Disabled variables stay switched off.
 
-A Postman **globals** export imports the same way, as an environment (named "Globals" when the file has no name). Zorvik's own globals are only set by scripts.
+A Postman **globals** export imports the same way, as an environment (named "Globals" when the file has no name): select it to use its values. Zorvik's own globals are only set by scripts.
 
 ## OpenAPI and Swagger
 
@@ -95,10 +105,10 @@ Import OpenAPI 3.0 and 3.1, and Swagger 2.0, as JSON or YAML, from a file or fro
 | HTTP Digest | Digest auth | `username`, `password` (secret) |
 | HTTP Bearer | Bearer token | `bearerToken` (secret) |
 | API key in a header or query | API key | `apiKey` (secret) |
-| OAuth 2.0 client credentials, authorization code, password or implicit flow | OAuth 2.0 with the token and authorization URLs and all scopes | `clientId`, `clientSecret` (secret), and for the password flow `username`, `password` |
+| OAuth 2.0 client credentials, authorization code, password or implicit flow | OAuth 2.0 with the token and authorization URLs, and the scopes the requirement asks for (all of the scheme's when it names none) | `clientId`, `clientSecret` (secret), and for the password flow `username`, `password` |
 | API key in a cookie, other HTTP schemes, OpenID Connect | Not imported, with a note | |
 
-The document-wide `security` becomes the imported folder's auth; operations with different security get their own. When a requirement combines several schemes, only one is imported (with a note). Fill in the placeholders in the new environment. The ones that hold secrets (`password`, `bearerToken`, `apiKey`, `clientSecret`) are already marked secret, so their values stay on your computer.
+The document-wide `security` becomes the imported folder's auth; operations with different security get their own. When the document-wide requirement combines several API keys (a key and an application key, a key and a token), the first is the folder's auth and each other one gets its own secret variable, sent as a header of the folder or added to the query of every request. Other combinations import one scheme, with a note. Fill in the placeholders in the new environment. The ones that hold secrets (`password`, `bearerToken`, `apiKey`, `clientSecret`) are already marked secret, so their values stay on your computer.
 
 External `$ref`s (to other files or URLs) aren't followed; a note lists them. Very large documents are cut short with a note rather than slowing the app down.
 

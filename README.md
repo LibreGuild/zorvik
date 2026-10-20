@@ -145,7 +145,8 @@ Then ask things like *"map the API routes in this repo to a Zorvik collection"* 
 TLS inspector (chain, expiry, protocol versions, cipher suites), DNS lookup, port check, ping, network interfaces, HTTP/3 check, a certificate decoder (chains, CSRs, which certificate a key belongs to), JSON compare (by path, ignoring key order), a filter playground (JSONPath, jq, XPath), a regex tester with the syntax rules and captures use, and encoders for Base64, URL, hex, JWT, hashes and timestamps.
 
 ### Work your way
-- **Import** Postman collections and environments, OpenAPI 3 and Swagger 2 (realistic examples, path parameters as variables), and cURL commands. When the API changes, **update from the spec**: new operations come in, your edits stay.
+- **API catalog:** well-known APIs in one step: OpenAI, Anthropic, Gemini, Mistral, Groq and other AI providers, AWS, Google Cloud, Cloudflare, GitHub, Slack, Microsoft Graph, Stripe, PayPal, Shopify and more than a hundred others, with sign-in set up and an environment ready for your key. Descriptions are downloaded from their publishers when you import.
+- **Import** Postman collections and environments, OpenAPI 3 and Swagger 2 (realistic examples, path parameters as variables), Google API Discovery documents, AWS service models and cURL commands. When the API changes, **update from the spec**: new operations come in, your edits stay.
 - **Export** any request as cURL, HTTPie or Wget, or as code: JavaScript (fetch, axios), Python (requests, HTTPX), Go, Java, Kotlin (OkHttp), Swift, C#, PHP, Ruby, Rust, Dart, C (libcurl) or PowerShell.
 - **Built-in docs** for every feature (the book icon in the left rail), a command palette (<kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>K</kbd>) and keyboard shortcuts.
 - **Updates itself** from GitHub Releases: it downloads in the background and installs when you quit, or tells you and waits (Settings → Updates). Stable or nightly channel.

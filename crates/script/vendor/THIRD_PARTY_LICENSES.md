@@ -6,14 +6,15 @@ Zorvik scripts can `require()` the libraries in `dist/`, which are built from th
 |---|---|---|---|
 | ajv | 8.20.0 | MIT | ajv |
 | ajv-formats | 3.0.1 | MIT | ajv |
+| assert | 2.1.0 | MIT | assert |
 | assertion-error | 1.1.0 | MIT | chai |
 | available-typed-arrays | 1.0.7 | MIT | util |
 | base64-js | 1.5.1 | MIT | buffer |
 | boolbase | 1.0.0 | ISC | cheerio |
 | buffer | 6.0.3 | MIT | buffer |
-| call-bind | 1.0.9 | MIT | util |
-| call-bind-apply-helpers | 1.0.2 | MIT | url, util |
-| call-bound | 1.0.4 | MIT | url, util |
+| call-bind | 1.0.9 | MIT | assert, util |
+| call-bind-apply-helpers | 1.0.2 | MIT | assert, url, util |
+| call-bound | 1.0.4 | MIT | assert, url, util |
 | chai | 4.5.0 | MIT | chai |
 | check-error | 1.0.3 | MIT | chai |
 | cheerio | 1.2.0 | MIT | cheerio |
@@ -23,46 +24,51 @@ Zorvik scripts can `require()` the libraries in `dist/`, which are built from th
 | css-what | 6.2.2 | BSD-2-Clause | cheerio |
 | csv-parse | 7.0.3 | MIT | csv-parse/sync |
 | deep-eql | 4.1.4 | MIT | chai |
-| define-data-property | 1.1.4 | MIT | util |
+| define-data-property | 1.1.4 | MIT | assert, util |
+| define-properties | 1.2.1 | MIT | assert |
 | dom-serializer | 2.0.0 | MIT | cheerio |
 | domelementtype | 2.3.0 | BSD-2-Clause | cheerio |
 | domhandler | 5.0.3 | BSD-2-Clause | cheerio |
 | domutils | 3.2.2 | BSD-2-Clause | cheerio |
-| dunder-proto | 1.0.1 | MIT | url, util |
+| dunder-proto | 1.0.1 | MIT | assert, url, util |
 | entities | 4.5.0 | BSD-2-Clause | cheerio |
-| es-define-property | 1.0.1 | MIT | url, util |
-| es-errors | 1.3.0 | MIT | url, util |
-| es-object-atoms | 1.1.2 | MIT | url, util |
+| es-define-property | 1.0.1 | MIT | assert, url, util |
+| es-errors | 1.3.0 | MIT | assert, url, util |
+| es-object-atoms | 1.1.2 | MIT | assert, url, util |
 | events | 3.3.0 | MIT | events |
 | fast-deep-equal | 3.1.3 | MIT | ajv |
 | fast-uri | 3.1.8 | BSD-3-Clause | ajv |
 | for-each | 0.3.5 | MIT | util |
-| function-bind | 1.1.2 | MIT | url, util |
+| function-bind | 1.1.2 | MIT | assert, url, util |
 | generator-function | 2.0.1 | MIT | util |
 | get-func-name | 2.0.2 | MIT | chai |
-| get-intrinsic | 1.3.0 | MIT | url, util |
-| get-proto | 1.0.1 | MIT | url, util |
-| gopd | 1.2.0 | MIT | url, util |
+| get-intrinsic | 1.3.0 | MIT | assert, url, util |
+| get-proto | 1.0.1 | MIT | assert, url, util |
+| gopd | 1.2.0 | MIT | assert, url, util |
 | handlebars | 4.7.9 | MIT | handlebars |
-| has-property-descriptors | 1.0.2 | MIT | util |
-| has-symbols | 1.1.0 | MIT | url, util |
+| has-property-descriptors | 1.0.2 | MIT | assert, util |
+| has-symbols | 1.1.0 | MIT | assert, url, util |
 | has-tostringtag | 1.0.2 | MIT | util |
-| hasown | 2.0.4 | MIT | url, util |
+| hasown | 2.0.4 | MIT | assert, url, util |
 | htmlparser2 | 10.1.0 | MIT | cheerio |
 | ieee754 | 1.2.1 | BSD-3-Clause | buffer |
 | inherits | 2.0.4 | ISC | util |
 | is-arguments | 1.2.0 | MIT | util |
 | is-callable | 1.2.7 | MIT | util |
 | is-generator-function | 1.1.2 | MIT | util |
+| is-nan | 1.3.2 | MIT | assert |
 | is-regex | 1.2.1 | MIT | util |
 | is-typed-array | 1.1.15 | MIT | util |
 | json-schema-traverse | 1.0.0 | MIT | ajv |
 | lodash | 4.18.1 | MIT | lodash |
 | loupe | 2.3.7 | MIT | chai |
-| math-intrinsics | 1.1.0 | MIT | url, util |
+| math-intrinsics | 1.1.0 | MIT | assert, url, util |
 | moment | 2.31.0 | MIT | moment |
 | nth-check | 2.1.1 | BSD-2-Clause | cheerio |
 | object-inspect | 1.13.4 | MIT | url |
+| object-is | 1.1.6 | MIT | assert |
+| object-keys | 1.1.1 | MIT | assert |
+| object.assign | 4.1.7 | MIT | assert |
 | path-browserify | 1.0.1 | MIT | path |
 | pathval | 1.1.1 | MIT | chai |
 | possible-typed-array-names | 1.1.0 | MIT | util |
@@ -71,11 +77,12 @@ Zorvik scripts can `require()` the libraries in `dist/`, which are built from th
 | querystring-es3 | 0.2.1 | MIT | querystring |
 | safe-regex-test | 1.1.0 | MIT | util |
 | sax | 1.4.1 | ISC | xml2js |
-| set-function-length | 1.2.2 | MIT | util |
+| set-function-length | 1.2.2 | MIT | assert, util |
 | side-channel | 1.1.1 | MIT | url |
 | side-channel-list | 1.0.1 | MIT | url |
 | side-channel-map | 1.0.1 | MIT | url |
 | side-channel-weakmap | 1.0.2 | MIT | url |
+| sugar | 1.3.9 | MIT | sugar |
 | tv4 | 1.3.0 | Public Domain OR MIT | tv4 |
 | type-detect | 4.1.0 | MIT | chai |
 | url | 0.11.4 | MIT | url |
@@ -135,6 +142,29 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
+
+## assert 2.1.0
+
+```text
+Copyright Joyent, Inc. and other Node contributors. All rights reserved.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to
+deal in the Software without restriction, including without limitation the
+rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+IN THE SOFTWARE.
 ```
 
 ## assertion-error 1.1.0
@@ -566,6 +596,32 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
+
+## define-properties 1.2.1
+
+```text
+The MIT License (MIT)
+
+Copyright (C) 2015 Jordan Harband
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 ```
 
 ## dom-serializer 2.0.0
@@ -1267,6 +1323,31 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
+## is-nan 1.3.2
+
+```text
+The MIT License (MIT)
+
+Copyright (c) 2014 Jordan Harband
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
 ## is-regex 1.2.1
 
 ```text
@@ -1485,6 +1566,83 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 MIT License
 
 Copyright (c) 2013 James Halliday
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## object-is 1.1.6
+
+```text
+The MIT License (MIT)
+
+Copyright (c) 2014 Jordan Harband
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+## object-keys 1.1.1
+
+```text
+The MIT License (MIT)
+
+Copyright (C) 2013 Jordan Harband
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
+## object.assign 4.1.7
+
+```text
+The MIT License (MIT)
+
+Copyright (c) 2014 Jordan Harband
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -1859,6 +2017,18 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
+
+## sugar 1.3.9
+
+Sugar Library: freely distributable and licensed under the MIT-style license. Copyright (c) 2013 Andrew Plummer. http://sugarjs.com/
+
+```text
+Copyright © 2011 Andrew Plummer
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sub-license, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+The above copyright notice, and every other copyright notice found in this software, and all the attributions in every file, and this permission notice shall be included in all copies or substantial portions of the Software.
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
 ## tv4 1.3.0

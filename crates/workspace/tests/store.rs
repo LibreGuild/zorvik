@@ -389,6 +389,7 @@ fn import_keeps_order_and_nesting() {
         variables: vec![],
         workspace_variables: vec![],
         warnings: vec![],
+        docs: "What the API does.".into(),
     };
     let summary = ws.write_imported("", &collection).unwrap();
     assert_eq!((summary.requests, summary.folders), (52, 2));
@@ -401,7 +402,28 @@ fn import_keeps_order_and_nesting() {
     assert!(matches!(api.auth, Auth::Bearer { .. }));
     assert_eq!(api.headers[0].key, "X-Api");
     assert_eq!(api.scripts.pre_request, "pm.variables.set('a', 1);");
+    assert_eq!(api.docs, "What the API does.");
     assert_eq!(ws.read_folder("API/Sub").unwrap().headers[0].key, "X-Sub");
+}
+
+#[test]
+fn imported_names_that_are_sentences_are_cut_short() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = Workspace::create(dir.path(), "Demo").unwrap();
+    let sentence = "Retrieve the deferred completion for a request that was sent earlier, ".repeat(4);
+    let collection = ImportedCollection {
+        name: "API".into(),
+        items: vec![
+            ImportedItem::Request(req(&sentence)),
+            ImportedItem::Folder { meta: FolderMeta { name: "x".repeat(300), ..Default::default() }, children: vec![] },
+        ],
+        ..Default::default()
+    };
+    ws.write_imported("", &collection).unwrap();
+    let tree = ws.tree().unwrap();
+    let names = names(&tree[0].children);
+    assert!(names.iter().all(|n| n.chars().count() <= 120 && n.ends_with('…')), "{names:?}");
+    assert!(names[0].starts_with("Retrieve the deferred completion") && !names[0].ends_with(" …"), "{names:?}");
 }
 
 // Unix only: paths this long need special handling on Windows, where Git

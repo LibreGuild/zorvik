@@ -23,6 +23,7 @@ Then switch the active **environment** in the title bar to send the same request
 | A name can't contain braces or a line break; anything else goes | `{{api-key}}`, `{{user.id}}` |
 | Names starting with `$` are [dynamic variables](../dynamic-variables/) | `{{$uuid}}`, `{{$timestamp}}` |
 | Values may contain variables themselves | `baseUrl` = `https://{{host}}/{{apiVersion}}` |
+| A name may be made of variables, as in Postman: the inner one is replaced first | `{{host_{{env}}}}` with `env` = `eu` is `{{host_eu}}` |
 | Braces that don't form a variable are sent as they are | `{"a":{"b":1}}`, `{{}}`, `a {{ b` |
 
 Variables are replaced as plain text before sending. In a JSON body, `"{{name}}"` produces a string and `{{count}}` a number, depending on the quotes you write.

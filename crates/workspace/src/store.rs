@@ -846,7 +846,8 @@ impl Workspace {
     /// Write an imported collection into a new folder under `parent`.
     /// Collection auth/headers/scripts go on that folder; variables become an environment.
     pub fn write_imported(&self, parent: &str, collection: &ImportedCollection) -> Result<ImportSummary> {
-        let name = if collection.name.trim().is_empty() { "Imported" } else { collection.name.trim() };
+        let name = imported_name(&collection.name, "Imported");
+        let name = name.as_str();
         let parent_dir = self.folder_dir(parent)?;
         let auth = match &collection.auth {
             zorvik_formats::Auth::None => zorvik_formats::Auth::Inherit,
@@ -858,6 +859,7 @@ impl Workspace {
             auth,
             headers: collection.headers.clone(),
             scripts: collection.scripts.clone(),
+            docs: collection.docs.clone(),
             ..Default::default()
         };
         let folder = self.write_new_folder(&parent_dir, meta)?;
@@ -868,8 +870,12 @@ impl Workspace {
         self.write_items(&folder, &collection.items, &mut folders, &mut requests)?;
 
         let mut environments = 0;
+        let mut environment_id = None;
         if !collection.variables.is_empty() {
-            self.create_environment(&Environment { name: name.to_string(), variables: collection.variables.clone() })?;
+            environment_id = Some(self.create_environment(&Environment {
+                name: name.to_string(),
+                variables: collection.variables.clone(),
+            })?);
             environments = 1;
         }
         Ok(ImportSummary {
@@ -880,6 +886,7 @@ impl Workspace {
             workspace_variables: 0,
             warnings: collection.warnings.clone(),
             folder_path: Some(folder_rel),
+            environment_id,
         })
     }
 
@@ -890,16 +897,14 @@ impl Workspace {
             let seq = i as u32 + 1;
             match item {
                 ImportedItem::Folder { meta, children } => {
-                    let name = if meta.name.trim().is_empty() { "Untitled folder" } else { meta.name.trim() };
-                    let folder = self.write_new_folder(dir, FolderMeta { name: name.into(), seq, ..meta.clone() })?;
+                    let name = imported_name(&meta.name, "Untitled folder");
+                    let folder = self.write_new_folder(dir, FolderMeta { name, seq, ..meta.clone() })?;
                     *folders += 1;
                     self.write_items(&folder, children, folders, requests)?;
                 }
                 ImportedItem::Request(request) => {
                     let mut request = request.clone();
-                    if request.name.trim().is_empty() {
-                        request.name = "Untitled request".into();
-                    }
+                    request.name = imported_name(&request.name, "Untitled request");
                     request.seq = seq;
                     self.write_new_request(dir, request)?;
                     *requests += 1;
@@ -979,6 +984,28 @@ fn rename_path(from: &Path, to: &Path) -> Result<()> {
         });
     }
     std::fs::rename(from, to).map_err(|e| Error::io(format!("Could not move to {}", to.display()), e))
+}
+
+/// Longest name an import gives a folder or request: documents sometimes write a whole
+/// sentence (or a paragraph) where a name goes.
+const MAX_IMPORTED_NAME: usize = 120;
+
+/// `name` as an imported item's name: trimmed, `fallback` when empty, and cut short (at a word
+/// when there is one near the end) when too long for a name.
+fn imported_name(name: &str, fallback: &str) -> String {
+    let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    if name.is_empty() {
+        return fallback.to_string();
+    }
+    if name.chars().count() <= MAX_IMPORTED_NAME {
+        return name;
+    }
+    let cut: String = name.chars().take(MAX_IMPORTED_NAME - 1).collect();
+    let cut = match cut.rfind(' ') {
+        Some(i) if cut[..i].chars().count() > MAX_IMPORTED_NAME / 2 => &cut[..i],
+        _ => cut.as_str(),
+    };
+    format!("{}…", cut.trim_end_matches([' ', ',', '.', ';', ':', '-']))
 }
 
 fn validate_name(name: &str) -> Result<()> {

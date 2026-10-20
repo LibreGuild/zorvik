@@ -17,10 +17,12 @@ Signatures use TypeScript-style notation. `?` marks an optional argument.
 | `console` | Script console: `log`, `info`, `warn`, `error`, `debug`, `dir`, `trace`, `clear` |
 | `atob(text)`, `btoa(text)` | Base64 decode and encode (Latin-1 text) |
 | `require(name)`, `pm.require(name)` | The [built-in libraries](../sandbox/#libraries): lodash, crypto-js, moment, ajv, … |
-| `CryptoJS`, `_`, `tv4`, `cheerio` | Postman's library globals: crypto-js, lodash, tv4 and cheerio, loaded when first used |
+| `CryptoJS`, `_`, `tv4`, `cheerio` | Postman's library globals: crypto-js, lodash (with [Postman's lodash 3 names](../sandbox/#postmans-_)), tv4 and cheerio, loaded when first used |
+| `Buffer` | Node's `Buffer`, as in Postman's sandbox |
+| SugarJS methods | `"text".has("x")`, `(5).hex()`, `Date.create("today")`, …: see [SugarJS](../sandbox/#sugarjs) |
 | `xml2Json(text)` | XML to a JSON object, as in Postman (xml2js; a single child element is not an array). Throws for text that isn't XML |
 | `crypto.getRandomValues(array)`, `crypto.randomUUID()` | Secure random numbers and UUIDs |
-| `postman`, `tests`, `responseBody`, `responseCode`, `responseHeaders`, `responseTime`, `environment`, `globals`, `data`, `iteration` | The [legacy Postman API](#legacy-postman-api) |
+| `postman`, `tests`, `request`, `responseBody`, `responseCode`, `responseHeaders`, `responseTime`, `responseCookies`, `environment`, `globals`, `data`, `iteration` | The [legacy Postman API](#legacy-postman-api) |
 | Standard JavaScript | `JSON`, `Math`, `Date`, `RegExp`, `Array`, `Object`, `Map`, `Set`, `Promise`, `queueMicrotask`, typed arrays and the other built-ins of the language |
 
 See [Sandbox and limits](../sandbox/) for what is not available (network, files, timers, npm packages).
@@ -51,7 +53,7 @@ Five objects give access to variables. `pm.variables` looks through every scope;
 | `pm.environment` | The active environment | Yes |
 | `pm.collectionVariables` | Workspace variables (in `zorvik.yaml`) | Yes |
 | `pm.globals` | Global variables | Yes |
-| `pm.iterationData` | The current row of the run's data file | No |
+| `pm.iterationData` | The current row of the run's data file | Only for the script itself |
 
 ### Precedence
 
@@ -115,7 +117,7 @@ In a collection run, local values set with `pm.variables.set` last for **the who
 
 ### pm.iterationData
 
-The current row of the run's data file (see [Data files](../../testing/data-files/)). It's read-only and empty in a single send.
+The current row of the run's data file (see [Data files](../../testing/data-files/)). It's empty in a single send. `set`, `unset` and `clear` change it for the rest of the script only; the next script gets the row as it is in the file.
 
 | Method | Returns | Description |
 |---|---|---|
@@ -129,9 +131,9 @@ CSV values are always strings. JSON values keep their type: `pm.iterationData.ge
 
 ### How values are stored
 
-Variables are text outside of scripts. When a script sets a value, it's stored like this:
+Variables are text outside of scripts. When a script sets a value, its text is what `{{name}}` in requests uses and what is kept after the send:
 
-| Value passed to `set` | Stored as |
+| Value passed to `set` | Text |
 |---|---|
 | A string | The string itself |
 | A number or boolean | Its text, for example `"5"` or `"true"` |
@@ -139,20 +141,17 @@ Variables are text outside of scripts. When a script sets a value, it's stored l
 | `undefined` | An empty string |
 | `null` | The text `"null"` |
 
-Within the same script, `get` returns exactly what you passed to `set`. Later scripts, and `{{name}}` in requests, see the stored text:
+Scripts get the value back as it was set, as in Postman: in the same script, and in the later scripts of the same send or collection run (as long as nothing else changed the variable). After the send, or in a new run, they get the text:
 
 ```js
-pm.environment.set("count", 5);
-pm.environment.get("count") + 1;   // 6 in this script
-// In the next script: pm.environment.get("count") === "5"
+pm.collectionVariables.set("ids", [1, 2, 3]);
+// A later request of the run:
+const ids = pm.collectionVariables.get("ids");   // [1, 2, 3], an array
+const next = ids.shift();
+pm.collectionVariables.set("ids", ids);
 ```
 
-To store structured data, store JSON and parse it when reading:
-
-```js
-pm.collectionVariables.set("ids", [1, 2, 3]);                // stored as "[1,2,3]"
-const ids = JSON.parse(pm.collectionVariables.get("ids"));   // in a later script
-```
+To be sure of the type in any script, store JSON and parse it when reading: `JSON.parse(pm.collectionVariables.get("ids"))` works with the text too.
 
 ### What happens to values after the send
 
@@ -167,20 +166,7 @@ Values kept on this computer live in the app's data folder, not in the workspace
 
 ### Dynamic variables in replaceIn
 
-`replaceIn` also fills in these dynamic variables when no scope has the name. Nested variables are resolved up to 10 levels deep; names that aren't found stay as they are.
-
-| Name | Value |
-|---|---|
-| `{{$guid}}`, `{{$uuid}}`, `{{$randomUUID}}` | A random UUID v4 |
-| `{{$timestamp}}` | Unix time in seconds |
-| `{{$timestampMs}}` | Unix time in milliseconds |
-| `{{$isoTimestamp}}` | The current time in ISO 8601 |
-| `{{$randomInt}}` | A whole number from 0 to 1000 |
-| `{{$randomBoolean}}` | `true` or `false` |
-| `{{$randomAlphaNumeric}}` | One character, `a`–`z` or `0`–`9` |
-| `{{$randomEmail}}` | An address like `user4821@example.com` |
-
-These are the same dynamic variables requests support; see [Dynamic variables](../../variables/dynamic-variables/).
+`replaceIn` also fills in [dynamic variables](../../variables/dynamic-variables/) (`{{$guid}}`, `{{$timestamp}}`, `{{$randomEmail}}`, every one Postman has and more) when no scope has the name. Nested variables are resolved up to 10 levels deep, including names made of variables (`{{host_{{env}}}}`); names that aren't found stay as they are.
 
 ## pm.request
 
@@ -191,7 +177,9 @@ The request. In a pre-request script you can change it; in a post-response scrip
 | `pm.request.url` | [URL object](#pmrequesturl) | The URL. Assign a string to replace it: `pm.request.url = "https://…"`. |
 | `pm.request.method` | string | The method. Assigning sets it in upper case: `pm.request.method = "post"` sends `POST`. |
 | `pm.request.headers` | [header list](#header-and-query-lists) | The request's headers (names compared without case) |
-| `pm.request.body` | [body object](#pmrequestbody) | The body text |
+| `pm.request.body` | [body object](#pmrequestbody) | The body: text, or the fields of a form |
+| `pm.request.description` | string or `undefined` | The request's docs |
+| `pm.request.to` | request assertion | `pm.request.to.have.header("Accept")`; see [Request assertions](../assertions/#request-assertions) |
 | `pm.request.addHeader(header)` | `undefined` | Same as `headers.add(header)` |
 | `pm.request.upsertHeader(header)` | `undefined` | Same as `headers.upsert(header)` |
 | `pm.request.removeHeader(name: string)` | `undefined` | Same as `headers.remove(name)` |
@@ -206,9 +194,9 @@ The request. In a pre-request script you can change it; in a post-response scrip
 | `toJSON()` | string | Same as `toString()` |
 | `update(url: string)` | `undefined` | Replaces the whole URL |
 | `getHost()` | string | The host, for example `api.example.com` |
-| `getPath()` | string | The path, `/` when there is none |
+| `getPath(unresolved?)` | string | The path, `/` when there is none. `:name` path variables are replaced by their values unless `unresolved` is `true`. |
 | `getQueryString()` | string | The query without `?`, or an empty string |
-| `getPathWithQuery()` | string | Path and query, for example `/users?page=1` |
+| `getPathWithQuery(unresolved?)` | string | Path and query, for example `/users/7?page=1` |
 | `getRemote()` | string | Host and port, for example `api.example.com:8443` (no port when none is written) |
 | `protocol` | string or `undefined` | For example `https` |
 | `host` | string[] | The host split at dots: `["api", "example", "com"]` |
@@ -216,6 +204,7 @@ The request. In a pre-request script you can change it; in a post-response scrip
 | `path` | string[] | The path segments: `["users", "42"]` |
 | `hash` | string or `undefined` | The part after `#` |
 | `query` | [query list](#header-and-query-lists) | The query parameters; changing them rewrites the URL |
+| `variables` | [list](#header-and-query-lists) | The `:name` path variables and their values; in a pre-request script, changing them changes what is sent |
 
 In a pre-request script the URL is not resolved yet, so parts may be `{{variables}}`: for `{{base}}/users`, `getHost()` returns `{{base}}`.
 
@@ -232,12 +221,16 @@ Query values are written into the URL text as you give them. Encode them yoursel
 
 | Member | Type | Description |
 |---|---|---|
-| `raw` | string | The body text. Assign to replace it; objects are stored as JSON. |
-| `mode` | `"raw"` | Always `"raw"` |
-| `update(value: string or {raw})` | `undefined` | Replaces the body: `update("text")` or `update({ raw: "text" })` |
-| `isEmpty()` | boolean | Whether the body is empty |
-| `toString()` | string | The body text |
-| `toJSON()` | object | `{ mode: "raw", raw }` |
+| `mode` | string or `undefined` | Postman's body mode: `"raw"` (JSON, Text, XML), `"urlencoded"`, `"formdata"`, `"file"` or `"graphql"`; `undefined` without a body |
+| `raw` | string or `undefined` | The body text in `raw` mode. Assign to replace it (objects are stored as JSON); that makes it a raw body. |
+| `urlencoded` | [list](#header-and-query-lists) or `undefined` | The fields of a URL-encoded body: `{ key, value }` |
+| `formdata` | [list](#header-and-query-lists) or `undefined` | The fields of a form-data body: `{ key, value, type: "text" }` or `{ key, src, type: "file" }` (`src` is the file's path) |
+| `update(value)` | `undefined` | Replaces the body: `update("text")`, `update({ raw: "text" })`, `update({ mode: "urlencoded", urlencoded: [{ key, value }] })` or `update({ mode: "formdata", formdata: […] })` |
+| `isEmpty()` | boolean | Whether the body is empty (no text, or no fields) |
+| `toString()` | string | The text; for a URL-encoded body the encoded fields (`a=1&b=2`) |
+| `toJSON()` | object | `{ mode: "raw", raw }`, or `{ mode, urlencoded }` / `{ mode, formdata }` |
+
+Only the enabled fields are in the lists. In a pre-request script, changing a field list changes what is sent: switched-off fields stay as they are, and form-data fields you didn't change keep their content type.
 
 ```js title="Pre-request script"
 const body = JSON.parse(pm.request.body.raw || "{}");
@@ -245,9 +238,14 @@ body.sentAt = new Date().toISOString();
 pm.request.body.raw = JSON.stringify(body);
 ```
 
+```js title="Pre-request script: sign a form"
+const fields = pm.request.body.urlencoded.all().map((f) => f.key + "=" + f.value).join("&");
+pm.request.body.urlencoded.upsert({ key: "sig", value: CryptoJS.HmacSHA256(fields, pm.environment.get("key")).toString() });
+```
+
 ### Header and query lists
 
-`pm.request.headers`, `pm.response.headers` and `pm.request.url.query` are Postman-style property lists of `{ key, value }` items. Header names are compared without case; query keys with case.
+`pm.request.headers`, `pm.response.headers`, `pm.request.url.query`, `pm.request.url.variables` and the body's field lists are Postman-style property lists of `{ key, value }` items (form-data fields also have `type` and `src`). Header names are compared without case; query keys with case.
 
 | Method | Returns | Description |
 |---|---|---|
@@ -293,6 +291,10 @@ Available in post-response scripts. In pre-request scripts `pm.response` is `und
 | `json()` | any | The body parsed as JSON. Throws `SyntaxError: pm.response.json(): the response body is not valid JSON (…)` when it isn't. |
 | `to` | response assertion | Chai-style assertions on the response; see [Response assertions](../assertions/#response-assertions) |
 | `cookies` | cookie list | The cookies this response set (`Set-Cookie`); see [pm.cookies](#pmcookies) for its methods |
+| `stream` | `Buffer` | The body as a `Buffer`: `res.stream.toString()` is the text |
+| `details()` | object | `{ code, name, detail }`, `name` and `detail` being the reason phrase |
+| `size()` | object | `{ body, header, total }` in bytes (`header`: the headers' `Name: value` lines) |
+| `contentInfo()` | object | `{ mimeType, mimeFormat, charset, fileExtension, fileName }` from the `Content-Type` and `Content-Disposition` headers |
 | `events` | `{event, data, id}[]` | Only for Server-Sent Events requests in a collection run; see below |
 | `toJSON()` | object | `{ code, status, header: [{key, value}], body }` |
 
@@ -373,6 +375,7 @@ Passing `pm.response` to `pm.expect` gives the [response assertions](../assertio
 |---|---|
 | `pm.execution.setNextRequest(name: string or null)` | In a collection run, which request runs next |
 | `pm.execution.skipRequest()` | In a pre-request script: don't send this request. A single send shows **Not sent**; a collection run reports it as skipped (with the reason) and goes on. In a post-response script it does nothing. |
+| `pm.execution.location` | The names of the folders the request is in, outermost first, then the request's: `["Shop", "Users", "Get user"]`. `pm.execution.location.current` is the name of the folder (or request) whose script is running. |
 
 `setNextRequest` takes a request's name, or its path under `requests/` (as in `pm.info.requestId`). After the current request finishes, the run continues with that request instead of the next one in the list. `setNextRequest(null)` ends the current iteration.
 
@@ -487,28 +490,31 @@ Older Postman collections use these forms. They keep working.
 
 | Legacy form | Equivalent |
 |---|---|
-| `tests["name"] = condition` | A test named `name` that passes when `condition` is truthy (added after the `pm.test` results) |
-| `postman.setEnvironmentVariable(name, value)` | `pm.environment.set` |
+| `tests["name"] = condition` | A test named `name` that passes when `condition` is truthy (added after the `pm.test` results). A failing one says `expected <value> to be truthy`. |
+| `postman.setEnvironmentVariable(name, value)` | `pm.environment.set`, storing `value.toString()` as Postman does (an object becomes `[object Object]`) |
 | `postman.getEnvironmentVariable(name)` | `pm.environment.get` |
 | `postman.clearEnvironmentVariable(name)` | `pm.environment.unset` |
 | `postman.clearEnvironmentVariables()` | `pm.environment.clear` |
-| `postman.setGlobalVariable(name, value)` | `pm.globals.set` |
+| `postman.setGlobalVariable(name, value)` | `pm.globals.set`, storing `value.toString()` |
 | `postman.getGlobalVariable(name)` | `pm.globals.get` |
 | `postman.clearGlobalVariable(name)` | `pm.globals.unset` |
 | `postman.clearGlobalVariables()` | `pm.globals.clear` |
-| `postman.getResponseHeader(name)` | `pm.response.headers.get(name)` |
+| `postman.getResponseHeader(name)` | `pm.response.headers.get(name)` (post-response only) |
+| `postman.getResponseCookie(name)` | `pm.cookies.one(name)`: the cookie `{ name, value, … }` (post-response only) |
 | `postman.setNextRequest(name)` | `pm.execution.setNextRequest(name)` |
-| `environment` | A copy of the environment's values when the script started |
-| `globals` | A copy of the global values when the script started |
+| `request` | `{ id, name, description, method, url, headers, data }`: `headers` as `{ name: value }`, `data` the body text, or the form fields as `{ key: value }` (an array for repeated keys) |
+| `environment`, `globals` | The environment's and the global values when the script started; the `postman.*` setters above change them too |
 | `data` | A copy of the data file row |
 | `iteration` | `pm.info.iteration` |
 | `responseBody` | `pm.response.text()` (post-response only) |
 | `responseCode` | `{ code, name, detail }` where `name` and `detail` are the reason phrase (post-response only) |
 | `responseHeaders` | `pm.response.headers.toObject()` (post-response only) |
 | `responseTime` | `pm.response.responseTime` (post-response only) |
+| `responseCookies` | `pm.cookies.all()` (post-response only) |
 
 ```js
 tests["Status code is 200"] = responseCode.code === 200;
+tests["Body has the name"] = responseBody.has("name");   // SugarJS, as in Postman
 postman.setEnvironmentVariable("token", JSON.parse(responseBody).token);
 ```
 
@@ -523,4 +529,4 @@ These exist in Postman but not in Zorvik. Using them throws an error, so a scrip
 
 `pm.vault` throws as soon as it's read, so even `if (pm.vault)` throws.
 
-`require` of a package that isn't [built in](../sandbox/#libraries) throws `Cannot find module 'name'. Scripts can require only these built-in libraries: …`. See [Sandbox and limits](../sandbox/#postman-compatibility) for the full comparison.
+`require` of a package that isn't [built in](../sandbox/#libraries) throws `Cannot find module 'name'. Scripts can require only these built-in libraries: …`. `pm.require` of a package from Postman's team package library throws `pm.require: '@team/package' is from a Postman package library, which Zorvik can't reach. Copy its code into the script.` See [Sandbox and limits](../sandbox/#postman-compatibility) for the full comparison.

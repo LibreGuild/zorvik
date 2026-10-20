@@ -79,6 +79,8 @@ Request fields for `save_requests` and `send_request`:
 |---|---|---|---|
 | `import` | Import a Postman collection or environment, an OpenAPI 3 or Swagger 2 document, or a cURL command, from its text, a URL or an absolute file path. OpenAPI documents are kept in `specs/`, their path parameters become `{{variables}}` with example values in a new environment, and responses are checked against the documented schemas. | exactly one of `text`, `url`, `file`; `folder`; `baseUrl` (OpenAPI without a full server URL) | edit; a `url` also traffic; a `file` always |
 | `update_from_openapi` | Update a folder imported from OpenAPI from a new version of the document: new operations added, changed ones updated field by field where you left the old value, removed ones kept and marked removed. Scripts, settings and names are never touched. Call with `preview: true` first. | `folder`; one of `text`, `url`, `file`; `preview` | edit; a `url` also traffic; a `file` always |
+| `search_catalog` | The [API catalog](../../requests/api-catalog/): well-known APIs with their id, what they do, how they sign in, the format and license of their description, and whether they can be imported (and why not). | `query`; `category` | none |
+| `import_from_catalog` | Import an API from the catalog: its description is downloaded from the publisher, its requests go into a new folder, and its environment (made active) holds `baseUrl` and empty secret variables for the credentials, for you to fill in. An API with thousands of operations and no preset groups needs `groups`; the error lists them. | `id`; `folder`; `groups` | edit; a download also traffic (to the publisher's host) |
 
 ## Sending
 

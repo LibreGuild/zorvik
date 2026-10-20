@@ -5,6 +5,7 @@
 pub mod academy;
 pub mod agents;
 mod batch;
+mod catalog;
 mod dns;
 mod dto;
 mod file_stream;
@@ -183,6 +184,8 @@ struct Inner {
     agents: agents::AgentHub,
     /// Training Bootcamp labs and progress (`academy.*`).
     academy: academy::AcademyState,
+    /// The last API catalog download (`catalog.*`).
+    catalog: catalog::Downloads,
 }
 
 /// Responses kept in memory for `read_history`, and body characters kept of each.
@@ -390,6 +393,7 @@ impl Api {
             tool_runs: Mutex::new(HashMap::new()),
             agents: Default::default(),
             academy: Default::default(),
+            catalog: Default::default(),
             generation: Default::default(),
         };
         Self { inner: Arc::new(inner) }
@@ -904,6 +908,16 @@ impl Api {
             "import.url" => ok(self.import_url(params(p)?).await?),
             "import.updatePreview" => ok(self.spec_update(params(p)?, false).await?),
             "import.update" => ok(self.spec_update(params(p)?, true).await?),
+            "catalog.list" => ok(catalog::entries()),
+            "catalog.preview" => {
+                #[derive(Deserialize)]
+                struct P {
+                    id: String,
+                }
+                let P { id } = params(p)?;
+                ok(self.catalog_preview(&id).await?)
+            }
+            "catalog.import" => ok(self.catalog_import(params(p)?).await?),
             "export.curl" => ok(self.export_curl(params(p)?)?),
             "export.snippet" => ok(self.export_snippet(params(p)?)?),
 
@@ -1315,18 +1329,6 @@ impl Api {
         }
     }
 
-    /// Write an OpenAPI document into `specs/` under a free name; its path from the workspace root.
-    fn keep_spec(&self, ws: &Workspace, name: &str, text: &str) -> ApiResult<String> {
-        let dir = ws.root().join(specs::SPECS_DIR);
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| ApiError::new("io", format!("Could not create {}: {e}", dir.display())))?;
-        let ext = if text.trim_start_matches('\u{feff}').trim_start().starts_with('{') { ".json" } else { ".yaml" };
-        let stem = zorvik_workspace::fsutil::sanitize_file_stem(if name.trim().is_empty() { "api" } else { name });
-        let file = zorvik_workspace::fsutil::unique_name(&dir, &stem, ext, None);
-        zorvik_workspace::fsutil::atomic_write(&dir.join(&file), text.as_bytes())?;
-        Ok(format!("{}/{file}", specs::SPECS_DIR))
-    }
-
     /// Adds the entry; its id, when it was written.
     #[allow(clippy::too_many_arguments)]
     fn record_history(
@@ -1507,7 +1509,7 @@ impl Api {
                 }
                 let bytes =
                     std::fs::read(path).map_err(|e| ApiError::new("io", format!("Could not read {path}: {e}")))?;
-                String::from_utf8_lossy(&bytes).into_owned()
+                document_text(&bytes)
             }
             (None, None) => return Err(ApiError::invalid("Nothing to import")),
         };
@@ -1543,8 +1545,7 @@ impl Api {
         }
         // A relative server URL in an OpenAPI document is relative to where the document is.
         let base_url = p.base_url.or_else(|| url::Url::parse(&p.url).ok().map(|u| u.origin().ascii_serialization()));
-        self.import_text_from(String::from_utf8_lossy(&resp.body).into_owned(), p.parent, base_url, Some(p.url.clone()))
-            .await
+        self.import_text_from(document_text(&resp.body), p.parent, base_url, Some(p.url.clone())).await
     }
 
     /// Import `text` under folder `parent`. An OpenAPI document that doesn't say where the API
@@ -1571,7 +1572,13 @@ impl Api {
         let ws = self.ws()?;
         let key = ws.local_key();
         let text = text.trim_start_matches('\u{feff}').to_string();
-        let kind = detect_import(&text);
+        // Telling the kind apart parses a JSON document whole (up to 50 MB): off the async workers.
+        let (text, kind) = tokio::task::spawn_blocking(move || {
+            let kind = detect_import(&text);
+            (text, kind)
+        })
+        .await
+        .map_err(join_err)?;
         let secrets_env = match kind {
             ImportKind::PostmanEnvironment => {
                 let env = zorvik_workspace::formats::postman::import_postman_environment(&text)?;
@@ -1595,17 +1602,21 @@ impl Api {
                 workspace_variables: 0,
                 warnings: vec![],
                 folder_path: None,
+                environment_id: Some(id),
             });
         }
         let spec_text = (kind == ImportKind::OpenApi).then(|| text.clone());
         let collection = match kind {
             // Parsing a big spec is CPU-bound: keep it off the async workers.
-            ImportKind::Postman | ImportKind::OpenApi => tokio::task::spawn_blocking(move || match kind {
-                ImportKind::Postman => zorvik_workspace::formats::postman::import_postman_collection(&text),
-                _ => zorvik_workspace::formats::openapi::import_openapi(&text),
-            })
-            .await
-            .map_err(join_err)??,
+            ImportKind::Postman | ImportKind::OpenApi | ImportKind::Smithy => {
+                tokio::task::spawn_blocking(move || match kind {
+                    ImportKind::Postman => zorvik_workspace::formats::postman::import_postman_collection(&text),
+                    ImportKind::Smithy => zorvik_workspace::formats::smithy::import_smithy(&text),
+                    _ => zorvik_workspace::formats::openapi::import_openapi(&text),
+                })
+                .await
+                .map_err(join_err)??
+            }
             ImportKind::Curl => {
                 let parsed = parse_curl(&text)?;
                 let path = ws.create_request(&parent, parsed.request.clone())?;
@@ -1617,13 +1628,15 @@ impl Api {
                     workspace_variables: 0,
                     warnings: parsed.warnings,
                     folder_path: Some(zorvik_workspace::store::parent_of(&path)),
+                    environment_id: None,
                 });
             }
             ImportKind::PostmanEnvironment => unreachable!(),
             ImportKind::Unknown => {
                 return Err(ApiError::new(
                     "parse",
-                    "Unrecognized file. Supported: Postman collection v2/v2.1, Postman environment, OpenAPI 3.x / Swagger 2.0 (JSON or YAML), cURL command.",
+                    "Unrecognized file. Supported: Postman collections and environments, OpenAPI 3.x and Swagger 2.0 documents \
+                     (JSON or YAML), Google API Discovery documents, AWS service models (Smithy JSON), cURL commands.",
                 ));
             }
         };
@@ -1631,6 +1644,27 @@ impl Api {
         if kind == ImportKind::OpenApi {
             apply_base_url(&mut collection, base_url.as_deref())?;
         }
+        let spec = spec_text.map(|text| KeptSpec {
+            text,
+            source: source.unwrap_or_default(),
+            validate: true,
+            only: Default::default(),
+            scheme: String::new(),
+        });
+        self.write_collection(&ws, parent, collection, spec).await
+    }
+
+    /// Write an imported collection under folder `parent`: its variables become an environment
+    /// (secret values go to the secret store), its OpenAPI document `spec` is kept beside the
+    /// requests, and Postman collection variables join the workspace variables.
+    pub(crate) async fn write_collection(
+        &self,
+        ws: &Workspace,
+        parent: String,
+        mut collection: zorvik_workspace::formats::ImportedCollection,
+        spec: Option<KeptSpec>,
+    ) -> ApiResult<ImportSummary> {
+        let key = ws.local_key();
         // Collection variables become an environment. Secret values go to the secret store,
         // never into the workspace file (not even briefly).
         let variables = collection.variables.clone();
@@ -1643,15 +1677,15 @@ impl Api {
             tokio::task::spawn_blocking(move || ws2.write_imported(&parent, &collection)).await.map_err(join_err)??;
         // The document is kept beside the requests: their responses are checked against it,
         // and the folder can be updated from a new version.
-        if let (Some(spec_text), Some(folder)) = (spec_text, summary.folder_path.clone()) {
-            match self.keep_spec(&ws, &summary.name, &spec_text) {
+        if let (Some(kept), Some(folder)) = (spec, summary.folder_path.clone()) {
+            // Up to 50 MB to write: off the async workers.
+            let (ws2, name) = (ws.clone(), summary.name.clone());
+            let KeptSpec { text, source, validate, only, scheme } = kept;
+            match tokio::task::spawn_blocking(move || keep_spec(&ws2, &name, &text)).await.map_err(join_err)? {
                 Ok(spec) => {
                     let mut meta = ws.read_folder(&folder)?;
-                    meta.openapi = Some(zorvik_workspace::formats::OpenApiSource {
-                        spec,
-                        source: source.unwrap_or_default(),
-                        validate: true,
-                    });
+                    meta.openapi =
+                        Some(zorvik_workspace::formats::OpenApiSource { spec, source, validate, only, scheme });
                     ws.save_folder(&folder, &meta)?;
                 }
                 Err(e) => {
@@ -1659,15 +1693,14 @@ impl Api {
                 }
             }
         }
-        if summary.environments > 0
+        // By id: an older environment can have the same name.
+        if let Some(id) = &summary.environment_id
             && variables.iter().any(|v| v.secret && !v.value.is_empty())
-            && let Ok(envs) = ws.list_environments()
-            && let Some(entry) = envs.iter().find(|e| e.environment.name == summary.name)
         {
-            self.inner.secrets.conceal(&env_scope(&key, &entry.id), &variables)?;
+            self.inner.secrets.conceal(&env_scope(&key, id), &variables)?;
         }
         if !workspace_variables.is_empty() {
-            let (added, kept) = self.add_workspace_variables(&ws, &workspace_variables)?;
+            let (added, kept) = self.add_workspace_variables(ws, &workspace_variables)?;
             summary.workspace_variables = added;
             if !kept.is_empty() {
                 summary.warnings.push(format!(
@@ -1870,8 +1903,49 @@ enum ImportKind {
     Postman,
     PostmanEnvironment,
     OpenApi,
+    /// An AWS service model (Smithy JSON).
+    Smithy,
     Curl,
     Unknown,
+}
+
+/// An OpenAPI document to keep beside the requests imported from it (see `OpenApiSource`).
+pub(crate) struct KeptSpec {
+    pub text: String,
+    /// Where it came from (a URL or a workspace file), for updating from it later.
+    pub source: String,
+    pub validate: bool,
+    pub only: zorvik_workspace::formats::OperationFilter,
+    /// The security scheme requests use (see `OpenApiSource::scheme`).
+    pub scheme: String,
+}
+
+/// Write an OpenAPI document into `specs/` under a free name; its path from the workspace root.
+fn keep_spec(ws: &Workspace, name: &str, text: &str) -> ApiResult<String> {
+    let dir = ws.root().join(specs::SPECS_DIR);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| ApiError::new("io", format!("Could not create {}: {e}", dir.display())))?;
+    let ext = if text.trim_start_matches('\u{feff}').trim_start().starts_with('{') { ".json" } else { ".yaml" };
+    let stem = zorvik_workspace::fsutil::sanitize_file_stem(if name.trim().is_empty() { "api" } else { name });
+    // Claimed, not just picked: two imports at once (the app and an agent) get a file each.
+    let file = zorvik_workspace::fsutil::claim_unique_name(&dir, &stem, ext)?;
+    zorvik_workspace::fsutil::atomic_write(&dir.join(&file), text.as_bytes())?;
+    Ok(format!("{}/{file}", specs::SPECS_DIR))
+}
+
+/// The text of a file to import: UTF-8, or UTF-16 when it starts with a byte order mark (as
+/// some Windows tools save files). A UTF-8 byte order mark is dropped.
+pub(crate) fn document_text(bytes: &[u8]) -> String {
+    let utf16 = |rest: &[u8], unit: fn([u8; 2]) -> u16| {
+        let units: Vec<u16> = rest.as_chunks::<2>().0.iter().map(|c| unit(*c)).collect();
+        String::from_utf16_lossy(&units)
+    };
+    match bytes {
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes),
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes),
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        _ => String::from_utf8_lossy(bytes).into_owned(),
+    }
 }
 
 fn detect_import(text: &str) -> ImportKind {
@@ -1881,24 +1955,27 @@ fn detect_import(text: &str) -> ImportKind {
         return ImportKind::Curl;
     }
     if let Ok(json) = serde_json::from_str::<Value>(trimmed) {
-        if json
-            .get("info")
-            .and_then(|i| i.get("schema"))
-            .and_then(|s| s.as_str())
-            .is_some_and(|s| s.contains("getpostman"))
-            || (json.get("info").is_some() && json.get("item").is_some())
-        {
+        // Any collection version, globals files and the Postman API's wrappers (formats::postman).
+        if zorvik_workspace::formats::postman::is_collection(&json) {
             return ImportKind::Postman;
         }
-        if json.get("values").is_some_and(|v| v.is_array()) && json.get("name").is_some() {
+        if zorvik_workspace::formats::postman::is_environment(&json) {
             return ImportKind::PostmanEnvironment;
         }
-        if json.get("openapi").is_some() || json.get("swagger").is_some() {
+        // Google Discovery documents import as OpenAPI (converted when parsed).
+        if json.get("openapi").is_some() || json.get("swagger").is_some() || json.get("discoveryVersion").is_some() {
             return ImportKind::OpenApi;
+        }
+        if zorvik_workspace::formats::smithy::is_smithy(&json) {
+            return ImportKind::Smithy;
         }
         return ImportKind::Unknown;
     }
-    if lower_head.contains("openapi:") || lower_head.contains("swagger:") {
+    // YAML: usually near the top, but documents that sort their keys put it anywhere.
+    if lower_head.contains("openapi:")
+        || lower_head.contains("swagger:")
+        || trimmed.lines().any(|l| l.starts_with("openapi:") || l.starts_with("swagger:"))
+    {
         return ImportKind::OpenApi;
     }
     ImportKind::Unknown
@@ -2014,6 +2091,19 @@ mod tests {
         assert_eq!(detect_import(r#"{"name":"Dev","values":[]}"#), ImportKind::PostmanEnvironment);
         assert_eq!(detect_import(r#"{"openapi":"3.0.0"}"#), ImportKind::OpenApi);
         assert_eq!(detect_import("openapi: 3.1.0\ninfo:\n  title: x"), ImportKind::OpenApi);
+        // Files saved as UTF-16 (with a byte order mark) or with a UTF-8 one.
+        let utf16: Vec<u8> =
+            [0xFF, 0xFE].into_iter().chain("{\"a\": \"é\"}".encode_utf16().flat_map(u16::to_le_bytes)).collect();
+        assert_eq!(document_text(&utf16), "{\"a\": \"é\"}");
+        let be: Vec<u8> = [0xFE, 0xFF].into_iter().chain("ok".encode_utf16().flat_map(u16::to_be_bytes)).collect();
+        assert_eq!(document_text(&be), "ok");
+        assert_eq!(document_text(b"\xEF\xBB\xBFopenapi: 3.0.0"), "openapi: 3.0.0");
+        // Keys in alphabetical order put `openapi` far down.
+        let sorted = format!("components:\n{}openapi: 3.0.0\npaths: {{}}\n", "  x: {}\n".repeat(5000));
+        assert_eq!(detect_import(&sorted), ImportKind::OpenApi);
+        assert_eq!(detect_import(&format!("{}  openapi: nested\n", "a: 1\n".repeat(2000))), ImportKind::Unknown);
+        assert_eq!(detect_import(r#"{"discoveryVersion":"v1","resources":{}}"#), ImportKind::OpenApi);
+        assert_eq!(detect_import(r#"{"smithy":"2.0","shapes":{}}"#), ImportKind::Smithy);
         assert_eq!(detect_import("curl https://x"), ImportKind::Curl);
         assert_eq!(detect_import("hello"), ImportKind::Unknown);
     }
@@ -2040,5 +2130,28 @@ mod tests {
         assert!(store.get("0").is_none());
         assert!(store.get("39").is_some());
         assert_eq!(store.items.len(), ResponseStore::MAX_ITEMS);
+    }
+
+    #[test]
+    fn documents_kept_at_once_get_a_file_each() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::create(dir.path(), "Test").unwrap();
+        let kept: Vec<(String, String)> = std::thread::scope(|s| {
+            let threads: Vec<_> = (0..8)
+                .map(|i| {
+                    let ws = &ws;
+                    s.spawn(move || {
+                        let text = format!("{{\"openapi\": \"3.0.0\", \"n\": {i}}}");
+                        (keep_spec(ws, "Pets", &text).unwrap(), text)
+                    })
+                })
+                .collect();
+            threads.into_iter().map(|t| t.join().unwrap()).collect()
+        });
+        let files: std::collections::HashSet<&str> = kept.iter().map(|(file, _)| file.as_str()).collect();
+        assert_eq!(files.len(), 8, "{kept:?}");
+        for (file, text) in &kept {
+            assert_eq!(&std::fs::read_to_string(dir.path().join(file)).unwrap(), text);
+        }
     }
 }

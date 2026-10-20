@@ -1,9 +1,10 @@
 # CI and releases
 
-Three workflows:
+Four workflows:
 - [`ci.yml`](../.github/workflows/ci.yml): the checks on every pull request and push, and the builds of releases and nightlies.
 - [`nightly.yml`](../.github/workflows/nightly.yml): once a day, starts a nightly build when `main` changed.
 - [`pages.yml`](../.github/workflows/pages.yml): the website on GitHub Pages.
+- [`catalog.yml`](../.github/workflows/catalog.yml): once a week (Mondays 04:41 UTC) and by hand, downloads every API in the [API catalog](architecture.md#api-catalog) from its publisher and imports it (`cargo test -p zorvik-api --test catalog_live -- --ignored`). It needs the internet, so it isn't one of the checks and blocks nothing: a failure means a publisher moved or changed a file, and the entry in `crates/api/catalog/catalog.yaml` needs a new URL (or becomes a link).
 
 ## Checks (every pull request and every push)
 | Job | What it does |

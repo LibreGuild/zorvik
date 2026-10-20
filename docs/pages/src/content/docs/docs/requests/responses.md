@@ -55,6 +55,7 @@ The body toolbar has the view buttons, the content type, and four icons: **Filte
 
 - Press <kbd>Mod</kbd>+<kbd>F</kbd> in the body to search it.
 - Text bodies show the first 10 MB. Beyond that, *Only the first part is shown. Use Save to file to get the whole body.*
+- A line longer than 10,000 characters (such as an image a JSON response carries as base64) shows its start and end, with *… 2.4 MB more* between them, so the body appears at once. **Show more** draws 50,000 more characters each time. **Copy body**, **Save to file…** and the filter still have the whole line.
 - An empty body shows **Empty body**.
 - A body cut at the size limit shows *The response was larger than the size limit and was cut. Raise the limit in Settings.* See [Response size limit](../http-versions-timeouts-redirects/#response-size-limit).
 

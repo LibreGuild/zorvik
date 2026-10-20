@@ -39,6 +39,10 @@ describe("mock routes", () => {
   it("lists path parameters and template names", () => {
     expect(pathParams("/users/:id/files/*")).toEqual(["id", "*"]);
     expect(pathParams("/a/{b}/*/c")).toEqual(["b"]);
+    // Custom methods after a parameter, as the server matches them (Google APIs).
+    expect(pathParams("/v1/models/:model:generateContent")).toEqual(["model"]);
+    expect(pathParams("/v1/{name}:cancel")).toEqual(["name"]);
+    expect(pathParams("/files/:name.:ext")).toEqual(["name.:ext"]);
     expect(
       requestPlaceholders({ method: "GET", path: "/u/:id", status: 200, matchQuery: [{ key: "q", value: "" }], matchHeaders: [{ key: "X-Key", value: "" }] }),
     ).toEqual(["request.method", "request.path", "request.url", "request.body", "request.json", "request.params.id", "request.query.q", "request.headers.x-key"]);

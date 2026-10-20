@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use zorvik_workspace::formats::import::{ImportedCollection, ImportedItem};
-use zorvik_workspace::formats::openapi::import_openapi;
+use zorvik_workspace::formats::openapi::{import_document, parse_document, prefer_scheme};
 use zorvik_workspace::formats::{Environment, NodeKind, OpenApiOperation, Request, TreeNode, Variable};
 
 use crate::{Api, ApiError, ApiResult, join_err};
@@ -136,7 +136,7 @@ fn merge(saved: &Request, old: Option<&Request>, new: &Request) -> (Request, Vec
     (request, fields, kept)
 }
 
-fn requests_under(nodes: &[TreeNode], out: &mut Vec<String>) {
+pub(crate) fn requests_under(nodes: &[TreeNode], out: &mut Vec<String>) {
     for n in nodes {
         match n.kind {
             NodeKind::Request => out.push(n.path.clone()),
@@ -145,7 +145,7 @@ fn requests_under(nodes: &[TreeNode], out: &mut Vec<String>) {
     }
 }
 
-fn find<'a>(nodes: &'a [TreeNode], path: &str) -> Option<&'a TreeNode> {
+pub(crate) fn find<'a>(nodes: &'a [TreeNode], path: &str) -> Option<&'a TreeNode> {
     nodes.iter().find_map(|n| if n.path == path { Some(n) } else { find(&n.children, path) })
 }
 
@@ -177,9 +177,24 @@ impl Api {
         let text = self.update_text(&p).await?;
         let new_text = text.clone();
         let spec_file = crate::specs::spec_path(ws.root(), &source.spec);
+        // A folder that took part of the document keeps to that part, and to the scheme it chose.
+        let (only, scheme) = (source.only.clone(), source.scheme.clone());
+        // Empty headers named like the one the folder's auth sends (a description that lists the
+        // credential on every operation) would keep it from being sent: an API catalog import
+        // leaves them out, and so do the operations an update adds.
+        let folder_auth = meta.auth.clone();
         let (new, old) = tokio::task::spawn_blocking(move || {
-            let new = import_openapi(&new_text)?;
-            let old = spec_file.and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| import_openapi(&t).ok());
+            let import = |text: &str| {
+                let mut doc = parse_document(text)?;
+                if !scheme.is_empty() {
+                    prefer_scheme(&mut doc, &scheme);
+                }
+                let mut collection = import_document(&doc, &only)?;
+                crate::catalog::drop_auth_headers(&mut collection.items, &folder_auth);
+                Ok::<_, zorvik_workspace::formats::import::ImportError>(collection)
+            };
+            let new = import(&new_text)?;
+            let old = spec_file.and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| import(&t).ok());
             Ok::<_, ApiError>((new, old))
         })
         .await
@@ -270,8 +285,13 @@ impl Api {
 
         // New variables (path parameters of new operations) go into the folder's environment.
         // Read from the files as they are: secret values stay out of them.
+        // The folder's environment is named like it; importing an API again makes another one of
+        // that name (and makes it active), so the active one goes first.
         let envs = ws.list_environments()?;
-        let env = envs.iter().find(|e| e.environment.name == meta.name);
+        let active = self.active_env_id(&ws);
+        let named = |e: &&zorvik_workspace::EnvironmentEntry| e.environment.name == meta.name;
+        let env =
+            envs.iter().filter(named).find(|e| Some(&e.id) == active.as_ref()).or_else(|| envs.iter().find(named));
         let have: Vec<&str> =
             env.map(|e| e.environment.variables.iter().map(|v| v.key.as_str()).collect()).unwrap_or_default();
         let add: Vec<Variable> = new.variables.iter().filter(|v| !have.contains(&v.key.as_str())).cloned().collect();

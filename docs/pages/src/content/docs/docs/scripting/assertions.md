@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-`pm.expect` is a chai-style (BDD) assertion library built into the sandbox. It supports the chai words most collections use, and the Postman response assertions (`pm.response.to.…`). This page lists all of them.
+`pm.expect` is chai's BDD assertion API, with Postman's response and request assertions (`pm.response.to.…`, `pm.request.to.…`), as in Postman's sandbox. This page lists all of them.
 
 An assertion that fails throws an `AssertionError`. Inside `pm.test` that fails the test and the script goes on; outside `pm.test` it stops the script.
 
@@ -52,8 +52,9 @@ Flags change the assertions that follow them.
 |---|---|---|
 | `not` | Negates the assertion | All |
 | `deep` | Compares by value instead of `===` | `equal`, `include`, `property`, `members`, `oneOf` |
-| `nested` | Reads a dotted path like `a.b[1].c` | `property` |
-| `own` | Only the object's own properties, not inherited ones | `property` |
+| `nested` | Reads a dotted path like `a.b[1].c` | `property`, `include` |
+| `own` | Only the object's own properties, not inherited ones | `property`, `include` |
+| `itself` | The function itself rather than its instances | `respondTo` |
 | `ordered` | Members must be in the same order | `members` |
 | `any` | At least one of the keys | `keys` |
 | `all` | All of the keys (the default) | `keys` |
@@ -62,6 +63,7 @@ Flags change the assertions that follow them.
 ```js
 pm.expect({ a: 1 }).to.not.have.property("b");
 pm.expect({ a: { b: [1, { c: 3 }] } }).to.have.nested.property("a.b[1].c", 3);
+pm.expect({ a: { b: 1 } }).to.nested.include({ "a.b": 1 });
 pm.expect({ a: 1, b: 2 }).to.include.keys("a");
 ```
 
@@ -249,6 +251,16 @@ pm.expect(body).to.have.nested.property("user.address.city", "Paris");
 pm.expect(body).to.have.deep.property("tags", ["a", "b"]);
 ```
 
+## Objects
+
+| Assertion | Passes when |
+|---|---|
+| `extensible` | Properties can be added to the subject (primitives are not extensible) |
+| `sealed` | The subject is sealed (`Object.seal`; primitives are sealed) |
+| `frozen` | The subject is frozen (`Object.freeze`; primitives are frozen) |
+| `ownPropertyDescriptor(name, descriptor?)`, `haveOwnPropertyDescriptor` | The subject has an own property `name` (with exactly that descriptor, when given). The rest of the chain is about the descriptor. |
+| `arguments`, `Arguments` | The subject is a function's `arguments` object |
+
 ## Functions and errors
 
 | Assertion | Aliases | Passes when |
@@ -259,6 +271,11 @@ pm.expect(body).to.have.deep.property("tags", ["a", "b"]);
 | `throw(ErrorType, "text" or /regexp/)` | | Both |
 | `satisfy(fn)` | `satisfies` | `fn(subject)` returns a truthy value |
 | `instanceOf(Type)` | `instanceof` | `subject instanceof Type` |
+| `respondTo(name)` | `respondsTo` | The subject has a method `name`. For a function (a class), its instances must have it; with `itself`, the function itself. |
+| `change(object, name)` | `changes` | Calling the subject changes `object[name]` (or, with a function instead of `object, name`, what the function returns) |
+| `increase(object, name)` | `increases` | …makes it bigger |
+| `decrease(object, name)` | `decreases` | …makes it smaller |
+| `by(n)` | | After `change`, `increase` or `decrease`: by exactly `n` |
 
 After `throw`, the rest of the chain is about the thrown error.
 
@@ -267,11 +284,15 @@ pm.expect(() => JSON.parse("{")).to.throw(SyntaxError);
 pm.expect(() => pm.response.json()).to.not.throw();
 pm.expect(body.count).to.satisfy((n) => n % 2 === 0);
 pm.expect(new Date(body.createdAt)).to.be.instanceOf(Date);
+const cart = { items: 1 };
+pm.expect(() => cart.items++).to.increase(cart, "items").by(1);
 ```
+
+`pm.expect.fail(message)` fails the test with `message`.
 
 ## Response assertions
 
-`pm.response.to` (and `pm.expect(pm.response).to`) adds Postman's response assertions. All language chains and `not` work; the general assertions above work too, on the response object.
+`pm.response.to` (and `pm.expect(pm.response).to`) adds Postman's response assertions. All language chains and `not` work; the general assertions above work too, on the response object. As in Postman, the response assertions are part of every `pm.expect`; on something that isn't a response they fail with `expecting a postman response object but got …`.
 
 ### Status
 
@@ -279,6 +300,9 @@ pm.expect(new Date(body.createdAt)).to.be.instanceOf(Date);
 |---|---|
 | `status(code)` | `code`, for example `pm.response.to.have.status(201)` |
 | `status(reason)` | A string compares the reason phrase: `pm.response.to.have.status("Created")` |
+| `statusCode(code)` | `code` |
+| `statusReason(reason)` | The reason phrase is `reason` |
+| `statusCodeClass(n)` | `n`XX, for example `statusCodeClass(2)` |
 | `ok` | 200 |
 | `accepted` | 202 |
 | `withoutContent` | 204 |
@@ -320,7 +344,10 @@ pm.expect(pm.response).to.have.status(201);
 | `jsonBody(object)` | The body is JSON equal to `object` by value |
 | `jsonBody(path)` | The JSON body has the dotted path, for example `data.items[0].id` |
 | `jsonBody(path, value)` | …and the value there equals `value` by value |
-| `jsonSchema(schema, options?)` | The JSON body matches the [JSON Schema](https://json-schema.org) (draft-07; checked with the bundled Ajv). The message lists every mismatch, e.g. `body/id must be integer, body must have required property 'name'`. `options` go to Ajv. |
+| `jsonSchema(schema, options?)` | The JSON body matches the [JSON Schema](https://json-schema.org) (draft-07; checked with the bundled Ajv). The message lists every mismatch: `expected data to satisfy schema but found following errors:` then `data/id must be integer, data must have required property 'name'`. `options` go to Ajv. On any other value, `pm.expect(value).to.have.jsonSchema(schema)` checks the value itself. |
+| `responseTime` | Its object is the response time in milliseconds: `pm.response.to.have.responseTime.below(500)` |
+| `responseSize` | Its object is the size in bytes (body and headers) |
+| `postmanResponse`, `postmanRequest`, `postmanRequestOrResponse` | The subject is a response, a request, or either |
 
 ```js
 pm.response.to.have.header("Content-Type");
@@ -328,6 +355,15 @@ pm.response.to.have.header("Cache-Control", "no-store");
 pm.response.to.be.json;
 pm.response.to.have.jsonBody("data.items[0].id", 1);
 pm.response.to.have.body(/"status":\s*"ok"/);
+```
+
+## Request assertions
+
+`pm.request.to` checks the request: `header(name, value?)`, as for responses, and `postmanRequest`. In a post-response script the request has the headers that were sent, including the ones Zorvik added (`Host`, `User-Agent`, …).
+
+```js
+pm.request.to.have.header("Authorization");
+pm.request.to.have.header("Content-Type", "application/json");
 ```
 
 ## Failure messages
@@ -350,25 +386,18 @@ Failure messages follow chai's style, so they read like the assertion. Some exam
 | `pm.response.to.be.ok` | `expected response code to be 200 but found 404` |
 | `pm.response.to.be.success` | `expected response code to be 2XX but found 404` |
 | `pm.response.to.have.header('X-Nope')` | `expected response to have header with key 'X-Nope'` |
+| `pm.expect(true).to.be.ture` | `Invalid Chai property: ture. Did you mean "true"?` |
 
 Long values are shortened: a large object is shown as `{ Object (id, name, ...) }` and a long array as `[ Array(120) ]`.
 
 ## Differences from chai
 
-The library covers the common part of chai. Keep these differences in mind:
+The library covers chai's BDD API (`expect`) and chai-postman's assertions. As in chai, a word it doesn't know throws `Invalid Chai property: …` (with a suggestion when one is close), so a typo fails the test instead of passing it.
 
-:::caution[Unknown words pass silently]
-A chai word Zorvik doesn't have, used as a property, reads as `undefined` and **asserts nothing**, so the test passes. For example `pm.expect(obj).to.be.frozen` always passes. Stick to the words on this page. An unknown word called as a function (`.to.be.frozenish()`) throws a `TypeError` instead.
-:::
-
-Not supported:
-
-- `nested` and `own` have no effect on `include`: `.nested.include({ "a.b": 1 })` fails, and `.own.include(…)` also finds inherited properties. Use `nested.property` and `own.property` instead.
-- `sealed`, `frozen`, `extensible`, `arguments`, `itself`, `respondTo`, `increase`, `decrease`, `change`, `by`, `fail` and `pm.expect.fail`.
-- `chai.assert` and `chai.should` styles in `pm.expect`. The full chai library is built in: `const { assert } = require("chai")`.
+Not in `pm.expect`: the `chai.assert` and `chai.should` styles. The full chai library is built in: `const { assert } = require("chai")`.
 
 Other details:
 
 - `lengthOf(n)` compares with `==`, so `lengthOf("2")` passes for a length of 2.
-- `include(object)` on an object also finds inherited properties.
+- `include(object)` on an object also finds inherited properties (use `own.include` for own ones).
 - `closeTo` and `within` don't check the subject's type, unlike `above`, `least`, `below` and `most`.

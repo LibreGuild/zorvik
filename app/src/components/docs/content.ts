@@ -212,10 +212,12 @@ export const TOPICS: DocTopic[] = [
       "`pm.test` with `pm.expect` assertions, and `pm.response.to.have.jsonSchema`; results show in the Tests tab",
       "`pm.sendRequest` (callback or `await`) to log in or set up data first; `pm.cookies` and the cookie jar; timers",
       "`pm.visualizer.set(template, data)` turns a response into a table in the Visualize tab",
-      "Postman's libraries built in, no download: `require('lodash')`, crypto-js (`CryptoJS`), moment, ajv, uuid, chai, tv4, csv-parse, xml2js, cheerio, handlebars",
+      "Postman's libraries built in, no download: `require('lodash')`, crypto-js (`CryptoJS`), moment, ajv, uuid, chai, tv4, csv-parse, xml2js, cheerio, handlebars, assert, and SugarJS methods such as `responseBody.has(…)`",
+      "The older `postman.*` and `tests[…]` API too, so collections written years ago still run",
       "Console output next to the response",
-      "Postman collections keep their scripts when imported",
+      "Postman collections (v1, v2.0 and v2.1) keep their scripts when imported",
     ],
+    tip: "A typo in a `pm.expect` chain (`to.be.ture`) fails the test with “Invalid Chai property”, as in Postman.",
     tryIt: ["In a request's Scripts tab, add: `pm.test('ok', () => pm.response.to.have.status(200));`"],
   },
   {
@@ -317,10 +319,12 @@ export const TOPICS: DocTopic[] = [
     title: "Import & export",
     tagline: "Bring your collections; take your requests anywhere.",
     image: "docs-import",
-    intro: "Move from other tools in a minute. Scripts and variables come along, and nothing leaves your machine.",
+    intro:
+      "Move from other tools in a minute, or start from the API catalog. Scripts and variables come along, and nothing leaves your machine.",
     features: [
+      "API catalog: OpenAI, Anthropic, Gemini, Stripe, GitHub, Slack, Google, AWS and many more in one step, with sign-in set up and an environment ready for your key",
       "Postman collections and environments",
-      "OpenAPI 3 and Swagger 2, from a file, by drag and drop, or from a URL, with realistic example bodies",
+      "OpenAPI 3 and Swagger 2, from a file, by drag and drop, or from a URL, with realistic example bodies; Google Discovery documents and AWS service models too",
       "OpenAPI path parameters become variables: `{session_id}` turns into `{{sessionId}}` in the new environment",
       "Responses to imported requests are checked against the spec: a test named “Matches the API spec” fails when a field or type drifts",
       "Update from API spec: a new version adds and updates operations and keeps your edits; removed ones stay, crossed out",
@@ -329,6 +333,7 @@ export const TOPICS: DocTopic[] = [
     ],
     tryIt: [
       "Open the collection menu → Import…, then drop a file, paste a cURL command, or enter a URL.",
+      "On the Import window's API catalog tab, search for “anthropic” and choose Import.",
       "After the API changes, right-click the imported folder → Update from API spec… and preview the changes.",
     ],
     tip: "The imported document is kept in `specs/` in your workspace. Switch the checks off in Folder settings → API spec.",

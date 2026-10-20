@@ -466,6 +466,37 @@ fn defs() -> Vec<Def> {
             open_world: true,
         },
         Def {
+            name: "search_catalog",
+            title: "Search the API catalog",
+            description: "Well-known APIs Zorvik can import in one step (OpenAI, Anthropic, Stripe, GitHub, Slack, Google, AWS…): their id, what they do, how they sign in, the description's format and license, and whether they can be imported (some only link to their docs). Then import one with import_from_catalog.",
+            schema: obj(
+                json!({
+                    "query": string("Words to look for in the name, id, description or category (default: everything)."),
+                    "category": string("Only this category: ai, cloud, devTools, monitoring, data, messaging, productivity, payments, commerce, marketing, identity or media."),
+                }),
+                &[],
+            ),
+            read_only: true,
+            destructive: false,
+            open_world: false,
+        },
+        Def {
+            name: "import_from_catalog",
+            title: "Import from the API catalog",
+            description: "Import an API from the catalog (ids from search_catalog): its description is downloaded from the publisher and its requests go into a new folder, with an environment (made active) holding baseUrl and empty secret variables for the credentials — ask the user to fill them in Zorvik. Very large APIs need groups (their operations' first tags): without them, the error lists the groups to choose from.",
+            schema: obj(
+                json!({
+                    "id": string("Catalog id, e.g. \"stripe\"."),
+                    "folder": string("Folder path to import into (default: top level)."),
+                    "groups": { "type": "array", "items": { "type": "string" }, "description": "Groups to import (default: the catalog's preset groups, or all)." },
+                }),
+                &["id"],
+            ),
+            read_only: false,
+            destructive: false,
+            open_world: true,
+        },
+        Def {
             name: "update_from_openapi",
             title: "Update from OpenAPI",
             description: "Update a folder imported from an OpenAPI document from a new version of the document: new operations are added, changed ones updated field by field where the user left the field as the old document had it (their edits to docs, URLs, headers… stay), and operations the document no longer has are kept and marked removed. Scripts, settings and names are never touched. Call with preview: true first to see what would change, then without it to apply. Give the new document's text, url or file.",
@@ -708,7 +739,7 @@ enum Fail {
 impl From<ApiError> for Fail {
     fn from(e: ApiError) -> Self {
         match e.code.as_str() {
-            "invalidInput" | "notFound" | "invalidName" => Fail::Invalid(e.message),
+            "invalidInput" | "notFound" | "invalidName" | "catalogLink" => Fail::Invalid(e.message),
             "noWorkspace" => Fail::Invalid(NO_WORKSPACE.into()),
             _ => Fail::Error(e.message),
         }
@@ -810,6 +841,7 @@ fn describe(name: &str, args: &Value) -> String {
             if s("path").is_empty() { url.to_string() } else { s("path") }
         }
         "send_message" | "wait_for_message" | "read_messages" | "close_connection" => s("connectionId"),
+        "import_from_catalog" => s("id"),
         "open_workspace" | "import" => {
             [s("path"), s("url"), s("file")].into_iter().find(|v| !v.is_empty()).unwrap_or_default()
         }
@@ -817,6 +849,9 @@ fn describe(name: &str, args: &Value) -> String {
     };
     if what.is_empty() { title.to_string() } else { format!("{title}: {what}") }
 }
+
+/// More operations than this, and no preset groups: an agent must choose groups to import.
+const AGENT_CATALOG_MOST: u32 = 2000;
 
 fn plural(n: usize, what: &str) -> String {
     format!("{n} {what}{}", if n == 1 { "" } else { "s" })
@@ -887,6 +922,8 @@ impl Api {
             "set_active_environment" => run!(self.tool_set_active_environment(c)),
             "import" => run!(self.tool_import(c)),
             "update_from_openapi" => run!(self.tool_update_from_openapi(c)),
+            "search_catalog" => run!(async move { self.tool_search_catalog(c) }),
+            "import_from_catalog" => run!(self.tool_import_from_catalog(c)),
             "send_request" => run!(self.tool_send_request(c)),
             "run_collection" => run!(self.tool_run_collection(c)),
             "get_run_status" => run!(self.tool_run_status(c)),
@@ -1708,6 +1745,126 @@ impl Api {
         Ok(Done::new(value, format!("Imported {}", plural(summary.requests as usize, "request"))).at(target))
     }
 
+    fn tool_search_catalog(&self, c: &Call<'_>) -> Outcome {
+        #[derive(Deserialize)]
+        struct A {
+            #[serde(default)]
+            query: String,
+            category: Option<String>,
+        }
+        let A { query, category } = c.args()?;
+        let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+        let found: Vec<Value> = crate::catalog::entries()
+            .iter()
+            .filter(|e| {
+                let kind = serde_json::to_value(e.category).ok();
+                let kind = kind.as_ref().and_then(Value::as_str).unwrap_or_default();
+                let text = format!("{} {} {} {kind}", e.id, e.name, e.description).to_lowercase();
+                category.as_deref().is_none_or(|c| c.eq_ignore_ascii_case(kind))
+                    && words.iter().all(|w| text.contains(w.as_str()))
+            })
+            .map(|e| {
+                let (importable, note) = match &e.source {
+                    crate::catalog::CatalogSource::Link { reason } => (false, reason.clone()),
+                    _ => (true, String::new()),
+                };
+                let mut v = json!({
+                    "id": e.id, "name": e.name, "category": e.category, "description": e.description,
+                    "auth": e.auth, "format": e.format, "docs": e.website, "importable": importable,
+                });
+                if let Some(license) = &e.license {
+                    v["license"] = json!(license.name);
+                }
+                if !note.is_empty() {
+                    v["why"] = json!(note);
+                }
+                v
+            })
+            .collect();
+        let n = found.len();
+        Ok(Done::new(json!({ "apis": found }), format!("Found {}", plural(n, "API"))))
+    }
+
+    async fn tool_import_from_catalog(&self, c: &Call<'_>) -> Outcome {
+        #[derive(Deserialize)]
+        struct A {
+            id: String,
+            #[serde(default)]
+            folder: String,
+            groups: Option<Vec<String>>,
+        }
+        let A { id, folder, groups } = c.args()?;
+        // No groups is the default, not "everything" (which would skip the size check below).
+        let groups = groups.filter(|g| !g.is_empty());
+        let entry = crate::catalog::entry(&id)?;
+        let ws = self.agent_ws()?;
+        // Only downloads go out to the network (starters and GraphQL entries are built in).
+        let download = match &entry.source {
+            crate::catalog::CatalogSource::Download { url, .. } => Some(url.clone()),
+            crate::catalog::CatalogSource::Compatible { of, .. } => match &crate::catalog::entry(of)?.source {
+                crate::catalog::CatalogSource::Download { url, .. } => Some(url.clone()),
+                _ => None,
+            },
+            crate::catalog::CatalogSource::Link { reason } => {
+                return Err(Fail::Invalid(format!("{reason} Read about it at {}.", entry.website)));
+            }
+            _ => None,
+        };
+        let guard = match &download {
+            Some(url) => {
+                self.gate_traffic(c, "Download an API description", host_of(url).into_iter().collect()).await?
+            }
+            // Built in: nothing to download, so no host at all (as before any `gate_traffic`).
+            None => Some(super::no_hosts()),
+        };
+        self.gate_change(c, "Import into your collection?".into(), vec![format!("{} (API catalog)", entry.name)])
+            .await?;
+        let parent = self.ensure_folder(&ws, &folder)?;
+        let work = async {
+            // A huge API without preset groups: the agent picks (the download is reused).
+            if groups.is_none() && download.is_some() {
+                let preview = self.catalog_preview(&id).await?;
+                if preview.selected.is_empty() && preview.operations > AGENT_CATALOG_MOST && preview.groups.len() > 1 {
+                    let mut listed: Vec<_> = preview.groups.iter().collect();
+                    listed.sort_by_key(|g| std::cmp::Reverse(g.operations));
+                    let names: Vec<String> = listed
+                        .iter()
+                        .take(40)
+                        .map(|g| format!("{} ({})", if g.tag.is_empty() { "\"\"" } else { &g.tag }, g.operations))
+                        .collect();
+                    return Err(ApiError::invalid(format!(
+                        "{} has {} operations in {} groups; pass groups to import part of it. The largest: {}",
+                        entry.name,
+                        preview.operations,
+                        preview.groups.len(),
+                        names.join(", ")
+                    )));
+                }
+            }
+            self.catalog_import(crate::catalog::CatalogImportParams { id: id.clone(), parent, groups }).await
+        };
+        let imported = until_cancelled(c, super::with_guard(guard, work)).await?;
+        let summary = &imported.summary;
+        let target = match (&imported.open, &summary.folder_path) {
+            (Some(path), _) => AgentTarget::Request { path: path.clone() },
+            (None, Some(folder)) => AgentTarget::Folder { path: folder.clone() },
+            (None, None) => AgentTarget::Folder { path: String::new() },
+        };
+        // The import made its environment the active one: the app shows that, as after
+        // `set_active_environment`.
+        if summary.environment_id.is_some() {
+            self.emit_agent(AgentEvent::WorkspaceChanged);
+        }
+        self.show(target.clone());
+        let value = serde_json::to_value(&imported).unwrap_or_default();
+        let imported_text = format!("Imported {} from {}", plural(summary.requests as usize, "request"), entry.name);
+        let detail = match summary.environment_id {
+            Some(_) => format!("{imported_text}; its environment is now active: fill in the credentials there"),
+            None => imported_text,
+        };
+        Ok(Done::new(value, detail).at(target))
+    }
+
     async fn tool_update_from_openapi(&self, c: &Call<'_>) -> Outcome {
         #[derive(Deserialize)]
         struct A {
@@ -2044,7 +2201,7 @@ impl Api {
             value["error"] = json!(redactor.text(error));
         }
         if !read.unresolved.is_empty() {
-            value["unresolvedVariables"] = json!(read.unresolved);
+            value["unresolvedVariables"] = json!(read.unresolved.iter().map(|u| redactor.text(u)).collect::<Vec<_>>());
         }
         let detail = format!("{} · {}", read.meta.status, plural(read.events.len(), "event"));
         Ok(Done { value, detail, target })
@@ -2140,7 +2297,10 @@ impl Api {
         let started = Instant::now();
         loop {
             if let Some(report) = self.finished_run(run_id) {
-                return Ok(run_outcome(run_id, &report));
+                // Errors, test messages and variable names can quote secret values.
+                let mut done = run_outcome(run_id, &report);
+                done.value = redact_value(&done.value, &self.redactor(&self.agent_ws()?));
+                return Ok(done);
             }
             if !self.run_active(run_id) && self.finished_run(run_id).is_none() {
                 return Err(Fail::Invalid(format!(
@@ -2951,7 +3111,7 @@ fn response_for_agent(result: &SendResult, r: &Redactor, max_chars: usize) -> Va
         "headers": r.headers(&result.meta.request.headers),
     });
     if !result.unresolved.is_empty() {
-        out["unresolvedVariables"] = json!(result.unresolved);
+        out["unresolvedVariables"] = json!(result.unresolved.iter().map(|u| r.text(u)).collect::<Vec<_>>());
     }
     if let Some(scripts) = &result.scripts {
         out["tests"] = redact_value(&json!(scripts.tests), r);
@@ -3106,5 +3266,38 @@ mod tests {
         assert_eq!(host_of("localhost:3000/a").as_deref(), Some("localhost"));
         assert_eq!(host_of("grpc://[::1]:50051").as_deref(), Some("::1"));
         assert_eq!(cap_items((0..40).map(|i| i.to_string()).collect()).last().unwrap(), "… and 10 more");
+    }
+
+    /// Counts the times the app is told the workspace (or its active environment) changed.
+    struct Changes(std::sync::atomic::AtomicUsize);
+
+    impl crate::EventSink for Changes {
+        fn emit(&self, event: crate::StreamEvent) {
+            if let crate::StreamEvent::Agent { event: AgentEvent::WorkspaceChanged } = event {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_catalog_import_shows_its_active_environment_in_the_app() {
+        let dir = tempfile::tempdir().unwrap();
+        let changes = Arc::new(Changes(Default::default()));
+        let api = Api::new(dir.path().join("data"), changes.clone());
+        let ws = dir.path().join("ws");
+        api.call("workspace.create", json!({ "path": ws, "name": "Test" })).await.unwrap();
+        api.update_settings(|s| s.agents.enabled = true).unwrap();
+        let session = api.agent_connect("claude-code");
+        let call = |args: Value| {
+            let progress: ProgressFn = Arc::new(|_, _, _| {});
+            api.agent_call(&session, "import_from_catalog", args, progress, CancellationToken::new())
+        };
+        let out = call(json!({ "id": "anthropic" })).await;
+        assert!(!out.is_error, "{}", out.text);
+        let imported: Value = serde_json::from_str(&out.text).unwrap();
+        let env_id = imported["summary"]["environmentId"].as_str().map(str::to_string);
+        assert!(env_id.is_some(), "{}", out.text);
+        assert_eq!(api.active_env_id(&api.ws().unwrap()), env_id);
+        assert_eq!(changes.0.load(std::sync::atomic::Ordering::SeqCst), 1, "the app is told");
     }
 }

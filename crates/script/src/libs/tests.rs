@@ -68,6 +68,40 @@ fn lodash() {
 }
 
 #[test]
+fn lodash_3_names_and_call_forms() {
+    // Postman's `_` is lodash 3; old scripts use its names and call forms.
+    let out = logs(
+        r#"
+        const list = [{ id: 1, n: 'b', tags: ['x'] }, { id: 2, n: 'a', tags: ['y'] }, { id: 1, n: 'c', tags: [] }];
+        const j = (v) => JSON.stringify(v);
+        console.log(j(_.pluck(list, 'n')), _.contains([1, 2], 2), j(_.where(list, { id: 1 }).length), _.findWhere(list, { n: 'a' }).id);
+        console.log(_.max(list, 'id').id, _.min(list, (o) => o.n.charCodeAt(0)).n, _.sum(list, 'id'), _.uniq(list, 'id').length);
+        console.log(j(_.flatten([1, [2, [3]]], true)), j(_.flatten([1, [2, [3]]])), j(_.object([['a', 1]])), j(_.object(['a'], [2])));
+        const deep = { a: { b: 1 } };
+        console.log(_.clone(deep, true).a !== deep.a, _.clone(deep).a === deep.a, j(_.pick({ a: 1, b: 2 }, (v) => v > 1)), j(_.rest([1, 2, 3])));
+        console.log(j(_.indexBy(list, 'n').a), _.trunc('abcdefgh', 5), _.padLeft('7', 3, '0'), _.any([0, 1]), _.all([1, 0]));
+        // The lodash 4 forms are unchanged.
+        console.log(_.max([3, 9]), j(_.pick({ a: 1, b: 2 }, 'a')), j(_.uniq([2, 2])), typeof _.rest((a, b) => b), _.sum([1, 2]));
+        // As iteratees they get (value, index, collection): the index isn't an iteratee.
+        const lists = [[1, 1, 3], [4, 2]];
+        console.log(j(_.map(lists, _.max)), j(_.map(lists, _.min)), j(_.map(lists, _.sum)), j(_.map(lists, _.uniq)));
+        "#,
+    );
+    assert_eq!(
+        out,
+        [
+            r#"["b","a","c"] true 2 2"#,
+            "2 a 4 2",
+            r#"[1,2,3] [1,2,[3]] {"a":1} {"a":2}"#,
+            r#"true true {"b":2} [2,3]"#,
+            r#"{"id":2,"n":"a","tags":["y"]} ab... 007 true false"#,
+            r#"9 {"a":1} [2] function 3"#,
+            "[3,4] [1,2] [5,6] [[1,3],[4,2]]",
+        ]
+    );
+}
+
+#[test]
 fn crypto_js() {
     let out = logs(
         r#"
@@ -319,7 +353,7 @@ fn node_modules() {
         e.emit('hi', 2);
         const { Buffer } = require('buffer');
         console.log(Buffer.from('user:pass').toString('base64'), Buffer.from('68690a', 'hex').toString().trim());
-        // The libraries' `process` and `Buffer` stay theirs.
+        // The libraries' `process` stays theirs; `Buffer` is a global, as in Postman.
         console.log(typeof process, typeof globalThis.Buffer, typeof window);
         "#,
     );
@@ -332,7 +366,7 @@ fn node_modules() {
             "n=42 { a: [ 1 ] } function",
             "event 1",
             "dXNlcjpwYXNz hi",
-            "undefined undefined undefined"
+            "undefined function undefined"
         ]
     );
 }
@@ -348,7 +382,10 @@ fn pm_require_and_unknown_modules() {
     assert!(
         error("pm.require('npm:@faker-js/faker@8.4.1')").starts_with("Error: Cannot find module '@faker-js/faker'. ")
     );
-    let names = LIBRARIES.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ");
+    // The bundled libraries and the sandbox's own modules (`timers`, `atob`, `btoa`).
+    let mut names = LIBRARIES.iter().map(|(name, _)| *name).chain(["atob", "btoa", "timers"]).collect::<Vec<_>>();
+    names.sort_unstable();
+    let names = names.join(", ");
     assert_eq!(
         error("require('left-pad')"),
         format!("Error: Cannot find module 'left-pad'. Scripts can require only these built-in libraries: {names}")
@@ -413,4 +450,110 @@ fn repeated_requires_are_fast() {
     // A few ms in release builds; debug builds run QuickJS unoptimized.
     let limit = if cfg!(debug_assertions) { Duration::from_millis(250) } else { Duration::from_millis(25) };
     assert!(added < limit, "the three libraries added {added:?} per run");
+}
+
+#[test]
+fn sugar_extends_the_built_ins_like_postman() {
+    // Postman's own checks of its sandbox's SugarJS (postman-sandbox, sugar.test.js).
+    let out = logs(
+        r#"
+        const d = new Date(1470659144696);
+        let n = 0;
+        const once = (function () { n++; }).once();
+        once(); once(); once();
+        console.log('asdasd'.has('as'), 'diabetes'.has(/bet/), d.format('{Weekday}'), typeof Object.each, typeof Date.create);
+        console.log((56).hex(), (56).isEven(), (56).ordinalize(), (56789.10).format(), n);
+        console.log('abc'.shift(5), 'a-beta'.camelize(), 'a-b_cD'.spacify(), 'jumpy'.endsWith('MPY'));
+        console.log(['a', 'b', 'c'].none('d'), [[1, 2], [2, 3]].any([2, 3]), [1, 2, 3, 4, 5].average());
+        console.log(Date.create('2000').isLeapYear(), Date.create('next week').isFuture(), new Date('x').isValid());
+        "#,
+    );
+    assert_eq!(
+        out,
+        [
+            "true true Monday function function",
+            "38 true 56th 56,789.1 1",
+            "fgh ABeta a b c d false",
+            "true true 3",
+            "true true false",
+        ]
+    );
+    // The methods a script names are stubs until it uses one; the others aren't there.
+    assert_eq!(
+        logs(
+            "const d = (o, k) => typeof Object.getOwnPropertyDescriptor(o, k);
+             console.log(d(String.prototype, 'camelize'), d(String.prototype, 'shift'));
+             console.log(d(String.prototype, 'has'), 'ab'.has('b'), d(String.prototype, 'has'), d(String.prototype, 'shift'));"
+        ),
+        ["undefined undefined", "object true object object"]
+    );
+    assert_eq!(logs("String.prototype.has = () => 'mine'; console.log('x'.has('y'), [1, 2]['first']());"), ["mine 1"]);
+}
+
+#[test]
+fn sugar_stubs_match_the_library() {
+    // The prelude's SUGAR table must name exactly what the library adds to the built-ins.
+    let table = {
+        let start = crate::PRELUDE.find("var SUGAR = {").expect("the SUGAR table");
+        let body = &crate::PRELUDE[start..start + crate::PRELUDE[start..].find("};").unwrap()];
+        let mut table = std::collections::BTreeMap::<String, Vec<String>>::new();
+        let mut key = String::new();
+        for line in body.lines().skip(1) {
+            let line = line.trim();
+            if let Some((k, rest)) = line.split_once(':') {
+                key = k.trim_matches('\'').to_string();
+                table.entry(key.clone()).or_default();
+                if rest.trim().is_empty() {
+                    continue;
+                }
+            }
+            let words = line.rsplit_once(':').map_or(line, |(_, r)| r).trim_matches([' ', '\'', '+', ',']);
+            table.get_mut(&key).unwrap().extend(words.split_whitespace().map(String::from));
+        }
+        for names in table.values_mut() {
+            names.sort();
+        }
+        table
+    };
+    // This script names no SugarJS method, so it starts without stubs.
+    let out = logs(
+        r#"
+        const targets = { Array, String, Number, Date, Function, RegExp, Object, Boolean };
+        const names = () => {
+            const all = {};
+            for (const [n, t] of Object.entries(targets)) {
+                all[n] = Object.getOwnPropertyNames(t);
+                all[n + '.prototype'] = Object.getOwnPropertyNames(t.prototype);
+            }
+            return all;
+        };
+        const before = names();
+        require('sugar');
+        const after = names();
+        const added = {};
+        for (const key of Object.keys(after)) {
+            const list = after[key].filter((p) => !before[key].includes(p)).sort();
+            if (list.length) added[key] = list;
+        }
+        const print = console['inf' + 'o'];
+        print(JSON.stringify(added));
+        "#,
+    );
+    let added: std::collections::BTreeMap<String, Vec<String>> = serde_json::from_str(&out[0]).unwrap();
+    assert_eq!(table, added);
+}
+
+#[test]
+fn node_assert() {
+    let out = logs(
+        r#"
+        const assert = require('assert');
+        assert.strictEqual(1, 1);
+        assert.deepStrictEqual({ a: [1] }, { a: [1] });
+        try { assert.strictEqual(1, 2, 'one is not two'); } catch (e) { console.log(e.name, e.message, e.code); }
+        try { assert.deepEqual({ a: 1 }, { a: 2 }); } catch (e) { console.log(e.code); }
+        console.log(typeof assert.ok, require('timers').setTimeout === setTimeout, require('btoa')('hi'));
+        "#,
+    );
+    assert_eq!(out, ["AssertionError one is not two ERR_ASSERTION", "ERR_ASSERTION", "function true aGk="]);
 }

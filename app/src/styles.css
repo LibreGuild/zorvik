@@ -228,6 +228,25 @@ input[type="number"] {
   color: var(--var-bad-fg);
 }
 
+/* The marker standing in for most of a very long line (CodeEditor's longLines) */
+.zv-hidden-text {
+  margin: 0 2px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  color: var(--faint);
+  font-style: italic;
+  white-space: nowrap;
+}
+.zv-show-more {
+  font-style: normal;
+  color: var(--accent);
+  cursor: pointer;
+}
+.zv-show-more:hover {
+  text-decoration: underline;
+}
+
 /* CodeMirror */
 .cm-editor {
   height: 100%;

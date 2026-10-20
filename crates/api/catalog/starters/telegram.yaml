@@ -1,0 +1,344 @@
+# Written for Zorvik's API catalog from Telegram's Bot API reference
+# (https://core.telegram.org/bots/api), which publishes no machine-readable description.
+openapi: 3.0.3
+info:
+  title: Telegram Bot API
+  version: "1.0"
+  description: >-
+    Bots on Telegram: read updates, send and edit messages, answer button presses and manage
+    the webhook. Every request goes to `https://api.telegram.org/bot<token>/<method>`, so the
+    bot token from @BotFather is part of the path (the `botToken` variable). Methods accept
+    GET and POST; parameters go in the query string, as JSON, or as multipart/form-data to
+    upload a file.
+servers:
+  - url: https://api.telegram.org
+tags:
+  - name: Getting updates
+  - name: Messages
+  - name: Chats
+paths:
+  /bot{botToken}/getMe:
+    get:
+      tags: [Getting updates]
+      summary: Get the bot
+      description: Test the bot's token. Returns basic information about the bot.
+      operationId: getMe
+      parameters:
+        - $ref: "#/components/parameters/botToken"
+      responses:
+        "200":
+          description: The bot, as a User.
+  /bot{botToken}/getUpdates:
+    get:
+      tags: [Getting updates]
+      summary: Get updates
+      description: >-
+        Incoming updates (messages, button presses, ...) by long polling. Doesn't work while
+        a webhook is set.
+      operationId: getUpdates
+      parameters:
+        - $ref: "#/components/parameters/botToken"
+        - name: offset
+          in: query
+          description: The first update to return; one more than the last update you handled.
+          schema: { type: integer }
+        - name: limit
+          in: query
+          description: How many updates to return, 1-100.
+          schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
+        - name: timeout
+          in: query
+          description: Seconds to wait for an update (long polling); 0 answers at once.
+          schema: { type: integer, default: 0 }
+        - name: allowed_updates
+          in: query
+          description: 'The update types to receive, as a JSON array, e.g. ["message", "callback_query"].'
+          schema: { type: string }
+      responses:
+        "200":
+          description: An array of Update objects.
+  /bot{botToken}/sendMessage:
+    post:
+      tags: [Messages]
+      summary: Send a message
+      operationId: sendMessage
+      parameters:
+        - $ref: "#/components/parameters/botToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chat_id, text]
+              properties:
+                chat_id:
+                  description: The chat's id, or @channelusername.
+                  oneOf: [{ type: integer }, { type: string }]
+                text: { type: string }
+                parse_mode: { type: string, enum: [MarkdownV2, HTML, Markdown] }
+                disable_notification: { type: boolean }
+                protect_content: { type: boolean }
+                reply_markup: { type: object }
+            example:
+              chat_id: 123456789
+              text: Hello from Zorvik
+      responses:
+        "200":
+          description: The sent Message.
+  /bot{botToken}/sendPhoto:
+    post:
+      tags: [Messages]
+      summary: Send a photo
+      description: >-
+        Send a photo by URL or file_id as JSON, or upload one as multipart/form-data with the
+        file in `photo`.
+      operationId: sendPhoto
+      parameters:
+        - $ref: "#/components/parameters/botToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chat_id, photo]
+              properties:
+                chat_id:
+                  oneOf: [{ type: integer }, { type: string }]
+                photo:
+                  type: string
+                  description: A file_id, or an HTTP URL Telegram downloads the photo from.
+                caption: { type: string }
+                parse_mode: { type: string, enum: [MarkdownV2, HTML, Markdown] }
+            example:
+              chat_id: 123456789
+              photo: https://telegram.org/img/t_logo.png
+              caption: A photo
+          multipart/form-data:
+            schema:
+              type: object
+              required: [chat_id, photo]
+              properties:
+                chat_id: { type: string }
+                photo: { type: string, format: binary }
+                caption: { type: string }
+      responses:
+        "200":
+          description: The sent Message.
+  /bot{botToken}/sendDocument:
+    post:
+      tags: [Messages]
+      summary: Send a document
+      description: >-
+        Send a file by URL or file_id as JSON, or upload one as multipart/form-data with the
+        file in `document` (up to 50 MB).
+      operationId: sendDocument
+      parameters:
+        - $ref: "#/components/parameters/botToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chat_id, document]
+              properties:
+                chat_id:
+                  oneOf: [{ type: integer }, { type: string }]
+                document:
+                  type: string
+                  description: A file_id, or an HTTP URL Telegram downloads the file from.
+                caption: { type: string }
+                parse_mode: { type: string, enum: [MarkdownV2, HTML, Markdown] }
+            example:
+              chat_id: 123456789
+              document: https://telegram.org/file/464001088/1/bI7AJLo7oX4.287931/374fe3b0a59dc60005
+              caption: A document
+          multipart/form-data:
+            schema:
+              type: object
+              required: [chat_id, document]
+              properties:
+                chat_id: { type: string }
+                document: { type: string, format: binary }
+                caption: { type: string }
+      responses:
+        "200":
+          description: The sent Message.
+  /bot{botToken}/editMessageText:
+    post:
+      tags: [Messages]
+      summary: Edit a message's text
+      description: >-
+        Edit a text message: give `chat_id` and `message_id`, or `inline_message_id` for an
+        inline message.
+      operationId: editMessageText
+      parameters:
+        - $ref: "#/components/parameters/botToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                chat_id:
+                  oneOf: [{ type: integer }, { type: string }]
+                message_id: { type: integer }
+                inline_message_id: { type: string }
+                text: { type: string }
+                parse_mode: { type: string, enum: [MarkdownV2, HTML, Markdown] }
+                reply_markup: { type: object }
+            example:
+              chat_id: 123456789
+              message_id: 42
+              text: Edited text
+      responses:
+        "200":
+          description: The edited Message, or true for an inline message.
+  /bot{botToken}/deleteMessage:
+    post:
+      tags: [Messages]
+      summary: Delete a message
+      operationId: deleteMessage
+      parameters:
+        - $ref: "#/components/parameters/botToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chat_id, message_id]
+              properties:
+                chat_id:
+                  oneOf: [{ type: integer }, { type: string }]
+                message_id: { type: integer }
+            example:
+              chat_id: 123456789
+              message_id: 42
+      responses:
+        "200":
+          description: true when the message was deleted.
+  /bot{botToken}/answerCallbackQuery:
+    post:
+      tags: [Messages]
+      summary: Answer a button press
+      description: >-
+        Answer a callback query from an inline keyboard button, optionally showing a
+        notification or an alert.
+      operationId: answerCallbackQuery
+      parameters:
+        - $ref: "#/components/parameters/botToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [callback_query_id]
+              properties:
+                callback_query_id: { type: string }
+                text: { type: string }
+                show_alert: { type: boolean }
+                url: { type: string }
+                cache_time: { type: integer }
+            example:
+              callback_query_id: "4382bfdwdsb323b2d9"
+              text: Done
+      responses:
+        "200":
+          description: true on success.
+  /bot{botToken}/getChat:
+    post:
+      tags: [Chats]
+      summary: Get a chat
+      operationId: getChat
+      parameters:
+        - $ref: "#/components/parameters/botToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chat_id]
+              properties:
+                chat_id:
+                  description: The chat's id, or @channelusername.
+                  oneOf: [{ type: integer }, { type: string }]
+            example:
+              chat_id: "@telegram"
+      responses:
+        "200":
+          description: The chat, as a ChatFullInfo.
+  /bot{botToken}/setWebhook:
+    post:
+      tags: [Getting updates]
+      summary: Set the webhook
+      description: >-
+        Have Telegram send updates to an HTTPS URL instead of polling with getUpdates. A
+        `secret_token` comes back in the X-Telegram-Bot-Api-Secret-Token header of every update.
+      operationId: setWebhook
+      parameters:
+        - $ref: "#/components/parameters/botToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string }
+                ip_address: { type: string }
+                max_connections: { type: integer, minimum: 1, maximum: 100, default: 40 }
+                allowed_updates: { type: array, items: { type: string } }
+                drop_pending_updates: { type: boolean }
+                secret_token: { type: string }
+            example:
+              url: https://example.com/telegram/webhook
+              allowed_updates: [message, callback_query]
+      responses:
+        "200":
+          description: true on success.
+  /bot{botToken}/getWebhookInfo:
+    get:
+      tags: [Getting updates]
+      summary: Get the webhook
+      description: The current webhook, with pending updates and the last error.
+      operationId: getWebhookInfo
+      parameters:
+        - $ref: "#/components/parameters/botToken"
+      responses:
+        "200":
+          description: A WebhookInfo (with an empty url when none is set).
+  /bot{botToken}/deleteWebhook:
+    post:
+      tags: [Getting updates]
+      summary: Delete the webhook
+      description: Remove the webhook, to go back to getUpdates.
+      operationId: deleteWebhook
+      parameters:
+        - $ref: "#/components/parameters/botToken"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                drop_pending_updates: { type: boolean }
+            example:
+              drop_pending_updates: false
+      responses:
+        "200":
+          description: true on success.
+components:
+  parameters:
+    botToken:
+      name: botToken
+      in: path
+      required: true
+      description: The bot's token from @BotFather.
+      schema: { type: string, example: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" }
