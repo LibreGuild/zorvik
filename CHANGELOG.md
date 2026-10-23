@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-23
+
 ### Added
 - **Scripts for WebSocket and Socket.IO requests:** a **Before connecting** script (set variables, change the URL or headers, or stop the connection), and **On message** scripts that run on the messages that match their direction (received, sent or both), Socket.IO event and pattern. They see the message as `pm.message` (`text()`, `json()`, `args`, `event`), test it with `pm.test`, keep values with `pm.environment.set`, and reply with `pm.connection.send(data)` or `pm.connection.emit(event, …args)`. Their notes and test results show in the message log; in collection runs their tests count.
 - **gRPC streams with saved messages and On connect steps:** send saved messages once a stream is open, wait for an answer (`$.status == READY`), keep sending one, and end the stream after the steps.
@@ -23,6 +25,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - A WebSocket or Socket.IO connection error longer than the log's width can be opened to read all of it.
 - Hovering a `{{variable}}` in a body, a message, a script or any other editor shows its value and where it comes from, as in the URL.
 - The **MCP: test AI tools** section of the docs has its icon.
+- A gRPC stream read in a run or by an AI agent stops at its message limit exactly, and one that gets no answer within its time limit fails instead of passing.
+
+### Security
+- Dependencies updated, including the fixes in Vite 8.3.4 (development server) and Hono 4.13.13 (used by the MCP SDK in tests); Rust crates (Tokio, Hyper, rustls, protox 0.10 and others), TypeScript 7, Astro 7.4 and Starlight 0.42.6. Building from source needs Rust 1.90.
 
 ## [0.3.0] - 2026-10-20
 
@@ -186,7 +192,8 @@ The first public release.
 - In-app docs, light and dark themes, zoom and font settings.
 - Installers for Windows, macOS (universal) and Linux (deb, rpm, AppImage).
 
-[Unreleased]: https://github.com/LibreGuild/zorvik/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/LibreGuild/zorvik/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/LibreGuild/zorvik/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/LibreGuild/zorvik/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/LibreGuild/zorvik/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/LibreGuild/zorvik/compare/v0.1.2...v0.2.0

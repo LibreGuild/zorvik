@@ -681,6 +681,8 @@ pub(crate) async fn run_call(
         let Some(event) = event else { break };
         match event {
             GrpcEvent::Headers { headers, .. } => response.headers = headers,
+            // Reading stopped: what was still on the way isn't kept (the call is being cancelled).
+            GrpcEvent::Message { .. } if stopped.is_some() => {}
             GrpcEvent::Message { message } => {
                 let incoming = message.direction == zorvik_engine::Direction::Received;
                 kept += message.json.len();

@@ -13,7 +13,7 @@ Issues labelled [`good first issue`](https://github.com/LibreGuild/zorvik/labels
 
 ## Set up
 You need:
-- **Rust** stable, 1.88 or newer ([rustup](https://rustup.rs))
+- **Rust** stable, 1.90 or newer ([rustup](https://rustup.rs))
 - **Node.js** 22 or newer
 - **macOS:** Xcode command line tools (`xcode-select --install`)
 - **Windows:** Visual Studio Build Tools with "Desktop development with C++", and WebView2 (already on Windows 10 and 11)
