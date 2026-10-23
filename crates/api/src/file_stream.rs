@@ -1,7 +1,8 @@
 //! Stream a file over an open connection in binary messages (`fileStream.*`):
 //! `chunkSize` bytes every `intervalMs`, optionally from an offset, for a length
 //! and over and over. Works on WebSocket and socket sessions (TCP, UDP, MQTT
-//! publishes, Socket.IO emits). Pacing runs here rather than in the UI, so a
+//! publishes, Socket.IO emits) and on gRPC streams (each chunk a JSON message with the
+//! bytes, as base64, in one field). Pacing runs here rather than in the UI, so a
 //! hidden window doesn't slow it down, and it never runs ahead of the network:
 //! sessions queue messages without limit, so a stream waits while more than
 //! [`BACKLOG_BYTES`] of its messages are still unsent (see [`Settled`]).
@@ -71,6 +72,15 @@ impl Settled {
             }
             SocketEvent::Closed { .. } => self.end(),
             SocketEvent::Message { .. } | SocketEvent::Info { .. } => {}
+        }
+    }
+
+    /// A gRPC stream's events: every message it sends (they are encoded and queued at once).
+    pub(crate) fn grpc(&self, event: &zorvik_engine::GrpcEvent) {
+        match event {
+            zorvik_engine::GrpcEvent::Message { message } if message.direction == Direction::Sent => self.add(),
+            zorvik_engine::GrpcEvent::End { .. } => self.end(),
+            _ => {}
         }
     }
 
@@ -168,6 +178,24 @@ pub enum ChunkMessage {
         #[serde(default)]
         ack: bool,
     },
+    /// gRPC: a message with the chunk (base64, as proto3 JSON writes `bytes`) in `field`, a
+    /// field name or a dotted path to a nested one (`audio.content`).
+    #[serde(rename_all = "camelCase")]
+    Grpc { field: String },
+}
+
+/// The JSON message carrying `base64` in `field` (dots nest objects).
+pub(crate) fn grpc_chunk(field: &str, base64: String) -> Result<String, String> {
+    let parts: Vec<&str> = field.split('.').map(str::trim).collect();
+    if parts.iter().any(|p| p.is_empty()) {
+        return Err("Enter the message field that carries the bytes, e.g. audioContent".into());
+    }
+    let value = parts.iter().rev().fold(Value::String(base64), |inner, name| {
+        let mut object = serde_json::Map::new();
+        object.insert((*name).to_string(), inner);
+        Value::Object(object)
+    });
+    Ok(value.to_string())
 }
 
 impl ChunkMessage {
@@ -184,6 +212,8 @@ impl ChunkMessage {
             ChunkMessage::Emit { event, ack } => {
                 SocketOutgoing::Emit { event: event.clone(), args: String::new(), base64: Some(base64), ack: *ack }
             }
+            // Never on a socket session (gRPC streams are sent by `send_chunk`).
+            ChunkMessage::Grpc { .. } => SocketOutgoing::Binary { base64 },
         }
     }
 }
@@ -313,6 +343,9 @@ impl Api {
         let Some(settled) = settled_of(&self.inner, &p.conn_id) else {
             return Err(ApiError::new("notFound", "Not connected: connect first, then start the stream"));
         };
+        if let ChunkMessage::Grpc { field } = &p.message {
+            grpc_chunk(field, String::new()).map_err(ApiError::invalid)?;
+        }
         if p.chunk_size > zorvik_engine::udp::MAX_DATAGRAM as u64
             && self.socket_kind(&p.conn_id) == Some(zorvik_workspace::formats::RequestKind::Udp)
         {
@@ -379,11 +412,17 @@ fn settled_of(inner: &Inner, conn_id: &str) -> Option<Arc<Settled>> {
     if let Some(e) = lock(&inner.ws_sessions).get(conn_id).filter(|e| e.session.is_some()) {
         return Some(e.settled.clone());
     }
-    lock(&inner.socket_sessions).get(conn_id).filter(|e| e.session.is_some()).map(|e| e.settled.clone())
+    if let Some(e) = lock(&inner.socket_sessions).get(conn_id).filter(|e| e.session.is_some()) {
+        return Some(e.settled.clone());
+    }
+    crate::grpc::settled_of(inner, conn_id)
 }
 
 fn send_chunk(inner: &Inner, conn_id: &str, message: &ChunkMessage, bytes: &[u8]) -> Result<(), String> {
     let base64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+    if let ChunkMessage::Grpc { field } = message {
+        return crate::grpc::send_json(inner, conn_id, &grpc_chunk(field, base64)?);
+    }
     if let Some(session) = lock(&inner.ws_sessions).get(conn_id).and_then(|e| e.session.as_ref()) {
         return session.send(WsOutgoing::Binary { base64 }).map_err(|e| e.message);
     }
@@ -553,6 +592,14 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+
+    #[test]
+    fn grpc_chunks_put_the_bytes_in_a_field() {
+        assert_eq!(grpc_chunk("audioContent", "AAE=".into()).unwrap(), r#"{"audioContent":"AAE="}"#);
+        assert_eq!(grpc_chunk("audio.content", "AAE=".into()).unwrap(), r#"{"audio":{"content":"AAE="}}"#);
+        assert!(grpc_chunk("", String::new()).unwrap_err().contains("audioContent"));
+        assert!(grpc_chunk("audio..x", String::new()).is_err());
+    }
 
     #[test]
     fn automatic_acknowledgements_are_not_stream_messages() {

@@ -1,6 +1,6 @@
 ---
 title: gRPC
-description: Call gRPC services with server reflection or .proto files, unary and streaming, with metadata, auth and TLS.
+description: Call gRPC services with server reflection or .proto files, unary and streaming (with saved messages and steps), with metadata, auth and TLS, and test them in collection runs.
 sidebar:
   order: 2
 ---
@@ -12,7 +12,7 @@ A gRPC request calls one method of a gRPC service. Messages are written and show
 In the **Collection** sidebar, open the **New** menu (**+**) and choose **New gRPC request**. The request editor then shows:
 
 - **URL bar**: the method picker (in place of the HTTP method), the server address and **Send**.
-- Tabs: **Message**, **Metadata**, **Proto files**, **Auth**, **Settings** and **Docs**.
+- Tabs: **Message**, **Metadata**, **Saved messages**, **On connect**, **Proto files**, **Auth**, **Settings**, **Scripts** and **Docs**.
 
 ## Server address
 
@@ -99,6 +99,43 @@ Press **Send** (or <kbd>Mod</kbd>+<kbd>Enter</kbd>). What happens depends on the
 
 Streams have no deadline: they run until the server ends them or you press **Cancel**, which ends the call with `CANCELLED`. Connecting is still limited by the request's timeout. Each call uses a fresh connection, like HTTP requests, so the timing is honest.
 
+### Stream a file or the microphone
+
+Client and bidirectional streams can send audio or any other bytes the way a speech-to-text service expects them: each chunk as a message with its bytes (base64, as proto3 JSON writes `bytes`) in one field. Below the message editor, choose **File** or **Microphone**:
+
+1. Set **Chunk field** to the input message's field for the bytes, for example `audioContent` (Google Speech-to-Text). A dotted path fills a nested field (`audio.content`). It is saved with the request (`grpc.chunkField`).
+2. **Send** opens the stream; **Send message** sends the first message from the editor (a config, for example).
+3. **Start streaming** sends the file at its pace (a WAV file is set up to play in real time: 20 ms of samples per message, the header skipped), or **Start recording** sends the microphone (PCM 16-bit, 16 kHz, mono for most speech services). The settings are those of WebSocket's [file](../websocket/#binary-stream-a-file) and [microphone](../websocket/#binary-stream-the-microphone) sources.
+4. With **End the stream when done** (on by default), the stream's sending side ends when the file has been sent or the recording stops, so the service sends its final results. Answers show in **Messages** as they arrive: interim transcripts, then final ones.
+
+Speech services expect audio close to real time: Google's closes a stream that gets no audio for about 10 seconds (`OUT_OF_RANGE: Audio Timeout Error`), so start the audio soon after the config.
+
+### Saved messages and On connect steps
+
+For streaming calls, the **Saved messages** tab keeps JSON messages with the request (each with a name), and the **On connect** tab holds steps that run in order once a stream is open, as for [WebSocket requests](../websocket/#on-connect):
+
+| Step | What it does |
+|---|---|
+| **Send** | Sends a saved message (its `{{variables}}` filled in). |
+| **Wait for** | Waits for a received message that matches, within a time limit: contains, is exactly, matches a regex, a JSON condition on the message (`$.status == READY`), or any message. |
+| **Keep sending** | Sends a saved message every so often while the call is open. |
+
+A server stream sends the **Message** tab's message first; the steps then wait for its answers. **End the stream after the steps** closes the sending side of a client or bidirectional stream once the steps are done (not while a step keeps sending). What the steps do shows above the messages, for example **On connect: got a JSON message where $.message == hi after 3 ms**. While a stream is open, the send button on a saved message sends it.
+
+### In collection runs
+
+gRPC requests run in the Runner tab, in [`zorvik run`](../../cli/run/), in runs an AI agent starts, and when an agent sends one with `send_request`. Each call runs to its end:
+
+- **Unary** calls send the message. **Server streams** send it and read the answers. **Client and bidirectional streams** run their **On connect** steps (or send the message when there are none), then end the sending side.
+- Each **Wait for** step is a test; after the first failure the rest are skipped.
+- Reading a stream stops after the request's **Settings → In collection runs**: **Stop after** received messages and **Time limit** (100 messages or 10 seconds by default, as for [event streams](../../testing/repeat-and-streams/#event-streams-in-runs)); stopping there is not a failure.
+- The result's status is `200` for `OK`, otherwise the HTTP status gRPC maps the code to (`NOT_FOUND` is `404`, `UNAVAILABLE` `503`, …), so a call that doesn't end `OK` fails. The status line reads `NOT_FOUND · user 42 not found`, and the headers include the trailers.
+- Scripts run around the call: `pm.response.json()` is the answer message (unary) or the received messages as an array (streams).
+
+```js
+pm.test("Greets Ada", () => pm.expect(pm.response.json().message).to.include("Ada"));
+```
+
 ### Results
 
 The result pane shows the final status (`OK`, `NOT_FOUND`, …) with its message, the total time, and these tabs:
@@ -141,6 +178,17 @@ grpc:
     - protos/helloworld.proto
   importPaths:
     - protos
+  messages:
+    - name: Hello
+      format: json
+      text: '{"name": "{{user}}"}'
+  onConnect:
+    - type: send
+      message: Hello
+    - type: wait
+      match: json
+      pattern: $.message == Hello Ada
+  endAfterSteps: true
 ```
 
 | Field | Description |
@@ -152,7 +200,10 @@ grpc:
 | `body.text` | The JSON message. |
 | `grpc.protoFiles` | `.proto` files, relative to the workspace or absolute. Empty or missing: server reflection. |
 | `grpc.importPaths` | Folders searched for imports (each proto file's folder is always searched). |
+| `grpc.messages` | Saved messages for streams. |
+| `grpc.onConnect` | Steps once a stream is open. |
+| `grpc.endAfterSteps` | End the sending side after the steps, in the app. |
 
 :::tip[AI agents]
-Agents can list a server's services and methods with the `grpc_describe` tool. See [Agent tools](../../agents/tools/).
+Agents can list a server's services and methods with the `grpc_describe` tool, and make any call with `send_request`: streams run to their end as in collection runs, and the answer lists the received and sent messages, the steps and why reading stopped. See [Agent tools](../../agents/tools/).
 :::

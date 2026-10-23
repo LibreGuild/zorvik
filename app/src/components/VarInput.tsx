@@ -1,6 +1,5 @@
 // Single-line input that highlights {{variables}} and autocompletes them.
 // The input text is transparent; a backdrop with identical metrics draws the colors.
-import type { DynamicVarInfo } from "../bindings/DynamicVarInfo";
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { segments } from "../lib/vars";
 import { useDynamicCatalog, useVariableNames, useWorkspace } from "../store/workspace";
@@ -33,7 +32,6 @@ export const VarInput = forwardRef<HTMLInputElement, VarInputProps>(function Var
   const catalog = useDynamicCatalog();
   const [menu, setMenu] = useState<{ items: string[]; index: number; from: number; kind: "var" | "plain" } | null>(null);
   const [hover, setHover] = useState<{ name: string; left: number } | null>(null);
-  const variables = useWorkspace((s) => s.variables);
 
   // The input sits on top of the colored backdrop, so find the variable under the pointer by geometry.
   const onMouseMove = (e: React.MouseEvent) => {
@@ -185,7 +183,7 @@ export const VarInput = forwardRef<HTMLInputElement, VarInputProps>(function Var
         )}
       />
       {hover && !menu && (
-        <VariableHint name={hover.name} left={hover.left} info={variables.find((v) => v.key === hover.name)} dynamic={catalog.get(hover.name.replace(/\(.*$/, "").trim())} />
+        <VariableHint name={hover.name} left={hover.left} />
       )}
       {menu && (
         <div ref={list} className="zv-pop absolute left-0 top-full z-50 mt-1 max-h-60 min-w-[220px] max-w-[min(28rem,100%)] overflow-auto rounded-lg border border-line bg-elev p-1 shadow-pop">
@@ -214,45 +212,52 @@ export const VarInput = forwardRef<HTMLInputElement, VarInputProps>(function Var
 
 const SOURCE_LABEL: Record<string, string> = { environment: "the active environment", workspace: "workspace variables", globals: "globals" };
 
-function VariableHint({
-  name,
-  left,
-  info,
-  dynamic: about,
-}: {
-  name: string;
-  left: number;
-  info?: { value: string; source: string; secret: boolean; local?: boolean };
-  dynamic?: DynamicVarInfo;
-}) {
-  const dynamic = name.startsWith("$");
+/** One line of a variable's hint. */
+export interface HintLine {
+  text: string;
+  tone: "name" | "value" | "empty" | "muted" | "faint" | "source" | "danger";
+}
+
+/** What hovering `{{name}}` tells: its value and where it comes from, or what a dynamic variable gives. */
+export function variableHint(name: string): HintLine[] {
+  const state = useWorkspace.getState();
+  const lines: HintLine[] = [{ text: `{{${name}}}`, tone: "name" }];
+  if (name.startsWith("$")) {
+    const about = state.appInfo?.dynamicCatalog?.find((v) => v.name === name.replace(/\(.*$/, "").trim());
+    if (!about) return [...lines, { text: "Dynamic value, generated on every send", tone: "muted" }];
+    lines.push({ text: about.description, tone: "muted" }, { text: `e.g. ${about.example}`, tone: "faint" });
+    if (about.args) lines.push({ text: `{{${about.name}${about.args}}}`, tone: "faint" });
+    return lines;
+  }
+  const info = state.variables.find((v) => v.key === name);
+  if (!info) return [...lines, { text: "Not defined in the active environment or workspace", tone: "danger" }];
+  lines.push(info.value === "" ? { text: "empty", tone: "empty" } : { text: info.value, tone: "value" });
+  lines.push({ text: `From ${SOURCE_LABEL[info.source] ?? info.source}${info.local ? " · set by a script (this computer only)" : ""}`, tone: "source" });
+  return lines;
+}
+
+export const HINT_TONE: Record<HintLine["tone"], string> = {
+  name: "font-mono text-fg",
+  value: "break-all font-mono text-accent",
+  empty: "italic text-faint",
+  muted: "text-muted",
+  faint: "font-mono text-faint",
+  source: "text-faint",
+  danger: "text-danger",
+};
+
+export const HINT_BOX = "max-w-[360px] rounded-md border border-line bg-elev px-2.5 py-1.5 text-[12px] shadow-pop";
+
+function VariableHint({ name, left }: { name: string; left: number }) {
+  // Read when shown (the hint is on screen only while hovered).
+  useWorkspace((s) => s.variables);
   return (
-    <div
-      style={{ left: Math.max(0, left) }}
-      className="zv-fade pointer-events-none absolute top-full z-50 mt-1 max-w-[360px] rounded-md border border-line bg-elev px-2.5 py-1.5 text-[12px] shadow-pop"
-    >
-      <div className="font-mono text-fg">{`{{${name}}}`}</div>
-      {dynamic ? (
-        about ? (
-          <>
-            <div className="text-muted">{about.description}</div>
-            <div className="font-mono text-faint">e.g. {about.example}</div>
-            {about.args && <div className="font-mono text-faint">{`{{${about.name}${about.args}}}`}</div>}
-          </>
-        ) : (
-          <div className="text-muted">Dynamic value, generated on every send</div>
-        )
-      ) : info ? (
-        <>
-          <div className="break-all font-mono text-accent">{info.value === "" ? <i className="text-faint">empty</i> : info.value}</div>
-          <div className="text-faint">
-            From {SOURCE_LABEL[info.source] ?? info.source}
-            {info.local && " · set by a script (this computer only)"}
-          </div>
-        </>
-      ) : (
-        <div className="text-danger">Not defined in the active environment or workspace</div>
-      )}
+    <div style={{ left: Math.max(0, left) }} className={cx("zv-fade pointer-events-none absolute top-full z-50 mt-1", HINT_BOX)}>
+      {variableHint(name).map((line, i) => (
+        <div key={i} className={HINT_TONE[line.tone]}>
+          {line.text}
+        </div>
+      ))}
     </div>
   );
 }

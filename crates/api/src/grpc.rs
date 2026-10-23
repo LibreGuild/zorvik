@@ -12,22 +12,24 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
 use zorvik_engine::grpc::{
-    GrpcDescriptors, GrpcEvent, GrpcMethod, GrpcOpened, GrpcResponse, GrpcService, GrpcSession, GrpcStream, GrpcTarget,
-    MethodDescriptor, message_from_json,
+    GrpcDescriptors, GrpcEvent, GrpcMethod, GrpcOpened, GrpcResponse, GrpcService, GrpcSession, GrpcStatus, GrpcStream,
+    GrpcTarget, MethodDescriptor, message_from_json,
 };
-use zorvik_engine::{EngineError, ErrorKind, RequestOptions};
+use zorvik_engine::{EngineError, ErrorKind, HttpResponse, RequestOptions};
 use zorvik_workspace::Workspace;
-use zorvik_workspace::formats::{Request, RequestKind};
+use zorvik_workspace::formats::{ConnectStep, GrpcOptions, MessageFormat, Request, RequestKind, SavedMessage};
 use zorvik_workspace::history::NewEntry;
 
+use crate::live::{self, MessageLog, StepResult, Steps, run_steps};
 use crate::{Api, ApiError, ApiResult, StreamEvent, join_err, lock, ok, params, remove_if_current};
 
 /// Services of a gRPC request, for the method picker.
@@ -49,6 +51,14 @@ pub struct GrpcInvokeResult {
     #[ts(flatten)]
     pub response: GrpcResponse,
     pub unresolved: Vec<String>,
+    /// A streaming call's steps (waits are tests).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<zorvik_script::TestResult>>")]
+    pub steps: Vec<zorvik_script::TestResult>,
+    /// What the steps did, and why reading stopped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<String>>")]
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -106,6 +116,22 @@ struct SessionEntry {
     generation: u64,
     cancel: CancellationToken,
     session: Option<GrpcSession>,
+    /// Cancelled when the call ends: stops its steps and repeating sends.
+    alive: CancellationToken,
+    /// Messages done with, for file streams.
+    settled: Arc<crate::file_stream::Settled>,
+}
+
+/// The settle counter of an open streaming call (file streams send on it).
+pub(crate) fn settled_of(inner: &crate::Inner, session_id: &str) -> Option<Arc<crate::file_stream::Settled>> {
+    lock(&inner.grpc.sessions).get(session_id).filter(|e| e.session.is_some()).map(|e| e.settled.clone())
+}
+
+/// Send a JSON message on an open streaming call (a file stream's chunk).
+pub(crate) fn send_json(inner: &crate::Inner, session_id: &str, json: &str) -> Result<(), String> {
+    let sessions = lock(&inner.grpc.sessions);
+    let session = sessions.get(session_id).and_then(|e| e.session.as_ref()).ok_or("The call is not open")?;
+    session.send(json).map_err(|e| e.message)
 }
 
 #[derive(Deserialize)]
@@ -160,8 +186,15 @@ impl Api {
                     message: String,
                 }
                 let P { session_id, message } = params(p)?;
-                let vars = self.try_ws().map(|ws| self.var_context(&ws)).unwrap_or_default();
-                let message = vars.render(&message, &mut BTreeSet::new());
+                // Microphone chunks come many times a second and hold no variables.
+                let message = match message.contains("{{") {
+                    true => self
+                        .try_ws()
+                        .map(|ws| self.var_context(&ws))
+                        .unwrap_or_default()
+                        .render(&message, &mut BTreeSet::new()),
+                    false => message,
+                };
                 let sessions = lock(&self.inner.grpc.sessions);
                 let session = sessions
                     .get(&session_id)
@@ -234,33 +267,15 @@ impl Api {
         opts: &RequestOptions,
         refresh: bool,
     ) -> ApiResult<GrpcDescriptors> {
-        let grpc = &request.grpc;
         if uses_proto_files(request) {
             let outside = self.settings().files_outside_workspace;
-            let files = grpc
-                .proto_files
-                .iter()
-                .filter(|f| !f.trim().is_empty())
-                .map(|f| workspace_path(ws.root(), f, outside, false))
-                .collect::<ApiResult<Vec<_>>>()?;
-            let imports = grpc
-                .import_paths
-                .iter()
-                .filter(|f| !f.trim().is_empty())
-                .map(|f| workspace_path(ws.root(), f, outside, true))
-                .collect::<ApiResult<Vec<_>>>()?;
+            let (files, imports) = proto_paths(ws.root(), request, outside)?;
             // The setting is part of the key: imports were checked against it.
             let key = format!("files\n{outside}\n{files:?}\n{imports:?}");
             if !refresh && let Some(cached) = lock(&self.inner.grpc.cache).get(&key).filter(|c| c.fresh()) {
                 return Ok(cached.descriptors.clone());
             }
-            // Compiling is CPU-bound: keep it off the async workers.
-            let descriptors = tokio::task::spawn_blocking(move || GrpcDescriptors::from_proto_files(&files, &imports))
-                .await
-                .map_err(join_err)??;
-            if !outside {
-                imports_inside(ws.root(), &descriptors.files)?;
-            }
+            let descriptors = compile_protos(ws.root(), outside, files, imports).await?;
             let stamps = descriptors.files.iter().map(|f| (f.clone(), stamp(f))).collect();
             remember(&self.inner.grpc.cache, key, Cached { descriptors: descriptors.clone(), stamps });
             return Ok(descriptors);
@@ -323,12 +338,12 @@ impl Api {
                 let opts = crate::request_options(&settings, &p.request.settings)?;
                 let (target, mut unresolved) = self.grpc_target(&ws, &p.request, p.path.as_deref(), &opts).await?;
                 let method = self.grpc_method(&ws, &p.request, &target, &opts).await?;
-                if method.is_client_streaming() || method.is_server_streaming() {
-                    return Err(ApiError::invalid(format!("{} is a streaming method: start a stream instead", method.name())));
-                }
-                let message = self.grpc_message(&ws, &p.request.body.text, &mut unresolved);
-                let response = self.inner.client.grpc_unary(&target, &method, &message, &opts).await?;
-                Ok::<_, ApiError>((target.url, response, unresolved))
+                // Variables the message uses that aren't defined.
+                self.grpc_message(&ws, &p.request.body.text, &mut unresolved);
+                let ctx = self.var_context(&ws);
+                let render = move |t: &str| ctx.render(t, &mut BTreeSet::new());
+                let call = Box::pin(run_call(&self.inner.client, &target, &method, &p.request, &opts, &render)).await?;
+                Ok::<_, ApiError>((target.url, call, unresolved))
             } => r,
             _ = cancel.cancelled() => Err(EngineError::cancelled().into()),
         };
@@ -336,7 +351,7 @@ impl Api {
 
         let workspace = ws.root().to_string_lossy().into_owned();
         match &outcome {
-            Ok((url, response, _)) => {
+            Ok((url, CallRun { response, .. }, _)) => {
                 let (status, error) = if response.status.is_ok() {
                     (Some(200), None)
                 } else {
@@ -355,7 +370,12 @@ impl Api {
             }
             Err(_) => {}
         }
-        outcome.map(|(_, response, unresolved)| GrpcInvokeResult { response, unresolved })
+        outcome.map(|(_, call, unresolved)| GrpcInvokeResult {
+            response: call.response,
+            unresolved,
+            steps: call.steps.iter().map(StepResult::test).collect(),
+            notes: call.notes,
+        })
     }
 
     /// History of a unary call: HTTP 200 when it succeeded (status OK); any
@@ -384,9 +404,18 @@ impl Api {
         let generation = self.next_generation();
         let sessions = &self.inner.grpc.sessions;
         // Replacing an entry drops its session, which cancels that call.
-        let entry = SessionEntry { generation, cancel: cancel.clone(), session: None };
+        let alive = CancellationToken::new();
+        let settled = Arc::new(crate::file_stream::Settled::default());
+        let entry = SessionEntry {
+            generation,
+            cancel: cancel.clone(),
+            session: None,
+            alive: alive.clone(),
+            settled: settled.clone(),
+        };
         if let Some(old) = lock(sessions).insert(p.session_id.clone(), entry) {
             old.cancel.cancel();
+            old.alive.cancel();
         }
         // `http.cancel {requestId}` stops the call too (the UI's Cancel button).
         let request_id = p.request_id.clone().unwrap_or_else(|| p.session_id.clone());
@@ -429,6 +458,8 @@ impl Api {
         }
         let inner = self.inner.clone();
         let session_id = p.session_id.clone();
+        let log = Arc::new(MessageLog::new(!p.request.grpc.on_connect.is_empty()));
+        let (forward_log, forward_alive) = (log.clone(), alive.clone());
         tokio::spawn(async move {
             let mut cancelled = false;
             loop {
@@ -445,6 +476,8 @@ impl Api {
                     event = events.recv() => {
                         let Some(event) = event else { break };
                         let end = matches!(event, GrpcEvent::End { .. });
+                        forward_log.record_grpc(&event);
+                        settled.grpc(&event);
                         inner.sink.emit(StreamEvent::Grpc { session_id: session_id.clone(), event });
                         if end {
                             break;
@@ -452,11 +485,385 @@ impl Api {
                     }
                 }
             }
+            forward_log.end();
+            settled.end();
+            crate::file_stream::stop_file_stream(&inner, &session_id);
+            forward_alive.cancel();
             remove_if_current(&inner.grpc.sessions, &session_id, |e| e.generation == generation);
             remove_if_current(&inner.inflight, &request_id, |(g, _)| *g == generation);
         });
+        if !p.request.grpc.on_connect.is_empty() {
+            let api = self.clone();
+            let (id, options, client_streaming) =
+                (p.session_id.clone(), p.request.grpc.clone(), method.is_client_streaming());
+            tokio::spawn(async move {
+                api.run_grpc_steps(id, generation, options, client_streaming, log, alive).await;
+            });
+        }
         Ok(GrpcStartResult { opened, method: GrpcMethod::of(&method), unresolved })
     }
+}
+
+impl Api {
+    /// Send a JSON message on the stream `session_id` (only if it is still call `generation`).
+    fn grpc_session_send(&self, session_id: &str, generation: u64, json: &str) -> Result<(), String> {
+        let sessions = lock(&self.inner.grpc.sessions);
+        let session = sessions
+            .get(session_id)
+            .filter(|e| e.generation == generation)
+            .and_then(|e| e.session.as_ref())
+            .ok_or("The call is not open")?;
+        session.send(json).map_err(|e| e.message)
+    }
+
+    /// A stream's steps, once it is open: send saved messages, wait for replies, keep sending.
+    async fn run_grpc_steps(
+        &self,
+        session_id: String,
+        generation: u64,
+        options: GrpcOptions,
+        client_streaming: bool,
+        log: Arc<MessageLog>,
+        alive: CancellationToken,
+    ) {
+        let render = self.renderer();
+        let send = |m: &SavedMessage| {
+            let text = grpc_text(m, &*render)?;
+            self.grpc_session_send(&session_id, generation, &text)
+        };
+        let note = |text: String, error: bool| {
+            let event = if error { GrpcEvent::Error { message: text } } else { GrpcEvent::info(text) };
+            self.inner.sink.emit(StreamEvent::Grpc { session_id: session_id.clone(), event });
+        };
+        let repeat = |message: &SavedMessage, every: Duration| {
+            note(format!("On connect: sending {} every {}", message.name, live::every_text(every)), false);
+            let (api, id, render) = (self.clone(), session_id.clone(), self.renderer());
+            let (failed_api, failed_id) = (self.clone(), session_id.clone());
+            let send = move |m: &SavedMessage| {
+                let text = grpc_text(m, &*render)?;
+                api.grpc_session_send(&id, generation, &text)
+            };
+            let failed = move |message: String| {
+                failed_api
+                    .inner
+                    .sink
+                    .emit(StreamEvent::Grpc { session_id: failed_id, event: GrpcEvent::Error { message } });
+            };
+            live::spawn_repeat(message.clone(), every, alive.child_token(), send, failed);
+        };
+        let repeats = options.on_connect.iter().any(|s| matches!(s, ConnectStep::Repeat(_)));
+        let steps = Steps {
+            steps: &options.on_connect,
+            messages: &options.messages,
+            log: &log,
+            send: &send,
+            note: &note,
+            repeat: &repeat,
+            cancel: &alive,
+        };
+        let results = run_steps(steps).await;
+        let passed = results.iter().all(|r| r.passed);
+        // Ending the client side would stop a repeating send: only when nothing repeats.
+        if options.end_after_steps && client_streaming && passed && !repeats && !alive.is_cancelled() {
+            if let Some(session) = lock(&self.inner.grpc.sessions)
+                .get(&session_id)
+                .filter(|e| e.generation == generation)
+                .and_then(|e| e.session.as_ref())
+            {
+                session.end();
+            }
+            note("On connect: ended the stream (no more messages from this side)".into(), false);
+        }
+    }
+}
+
+/// A saved message's JSON, its variables filled in (gRPC messages are JSON).
+pub(crate) fn grpc_text(message: &SavedMessage, render: &dyn Fn(&str) -> String) -> Result<String, String> {
+    if message.format == MessageFormat::Binary {
+        let name = if message.name.is_empty() { "The message".to_string() } else { format!("'{}'", message.name) };
+        return Err(format!("{name} is binary; gRPC messages are JSON"));
+    }
+    Ok(render(&message.text))
+}
+
+/// The messages a call made in one go keeps (their JSON): reading stops there.
+const MAX_KEPT_BYTES: usize = 64 << 20;
+
+/// A call made to its end (collection runs, AI agents, a stream sent in one go).
+pub(crate) struct CallRun {
+    pub response: GrpcResponse,
+    /// A stream's steps.
+    pub steps: Vec<StepResult>,
+    /// What the steps did, and why reading stopped.
+    pub notes: Vec<String>,
+}
+
+/// Make a call to its end. Unary: the message. Streams: the message (server streams), or the
+/// steps then the message when there are none (client and bidirectional streams); the client
+/// side ends after them. Reading stops as `settings.stream` says (messages, time), which ends
+/// the call without counting as a failure.
+pub(crate) async fn run_call(
+    client: &zorvik_engine::Client,
+    target: &GrpcTarget,
+    method: &MethodDescriptor,
+    request: &Request,
+    opts: &RequestOptions,
+    render: &(dyn Fn(&str) -> String + Send + Sync),
+) -> ApiResult<CallRun> {
+    if !method.is_client_streaming() && !method.is_server_streaming() {
+        let response = client.grpc_unary(target, method, &render(&request.body.text), opts).await?;
+        return Ok(CallRun { response, steps: Vec::new(), notes: Vec::new() });
+    }
+    let until = request.settings.stream.clone().unwrap_or_default();
+    let limit = Duration::from_millis(until.timeout_ms.max(1)).min(crate::sse_read::MAX_WAIT);
+    let deadline = tokio::time::Instant::now() + limit;
+    let stream = tokio::time::timeout_at(deadline, client.grpc_stream(target, method, opts))
+        .await
+        .map_err(|_| ApiError::new("timeout", format!("No answer within {} ms", limit.as_millis())))??;
+    let GrpcStream { opened, session, mut events } = stream;
+    let log = Arc::new(MessageLog::default());
+    let (tx, mut collected) = tokio::sync::mpsc::unbounded_channel();
+    let pump = {
+        let log = log.clone();
+        tokio::spawn(async move {
+            while let Some(event) = events.recv().await {
+                log.record_grpc(&event);
+                let end = matches!(event, GrpcEvent::End { .. });
+                let _ = tx.send(event);
+                if end {
+                    break;
+                }
+            }
+            log.end();
+        })
+    };
+    let mut notes = Vec::new();
+    let mut steps = Vec::new();
+    let options = &request.grpc;
+    if !method.is_client_streaming() {
+        session.send(&render(&request.body.text))?;
+        session.end();
+    }
+    if !options.on_connect.is_empty() {
+        let send = |m: &SavedMessage| session.send(&grpc_text(m, render)?).map_err(|e| e.message);
+        let (results, step_notes) = live::run_steps_once(&options.on_connect, &options.messages, &log, &send).await;
+        steps = results;
+        notes.extend(step_notes);
+    } else if method.is_client_streaming() && !request.body.text.trim().is_empty() {
+        session.send(&render(&request.body.text))?;
+    }
+    session.end();
+
+    let mut response = GrpcResponse {
+        status: GrpcStatus::new(2, "The call ended without a status", true),
+        messages: Vec::new(),
+        headers: Vec::new(),
+        trailers: Vec::new(),
+        timing: opened.timing.clone(),
+        remote_addr: opened.remote_addr.clone(),
+        tls: opened.tls.clone(),
+        request_headers: opened.request_headers.clone(),
+        warnings: Vec::new(),
+    };
+    let max = until.max_events as usize;
+    let mut received = 0;
+    let mut kept = 0;
+    let mut stopped: Option<String> = None;
+    loop {
+        let event = tokio::select! {
+            e = collected.recv() => e,
+            _ = tokio::time::sleep_until(deadline), if stopped.is_none() => {
+                stopped = Some(format!("Stopped reading after {} ms", limit.as_millis()));
+                session.cancel();
+                continue;
+            }
+        };
+        let Some(event) = event else { break };
+        match event {
+            GrpcEvent::Headers { headers, .. } => response.headers = headers,
+            GrpcEvent::Message { message } => {
+                let incoming = message.direction == zorvik_engine::Direction::Received;
+                kept += message.json.len();
+                response.messages.push(message);
+                if kept > MAX_KEPT_BYTES && stopped.is_none() {
+                    stopped = Some(format!("Stopped reading after {} MB of messages", MAX_KEPT_BYTES >> 20));
+                    session.cancel();
+                }
+                if incoming {
+                    received += 1;
+                    if max > 0 && received >= max && stopped.is_none() {
+                        stopped = Some(format!("Stopped reading after {received} messages"));
+                        session.cancel();
+                    }
+                }
+            }
+            GrpcEvent::Error { message } => response.warnings.push(message),
+            GrpcEvent::Info { .. } => {}
+            GrpcEvent::End { status, trailers, timing } => {
+                response.status = status;
+                response.trailers = trailers;
+                response.timing = timing;
+                break;
+            }
+        }
+    }
+    drop(session);
+    let _ = tokio::time::timeout(Duration::from_secs(2), pump).await;
+    if let Some(why) = stopped {
+        // Stopped by us, not by the server: a stream that answered did what it was asked to; one
+        // that never answered in time didn't (a hung server isn't a pass).
+        if response.status.local && response.status.code == 1 {
+            response.status = if received > 0 {
+                GrpcStatus::new(0, why.clone(), true)
+            } else {
+                GrpcStatus::new(4, format!("No answer within {} ms", limit.as_millis()), true)
+            };
+        }
+        notes.push(why);
+    }
+    Ok(CallRun { response, steps, notes })
+}
+
+/// A call's answer as an HTTP-like response for scripts, tests and runs: status 200 when OK
+/// (else the HTTP status gRPC maps the code to), headers then trailers, and the body: the
+/// message (unary) or the received messages as a JSON array (streams).
+pub(crate) fn as_response(url: &str, call: &GrpcResponse, streaming: bool) -> HttpResponse {
+    use zorvik_engine::{Header, ResponseMeta, SentRequest};
+    let received: Vec<&str> = call
+        .messages
+        .iter()
+        .filter(|m| m.direction == zorvik_engine::Direction::Received)
+        .map(|m| m.json.as_str())
+        .collect();
+    let body = if streaming {
+        let list: Vec<Value> = received.iter().map(|j| serde_json::from_str(j).unwrap_or(Value::Null)).collect();
+        serde_json::to_vec_pretty(&list).unwrap_or_default()
+    } else {
+        received.first().map(|j| j.as_bytes().to_vec()).unwrap_or_default()
+    };
+    let status = http_status(call.status.code);
+    let status_text = if call.status.message.is_empty() {
+        call.status.name.clone()
+    } else {
+        format!("{} · {}", call.status.name, call.status.message)
+    };
+    let mut headers = call.headers.clone();
+    headers.extend(call.trailers.iter().cloned());
+    if !headers.iter().any(|h| h.name.eq_ignore_ascii_case("grpc-status")) {
+        headers.push(Header::new("grpc-status", call.status.code.to_string()));
+    }
+    let sent: u64 =
+        call.messages.iter().filter(|m| m.direction == zorvik_engine::Direction::Sent).map(|m| m.size).sum();
+    HttpResponse {
+        meta: ResponseMeta {
+            status,
+            status_text,
+            http_version: "HTTP/2 (gRPC)".into(),
+            headers,
+            url: url.to_string(),
+            remote_addr: call.remote_addr.clone(),
+            tls: call.tls.clone(),
+            redirects: Vec::new(),
+            request: SentRequest {
+                method: "POST".into(),
+                url: url.to_string(),
+                http_version: "HTTP/2".into(),
+                headers: call.request_headers.clone(),
+                body_size: sent,
+                proxy: None,
+            },
+            headers_size: 0,
+            cookies: Vec::new(),
+        },
+        timing: call.timing.clone(),
+        body_wire_size: body.len() as u64,
+        body,
+        body_truncated: false,
+        decode_warning: (!call.warnings.is_empty()).then(|| call.warnings.join("; ")),
+    }
+}
+
+/// The HTTP status gRPC's code corresponds to (as gRPC gateways map them).
+fn http_status(code: u32) -> u16 {
+    match code {
+        0 => 200,
+        1 => 499,
+        3 | 9 | 11 => 400,
+        4 => 504,
+        5 => 404,
+        6 | 10 => 409,
+        7 => 403,
+        8 => 429,
+        12 => 501,
+        14 => 503,
+        16 => 401,
+        _ => 500,
+    }
+}
+
+/// The request's `.proto` files and import folders, checked to be inside the workspace (unless
+/// files outside it are allowed).
+fn proto_paths(root: &Path, request: &Request, outside: bool) -> ApiResult<(Vec<PathBuf>, Vec<PathBuf>)> {
+    let grpc = &request.grpc;
+    let files = grpc
+        .proto_files
+        .iter()
+        .filter(|f| !f.trim().is_empty())
+        .map(|f| workspace_path(root, f, outside, false))
+        .collect::<ApiResult<Vec<_>>>()?;
+    let imports = grpc
+        .import_paths
+        .iter()
+        .filter(|f| !f.trim().is_empty())
+        .map(|f| workspace_path(root, f, outside, true))
+        .collect::<ApiResult<Vec<_>>>()?;
+    Ok((files, imports))
+}
+
+async fn compile_protos(
+    root: &Path,
+    outside: bool,
+    files: Vec<PathBuf>,
+    imports: Vec<PathBuf>,
+) -> ApiResult<GrpcDescriptors> {
+    // Compiling is CPU-bound: keep it off the async workers.
+    let descriptors = tokio::task::spawn_blocking(move || GrpcDescriptors::from_proto_files(&files, &imports))
+        .await
+        .map_err(join_err)??;
+    if !outside {
+        imports_inside(root, &descriptors.files)?;
+    }
+    Ok(descriptors)
+}
+
+/// Collection runs: the request's method from its `.proto` files or server reflection (not
+/// cached), then the call to its end.
+pub(crate) async fn run_once(
+    client: &zorvik_engine::Client,
+    root: &Path,
+    outside: bool,
+    request: &Request,
+    target: &GrpcTarget,
+    opts: &RequestOptions,
+    render: &(dyn Fn(&str) -> String + Send + Sync),
+) -> ApiResult<(HttpResponse, Vec<StepResult>, Vec<String>)> {
+    let descriptors = if uses_proto_files(request) {
+        let (files, imports) = proto_paths(root, request, outside)?;
+        compile_protos(root, outside, files, imports).await?
+    } else {
+        client.grpc_reflect(target, opts).await?
+    };
+    let method = descriptors.method(&request.method)?;
+    let streaming = method.is_client_streaming() || method.is_server_streaming();
+    let call = Box::pin(run_call(client, target, &method, request, opts, render)).await?;
+    let mut notes = call.notes;
+    if !call.response.status.is_ok() || !call.response.status.message.is_empty() {
+        notes.push(
+            format!("gRPC status {} {}", call.response.status.name, call.response.status.message).trim().to_string(),
+        );
+    }
+    notes.extend(call.response.warnings.iter().cloned());
+    Ok((as_response(&target.url, &call.response, streaming), call.steps, notes))
 }
 
 struct HistoryEntry<'a> {

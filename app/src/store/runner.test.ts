@@ -86,6 +86,7 @@ const result = (iteration: number, name: string, extra: Partial<RunResult> = {})
   unresolved: [],
   passed: true,
   skipped: false,
+  seq: 0,
   ...extra,
 });
 const test = (name: string, passed: boolean, skipped = false) => ({ name, passed, skipped, error: passed ? null : "nope" });
@@ -132,6 +133,12 @@ describe("requests of a run", () => {
     expect(runnableRequests(tree, "users/admin")!.map((r) => r.name)).toEqual(["Ban"]);
     expect(runnableRequests(tree, "")!.map((r) => r.name)).toEqual(["List", "Events", "Ban", "Health"]);
     expect(runnableRequests(tree, "gone")).toBeNull();
+  });
+
+  it("runs gRPC calls but not TCP, UDP, MQTT or DNS sessions", () => {
+    const kinds = ["grpc", "tcp", "udp", "mqtt", "dns", "socketio"] as const;
+    const mixed = kinds.map((k) => req(`${k}.yaml`, k, { requestKind: k }));
+    expect(runnableRequests(mixed, "")!.map((r) => r.name)).toEqual(["grpc", "socketio"]);
   });
 
   it("orders, selects and moves requests", () => {

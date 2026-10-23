@@ -126,6 +126,110 @@ pub struct RunResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub attempts: Option<u32>,
+    /// The result's number in its run (1, 2, …): `runner.details` gives what it sent and got.
+    #[serde(default)]
+    pub seq: u32,
+    /// What it sent and got, kept by the app while the run is (not in reports).
+    #[serde(skip)]
+    #[ts(skip)]
+    pub details: Option<Arc<RunDetails>>,
+}
+
+/// What a result's request sent and what came back, secret values shown as `{{name}}`.
+#[derive(Debug, Clone, Default, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RunDetails {
+    pub method: String,
+    pub url: String,
+    /// The headers sent (the request's own when nothing was sent).
+    pub request_headers: Vec<zorvik_engine::Header>,
+    /// The body as written in the request, its variables filled in (the first 64 KB).
+    pub request_body: Option<String>,
+    /// `None` when nothing came back (an error).
+    pub response: Option<RunResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RunResponse {
+    pub status: u16,
+    pub status_text: String,
+    pub http_version: String,
+    pub headers: Vec<zorvik_engine::Header>,
+    /// The body as text (the first 64 KB).
+    pub body: String,
+    pub body_truncated: bool,
+    #[ts(type = "number")]
+    pub size: u64,
+    pub timing: zorvik_engine::Timing,
+}
+
+/// Body text kept per result for its details.
+const DETAIL_BODY: usize = 64 * 1024;
+/// Details kept for the last runs, together.
+const DETAILS_BYTES: usize = 64 << 20;
+
+fn cut_text(bytes: &[u8]) -> (String, bool) {
+    let mut end = bytes.len().min(DETAIL_BODY);
+    // Not in the middle of a character.
+    while end < bytes.len() && end > 0 && (bytes[end] & 0xC0) == 0x80 {
+        end -= 1;
+    }
+    (String::from_utf8_lossy(&bytes[..end]).into_owned(), end < bytes.len())
+}
+
+impl RunDetails {
+    fn weight(&self) -> usize {
+        let headers = |h: &[zorvik_engine::Header]| h.iter().map(|h| h.name.len() + h.value.len()).sum::<usize>();
+        self.url.len()
+            + headers(&self.request_headers)
+            + self.request_body.as_ref().map_or(0, String::len)
+            + self.response.as_ref().map_or(0, |r| r.body.len() + headers(&r.headers))
+    }
+
+    /// Secret values hidden everywhere (as `{{name}}`).
+    fn masked(mut self, secrets: &[(String, String)]) -> Self {
+        let mask = |t: &mut String| *t = mask_secrets(t, secrets);
+        mask(&mut self.url);
+        for h in &mut self.request_headers {
+            mask(&mut h.value);
+        }
+        if let Some(body) = &mut self.request_body {
+            mask(body);
+        }
+        if let Some(r) = &mut self.response {
+            for h in &mut r.headers {
+                mask(&mut h.value);
+            }
+            mask(&mut r.body);
+        }
+        self
+    }
+}
+
+/// Details of the results of the last runs (by run id and result number), bounded in size.
+#[derive(Default)]
+pub(crate) struct DetailsStore {
+    entries: VecDeque<(String, u32, Arc<RunDetails>)>,
+    bytes: usize,
+}
+
+impl DetailsStore {
+    fn add(&mut self, run_id: &str, seq: u32, details: Arc<RunDetails>) {
+        self.bytes += details.weight();
+        self.entries.push_back((run_id.to_string(), seq, details));
+        while self.bytes > DETAILS_BYTES
+            && let Some((_, _, old)) = self.entries.pop_front()
+        {
+            self.bytes -= old.weight();
+        }
+    }
+
+    fn get(&self, run_id: &str, seq: u32) -> Option<Arc<RunDetails>> {
+        self.entries.iter().find(|(r, s, _)| r == run_id && *s == seq).map(|(_, _, d)| d.clone())
+    }
 }
 
 /// Counts of one iteration.
@@ -349,6 +453,7 @@ pub async fn run(
     let mut iteration_times = Vec::new();
     let (mut stopped, mut bailed, mut error) = (false, false, None);
     let mut sent_any = false;
+    let mut seq = 0;
     'run: for index in 0..plan.iterations {
         let iteration_started = Instant::now();
         summary.per_iteration.push(IterationSummary { iteration: index, ..Default::default() });
@@ -381,6 +486,7 @@ pub async fn run(
                             | RequestKind::Mcp
                             | RequestKind::Websocket
                             | RequestKind::SocketIo
+                            | RequestKind::Grpc
                     ) =>
                 {
                     r
@@ -395,6 +501,8 @@ pub async fn run(
                         Err(e) => result.error = Some(format!("The request can't be read: {e}")),
                     }
                     result.passed = verdict(&result, plan.allow_http_errors);
+                    seq += 1;
+                    result.seq = seq;
                     on_result(&result, vars);
                     let failed = !result.passed;
                     count(&mut summary, &result);
@@ -478,13 +586,40 @@ pub async fn run(
             let stream = scripted.result.as_ref().ok().and_then(|s| s.stream);
             let report = scripted.report.take().unwrap_or_default();
             let described: Vec<String> = report.errors.iter().map(|e| e.describe()).collect();
+            let secrets = secret_values(plan, vars);
+            let body_of = |request: &Request| {
+                let text = request.body.text.trim();
+                (request.body.body_type != zorvik_workspace::formats::BodyType::None && !text.is_empty()).then(|| {
+                    let rendered = vars.var_context().render(text, &mut std::collections::BTreeSet::new());
+                    cut_text(rendered.as_bytes()).0
+                })
+            };
             match scripted.result {
                 Ok(sent) => {
+                    let response = &sent.response;
+                    let (body, body_truncated) = cut_text(&response.body);
+                    let details = RunDetails {
+                        method: response.meta.request.method.clone(),
+                        url: sent.url.clone(),
+                        request_headers: response.meta.request.headers.clone(),
+                        request_body: sent.sent_body.clone(),
+                        response: Some(RunResponse {
+                            status: response.meta.status,
+                            status_text: response.meta.status_text.clone(),
+                            http_version: response.meta.http_version.clone(),
+                            headers: response.meta.headers.clone(),
+                            body,
+                            body_truncated: body_truncated || response.body_truncated,
+                            size: response.body.len() as u64,
+                            timing: response.timing.clone(),
+                        }),
+                    };
+                    result.details = Some(Arc::new(details.masked(&secrets)));
                     // A script may change the method; other kinds keep their label (MCP, WS, IO).
                     if matches!(sent.request.kind, RequestKind::Http | RequestKind::Sse) {
                         result.method = sent.request.method.clone();
                     }
-                    result.url = mask_secrets(&sent.url, &secret_values(plan, vars));
+                    result.url = mask_secrets(&sent.url, &secrets);
                     result.status = Some(sent.response.meta.status);
                     result.duration_ms = Some(sent.response.timing.total_ms);
                     result.size = Some(sent.response.body.len().min(u32::MAX as usize) as u32);
@@ -497,6 +632,22 @@ pub async fn run(
                     result.skip_reason = Some(e.message);
                 }
                 Err(e) => {
+                    if let Ok(request) = &item.request {
+                        let render = |t: &str| vars.var_context().render(t, &mut std::collections::BTreeSet::new());
+                        let details = RunDetails {
+                            method: request.method.clone(),
+                            url: render(&request.url),
+                            request_headers: request
+                                .headers
+                                .iter()
+                                .filter(|h| h.enabled && !h.key.trim().is_empty())
+                                .map(|h| zorvik_engine::Header::new(render(&h.key), render(&h.value)))
+                                .collect(),
+                            request_body: body_of(request),
+                            response: None,
+                        };
+                        result.details = Some(Arc::new(details.masked(&secrets)));
+                    }
                     result.duration_ms = Some(t0.elapsed().as_secs_f64() * 1000.0);
                     result.script_errors = described.into_iter().filter(|d| *d != e.message).collect();
                     result.error = Some(e.message);
@@ -525,7 +676,11 @@ pub async fn run(
                 }
             };
             result.passed = verdict(&result, plan.allow_http_errors);
+            seq += 1;
+            result.seq = seq;
             on_result(&result, vars);
+            // The details stay with the app (`on_result`), not in the report.
+            result.details = None;
             let failed = !result.passed;
             count(&mut summary, &result);
             keep(&mut results, &mut summary.omitted, result, MAX_KEPT_RESULTS);
@@ -626,13 +781,15 @@ fn skip_reason(kind: RequestKind) -> String {
         RequestKind::Tcp => "TCP connections are live sessions",
         RequestKind::Udp => "UDP sockets are live sessions",
         RequestKind::Mqtt => "MQTT clients are live sessions",
-        RequestKind::Grpc => "gRPC calls don't run in the collection runner",
         RequestKind::Dns => "DNS queries don't run in the collection runner",
-        RequestKind::Http | RequestKind::Sse | RequestKind::Mcp | RequestKind::Websocket | RequestKind::SocketIo => {
-            "not sent"
-        }
+        RequestKind::Http
+        | RequestKind::Sse
+        | RequestKind::Mcp
+        | RequestKind::Websocket
+        | RequestKind::SocketIo
+        | RequestKind::Grpc => "not sent",
     };
-    format!("{what}; the runner sends HTTP, GraphQL, SSE, WebSocket, Socket.IO and MCP requests")
+    format!("{what}; the runner sends HTTP, GraphQL, SSE, WebSocket, Socket.IO, gRPC and MCP requests")
 }
 
 fn base_result(item: &RunItem, iteration: u32) -> RunResult {
@@ -647,6 +804,7 @@ fn base_result(item: &RunItem, iteration: u32) -> RunResult {
                 RequestKind::Mcp => "MCP".into(),
                 RequestKind::Websocket => "WS".into(),
                 RequestKind::SocketIo => "IO".into(),
+                RequestKind::Grpc => "gRPC".into(),
                 _ => r.method.clone(),
             })
             .unwrap_or_default(),
@@ -749,6 +907,8 @@ pub(crate) struct RunnerState {
     active: Mutex<Option<(String, CancellationToken)>>,
     /// The last finished runs, oldest first.
     finished: Mutex<VecDeque<(String, Arc<RunReport>)>>,
+    /// What the results of the last runs sent and got.
+    details: Mutex<DetailsStore>,
 }
 
 #[derive(Deserialize)]
@@ -788,6 +948,17 @@ impl Api {
                     cancel.cancel();
                 }
                 ok(())
+            }
+            // What a result sent and got (null once it is no longer kept).
+            "runner.details" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct P {
+                    run_id: String,
+                    seq: u32,
+                }
+                let P { run_id, seq } = params(p)?;
+                ok(lock(&self.inner.runner.details).get(&run_id, seq).map(|d| (*d).clone()))
             }
             "runner.preview" => {
                 #[derive(Deserialize)]
@@ -963,6 +1134,9 @@ impl Api {
             let warning = self.keep_local_values(&ws, vars);
             vars.changes.clear();
             let mut result = result.clone();
+            if let Some(details) = result.details.take() {
+                lock(&self.inner.runner.details).add(&run_id, result.seq, details);
+            }
             if let Some(message) = warning {
                 result.console.push(zorvik_script::ConsoleEntry { level: zorvik_script::ConsoleLevel::Warn, message });
             }

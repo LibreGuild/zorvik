@@ -15,7 +15,7 @@ import { BodyEditor } from "./BodyEditor";
 import { ExamplesTab } from "./ExamplesTab";
 import { WebSocketSettings } from "./ConnectionEditors";
 import { KIND_EDITOR_TABS, WITH_HTTP_TABS } from "./kinds";
-import { ScriptsEditor, ScriptsTabLabel } from "./ScriptsEditor";
+import { type LiveScripts, ScriptsEditor, ScriptsTabLabel } from "./ScriptsEditor";
 
 const AUTH_LABEL: Record<string, string> = {
   inherit: "Inherit",
@@ -56,6 +56,16 @@ export function RequestEditor({ tab, toolbar }: { tab: Tab; toolbar?: React.Reac
   const submit = () => send(tab.id);
 
   const kindTabs = KIND_EDITOR_TABS[kind];
+  // WebSocket and Socket.IO: scripts before connecting and on messages.
+  const live: LiveScripts | undefined =
+    kind === "websocket" || kind === "socketio"
+      ? {
+          socketio: kind === "socketio",
+          onMessage: (kind === "socketio" ? req.socketio?.onMessage : req.websocket?.onMessage) ?? [],
+          onChange: (onMessage) =>
+            update((r) => (r.kind === "socketio" ? { ...r, socketio: { ...(r.socketio ?? {}), onMessage } } : { ...r, websocket: { ...(r.websocket ?? {}), onMessage } })),
+        }
+      : undefined;
   const authItem = { id: "auth", label: "Auth", badge: req.auth && req.auth.type !== "inherit" ? AUTH_LABEL[req.auth.type] : undefined };
   const items = kind === "mcp"
     ? [
@@ -68,9 +78,10 @@ export function RequestEditor({ tab, toolbar }: { tab: Tab; toolbar?: React.Reac
       ]
     : kindTabs && !WITH_HTTP_TABS.includes(kind)
     ? [
-        ...kindTabs.map((t) => ({ id: t.id, label: t.label })),
+        ...kindTabs.map((t) => ({ id: t.id, label: t.label, badge: t.badge?.(tab) })),
         ...(kind === "mqtt" || kind === "grpc" ? [authItem] : []),
         ...(kind === "dns" ? [] : [{ id: "settings", label: "Settings" }]),
+        ...(kind === "grpc" ? [{ id: "scripts", label: <ScriptsTabLabel scripts={req.scripts} /> }] : []),
         { id: "docs", label: "Docs" },
       ]
     : [
@@ -80,7 +91,7 @@ export function RequestEditor({ tab, toolbar }: { tab: Tab; toolbar?: React.Reac
         ...(kind === "http" ? [{ id: "body", label: "Body", badge: req.body && req.body.type !== "none" ? BODY_LABEL[req.body.type] : undefined }] : []),
         authItem,
         { id: "settings", label: "Settings" },
-        ...(kind === "http" ? [{ id: "scripts", label: <ScriptsTabLabel scripts={req.scripts} /> }] : []),
+        ...(kind === "http" || live ? [{ id: "scripts", label: <ScriptsTabLabel scripts={req.scripts} more={!!live?.onMessage.length} /> }] : []),
         { id: "docs", label: "Docs" },
         ...(kind === "http" ? [{ id: "examples", label: "Examples", badge: req.examples?.length || undefined }] : []),
       ];
@@ -134,8 +145,14 @@ export function RequestEditor({ tab, toolbar }: { tab: Tab; toolbar?: React.Reac
           />
         )}
         {current === "settings" && kind === "websocket" && <WebSocketSettings tab={tab} />}
-        {current === "scripts" && (kind === "http" || kind === "mcp") && (
-          <ScriptsEditor where="request" scripts={req.scripts ?? {}} onChange={(scripts) => update((r) => ({ ...r, scripts }))} />
+        {current === "scripts" && (kind === "http" || kind === "mcp" || kind === "grpc" || live) && (
+          <ScriptsEditor
+            where="request"
+            scripts={req.scripts ?? {}}
+            onChange={(scripts) => update((r) => ({ ...r, scripts }))}
+            live={live}
+            runsOnly={kind === "grpc"}
+          />
         )}
         {current === "examples" && kind === "http" && <ExamplesTab tab={tab} />}
         {current === "docs" && (
@@ -283,21 +300,36 @@ function SettingsTab({
       </SettingRow>
         </>
       )}
-      {(kind === "sse" || subscription) && <StreamSettings settings={settings} set={set} subscription={subscription} />}
+      {(kind === "sse" || kind === "grpc" || subscription) && <StreamSettings settings={settings} set={set} subscription={subscription} grpc={kind === "grpc"} />}
       {(kind === "http" || kind === "sse") && <RepeatSettings settings={settings} set={set} />}
     </div>
   );
 }
 
 /** When a collection run (or an AI agent) stops reading an event stream. */
-function StreamSettings({ settings, set, subscription }: { settings: RequestSettings; set: (p: Partial<RequestSettings>) => void; subscription?: boolean }) {
+function StreamSettings({
+  settings,
+  set,
+  subscription,
+  grpc,
+}: {
+  settings: RequestSettings;
+  set: (p: Partial<RequestSettings>) => void;
+  subscription?: boolean;
+  grpc?: boolean;
+}) {
   const stream = settings.stream ?? { maxEvents: 100, timeoutMs: 10000 };
   const change = (patch: Partial<typeof stream>) => set({ stream: { ...stream, ...patch } });
   return (
     <>
       <h3 className="mt-2 text-[11.5px] font-semibold uppercase tracking-wide text-faint">In collection runs</h3>
       <p className="-mt-2 text-[12px] text-muted">
-        {subscription ? (
+        {grpc ? (
+          <>
+            A run (or an AI agent) reads a streaming call's messages until the first of these, then ends the call; its post-response scripts test them
+            (<code className="font-mono">pm.response.json()</code> is the list of received messages). Stopping here is not a failure.
+          </>
+        ) : subscription ? (
           <>
             A run reads the subscription's results (events named <code className="font-mono">next</code>) until the first of these, then its
             post-response scripts test them (<code className="font-mono">pm.response.json()</code> is the list of results).
@@ -308,10 +340,12 @@ function StreamSettings({ settings, set, subscription }: { settings: RequestSett
           </>
         )}
       </p>
-      <SettingRow label="Stop at event" hint="Event name; empty = any event may be the last.">
-        <Input className="w-56 font-mono" value={stream.event ?? ""} placeholder="e.g. done" onChange={(e) => change({ event: e.target.value || undefined })} data-testid="stream-event" />
-      </SettingRow>
-      <SettingRow label="Stop after" hint="Events; 0 = only the time limit.">
+      {!grpc && (
+        <SettingRow label="Stop at event" hint="Event name; empty = any event may be the last.">
+          <Input className="w-56 font-mono" value={stream.event ?? ""} placeholder="e.g. done" onChange={(e) => change({ event: e.target.value || undefined })} data-testid="stream-event" />
+        </SettingRow>
+      )}
+      <SettingRow label="Stop after" hint={grpc ? "Received messages; 0 = only the time limit." : "Events; 0 = only the time limit."}>
         <Input type="number" min={0} className="w-44" value={stream.maxEvents} onChange={(e) => change({ maxEvents: Math.max(0, Math.trunc(Number(e.target.value)) || 0) })} />
       </SettingRow>
       <SettingRow label="Time limit" hint="Milliseconds.">

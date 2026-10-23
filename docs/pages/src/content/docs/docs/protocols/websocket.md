@@ -9,7 +9,7 @@ A WebSocket request opens a lasting connection and shows every message in both d
 
 ## Create a WebSocket request
 
-In the **Collection** sidebar, open the **New** menu (**+**) and choose **New WebSocket**. The request has these tabs: **Messages**, **On connect**, **Params**, **Headers**, **Auth**, **Settings** and **Docs**; **Messages** and **On connect** show how many they hold. There is no **Body** tab: messages are typed in the composer below the message log. There is no **Scripts** tab either: in collection runs, the request's tests are its [wait steps](#in-collection-runs).
+In the **Collection** sidebar, open the **New** menu (**+**) and choose **New WebSocket**. The request has these tabs: **Messages**, **On connect**, **Params**, **Headers**, **Auth**, **Settings**, **Scripts** and **Docs**; **Messages** and **On connect** show how many they hold. There is no **Body** tab: messages are typed in the composer below the message log. **Scripts** has a script that runs before connecting and [message scripts](#message-scripts) that run on the messages that match.
 
 ## URL
 
@@ -129,7 +129,7 @@ The **Messages** tab keeps messages with the request, so you don't type them aga
 | **Text**, **JSON** or **Hex** | How it is sent: a text message (JSON is text with JSON highlighting), or a binary message written as hex bytes (`48 65 6c 6c 6f`). |
 | The message | `{{variables}}` are filled in each time it is sent (not in hex). |
 
-The buttons on each message: **Put in the composer**, **Send now** (while connected) and **Remove message**. **Add message** adds an empty one. You can also type a message in the composer and choose **Save as message…** from the **Saved messages** menu; a name that is already taken replaces that message. Saved messages are part of the request: save the request to keep them.
+The buttons on each message: **Put in the composer**, **Send now** (while connected) and **Remove message**. **Add message** adds an empty one. You can also type a message in the composer and choose **Save as message…** from the **Saved messages** menu; a name that is already taken replaces that message. For a saved request, **Save as message…** writes the message to the request's file at once (other unsaved changes stay unsaved), so teammates and [AI agents](#ai-agents) see it; messages added in the **Messages** tab are kept when you save the request.
 
 **Match replies by** (below the list) is the JSON path that pairs replies with the messages they answer, `$.id` when empty. See [Reply times](#reply-times).
 
@@ -167,10 +167,11 @@ The steps report in the message log as notes: **On connect: sent Login**, **On c
 
 ## The message log
 
-Each row shows the direction (sent or received), the time, a **binary**, **ping** or **pong** badge where it applies, the start of the payload and its size. Notes such as **Connected …** and the [On connect](#on-connect) steps' progress appear between the messages. Click a row to see the whole payload: JSON is pretty-printed and binary data is shown as hex. The buttons at its top right:
+Each row shows the direction (sent or received), the time, a **binary**, **ping** or **pong** badge where it applies, the start of the payload and its size. Notes such as **Connected …** and the [On connect](#on-connect) steps' progress appear between the messages. Click a row to see the whole payload: JSON is pretty-printed and binary data is shown as hex. A string that holds JSON itself (a payload sent as `JSON.stringify(…)` inside a message) is shown as JSON too. Notes and errors cut short in the row open the same way: click a connection error to read all of it. The buttons at its top right:
 
 | Button | Does |
 |---|---|
+| **Pretty** / **Raw** | JSON messages: pretty-printed (the default), or the text exactly as it came. The choice is remembered. |
 | **Copy** | Copies the payload. |
 | **Save to a file** | Binary messages: saves the bytes to a file you choose. |
 | **Edit in the composer** | Sent messages: puts the message back in the composer, as text, JSON or hex, to change it and send it again. |
@@ -268,6 +269,46 @@ When a connection closes with a code, the log says what it means:
 - **Compared as text**: strings as they are, numbers and booleans as written, objects and arrays as compact JSON. So `$.id == 7` matches both `{"id": 7}` and `{"id": "7"}`, and `$.ok == true` matches `{"ok": true}`.
 - A message that isn't JSON never matches. A line break at its end is ignored.
 
+## Scripts
+
+The **Scripts** tab has three parts:
+
+| Part | Runs |
+|---|---|
+| **Before connecting** | Before each connect, after the workspace's and folders' pre-request scripts. It can set variables (`pm.environment.set`, `pm.variables.set`), change the URL and headers (`pm.request`), and stop the connection with `pm.execution.skipRequest()`. An error in it stops the connection and says why. What it logs and tests shows in the message log. |
+| **On message** | [Message scripts](#message-scripts), on the messages that match, while connected and in collection runs. |
+| **In runs** | In collection runs, after the connection closes: `pm.response.json()` is the [transcript](#in-collection-runs). |
+
+### Message scripts
+
+A message script runs on each message that matches it:
+
+| Setting | Description |
+|---|---|
+| **Name** | Optional; shown in the log and test names. Without one, the script is named after what it matches: `On a message containing "price"`. |
+| **Runs on** | **Received** messages (the default), **Sent** ones (from the composer, saved messages, steps and repeats), or both. Messages the scripts send themselves never run **Sent** scripts, so a script can't loop on its own answers. |
+| **Messages that** | **any message**, **contains**, **is exactly**, **matches regex** or **JSON where** a [JSON condition](#json-conditions). |
+| The script | JavaScript with the usual [`pm` API](../../scripting/pm-reference/), plus `pm.message` and `pm.connection`. |
+| The checkbox | Turns a script off without deleting it. |
+
+```js
+pm.test("Trade has a price", () => {
+  pm.expect(pm.message.json().price).to.be.above(0);
+});
+pm.environment.set("lastTrade", pm.message.json().id);
+pm.connection.send({ ack: pm.message.json().id });
+```
+
+| Name | Description |
+|---|---|
+| `pm.message.text()` | The message as text (binary: its bytes as text). |
+| `pm.message.json()` | The message parsed as JSON. |
+| `pm.message.direction` | `received` or `sent`. |
+| `pm.message.size`, `.timestamp`, `.isBinary` | Its size in bytes, when it arrived (Unix milliseconds), and whether it is binary. |
+| `pm.connection.send(data)` | Sends a text message; objects and arrays go as JSON. At most 100 per run of the script. |
+
+Scripts run one at a time, in the order messages arrive, each with the [script time limit](../../scripting/sandbox/#limits). While connected, what they log and their test results (`✓` or `✗` with the error) show in the message log, and values they set on the environment, the workspace or globals are kept like those of [other scripts](../../scripting/overview/#variables-that-scripts-set) (saved about once a second while messages keep coming). Message scripts work with the variables and the environment as they were when the connection opened: after switching environments, reconnect. `pm.variables` values carry from one message to the next for as long as the connection is open, starting with what **Before connecting** set. When messages come faster than the scripts can run, those beyond 1000 waiting are skipped and the log says how many.
+
 ## In collection runs
 
 WebSocket requests run in the Runner tab, in [`zorvik run`](../../cli/run/) and in runs an AI agent starts. Zorvik connects, runs the [On connect](#on-connect) steps, and closes the connection with code `1000` when they are done.
@@ -276,6 +317,7 @@ WebSocket requests run in the Runner tab, in [`zorvik run`](../../cli/run/) and 
 - After the first failure, the remaining waits are reported as **skipped**.
 - A **Send** step that fails (a message that isn't saved, hex that isn't valid) is a failed test named `Send Login`.
 - **Keep sending** steps don't run: the connection closes when the steps end. The request's console says so.
+- [Message scripts](#message-scripts) run on the messages of the run; their tests are the request's tests too, named after the script (`On the message "welcome": greeted`), and what they log is in its console. The connection closes once they have answered (at most 5 seconds after the steps).
 - A request without wait steps passes when it connects. One that can't connect (a refused upgrade, a timeout) fails with the error.
 - The result's status is `101`, its time is the whole conversation, and its response body is the conversation as JSON, which workspace and folder post-response scripts read with `pm.response.json()`:
 
@@ -299,7 +341,7 @@ The waits are tests in the [JSON and JUnit reports](../../testing/reports/) too.
 
 ## AI agents
 
-Coding agents connected through `zorvik mcp` can open WebSocket connections too: `open_connection` connects (running the request's On connect steps), then `send_message` (text, JSON, hex, a saved message or a ping), `wait_for_message`, `read_messages` and `close_connection` (with a close code and reason). While you follow agents, the connection shows live in a tab, marked **Connected by an AI agent**. See [Tools](../../agents/tools/#live-connections).
+Coding agents connected through `zorvik mcp` can open WebSocket connections too: `open_connection` connects (running the request's scripts and On connect steps, and listing its saved messages), then `send_message` (text, JSON, hex, a saved message or a ping), `wait_for_message`, `read_messages` and `close_connection` (with a close code and reason). While you follow agents, the connection shows live in a tab, marked **Connected by an AI agent**. See [Tools](../../agents/tools/#live-connections).
 
 ## Limits and network
 
@@ -323,6 +365,10 @@ websocket:
       text: '{"op": "login", "token": "{{token}}"}'
     - name: Heartbeat
       text: ping
+  onMessage:
+    - match: json
+      pattern: $.type == trade
+      script: pm.environment.set("lastTrade", pm.message.json().id);
   onConnect:
     - type: send
       message: Login

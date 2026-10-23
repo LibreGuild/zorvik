@@ -73,6 +73,40 @@ pub enum Event {
     PreRequest,
     #[serde(rename = "test")]
     PostResponse,
+    /// A WebSocket or Socket.IO message matched a message script (`pm.message`).
+    #[serde(rename = "message")]
+    Message,
+}
+
+/// The message a message script runs on (`pm.message`).
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptMessage {
+    /// `received` or `sent`.
+    pub direction: String,
+    /// Text messages (Socket.IO: the arguments as a JSON array).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Binary messages, as base64.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base64: Option<String>,
+    /// Socket.IO: the event's name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event: Option<String>,
+    pub size: u64,
+    /// Unix epoch milliseconds.
+    pub timestamp: f64,
+}
+
+/// A message a script sent on its connection (`pm.connection.send` / `.emit`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptSend {
+    /// The text (WebSocket), or the arguments as a JSON array (Socket.IO).
+    pub text: String,
+    /// Socket.IO: the event to emit.
+    #[serde(default)]
+    pub event: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -265,6 +299,9 @@ pub struct ScriptInput {
     pub variables: Variables,
     /// The cookie jar's cookies for the request's URL (`pm.cookies`).
     pub cookies: Vec<ScriptCookie>,
+    /// Message scripts: the message (`pm.message`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<ScriptMessage>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -350,7 +387,7 @@ pub struct NextRequest {
     pub name: Option<String>,
 }
 
-/// What a script did. Tests, console output and variable changes made before an
+/// What a script did. Tests, console output, variable changes and sends made before an
 /// error are kept.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ScriptOutput {
@@ -365,6 +402,8 @@ pub struct ScriptOutput {
     pub skip_request: bool,
     /// What `pm.visualizer.set` rendered (HTML).
     pub visualization: Option<String>,
+    /// Message scripts: messages to send on the connection, in order.
+    pub sends: Vec<ScriptSend>,
     pub error: Option<ScriptError>,
 }
 
@@ -382,6 +421,8 @@ struct Report {
     skip_request: bool,
     #[serde(default)]
     visualization: Option<String>,
+    #[serde(default)]
+    sends: Vec<ScriptSend>,
 }
 
 /// Run one script. Blocking and CPU-bound (up to `limits.timeout`): call it
@@ -600,6 +641,7 @@ fn execute(
                 next_request: r.next_request,
                 skip_request: r.skip_request,
                 visualization: r.visualization,
+                sends: r.sends,
                 error,
             },
             // Out of memory, or the script broke the globals the report needs.

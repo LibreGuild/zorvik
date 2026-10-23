@@ -1,17 +1,28 @@
 // Editor tabs of gRPC requests: the JSON message (with the method's example and, while a
-// client stream is open, Send message / End stream), metadata (the request headers) and the
-// .proto files / import folders that replace server reflection.
-import { FilePlus2, FolderPlus, Info, Send, Square, Trash2, Wand2 } from "lucide-react";
+// client stream is open, Send message / End stream, or a file or the microphone streamed into a
+// field of each message), metadata (the request headers) and the .proto files / import folders
+// that replace server reflection.
+import { FilePlus2, FolderPlus, Info, Mic, Play, Send, Square, Trash2, Wand2 } from "lucide-react";
 import type { GrpcOptions } from "../../bindings/GrpcOptions";
 import { modKey, pickFile, pickFolder } from "../../lib/platform";
 import { confirm } from "../../store/dialogs";
 import { endStream, findMethod, loadServices, openCall, sendMessage, sourceKey, useGrpc, usesProtoFiles, workspaceRelative } from "../../store/grpc";
-import { send, updateDraft } from "../../store/tabs";
+import {
+  fileProblem,
+  patchComposer,
+  startFileStream,
+  startRecording,
+  stopFileStream,
+  stopRecording,
+  useComposerState,
+} from "../../store/composer";
+import { send, type Tab, updateDraft } from "../../store/tabs";
 import { toast } from "../../store/toasts";
 import { useVariableNames, useWorkspace } from "../../store/workspace";
 import { CodeEditor } from "../CodeEditor";
 import { KeyValueEditor } from "../KeyValueEditor";
-import { Button, cx, IconButton, Spinner } from "../ui";
+import { FileStreamPanel, MicPanel } from "../stream/BinarySources";
+import { Button, Checkbox, cx, IconButton, Segmented, Spinner } from "../ui";
 import { StreamBadge } from "./GrpcMethodPicker";
 import { beautifyJson } from "./jsonFormat";
 import type { KindPaneProps } from "./kinds";
@@ -100,11 +111,115 @@ export function GrpcMessageTab({ tab }: KindPaneProps) {
       <div className="min-h-0 flex-1 overflow-auto" data-testid="grpc-message-editor">
         <CodeEditor value={text} onChange={setText} language="json" variables={names} onSubmit={submit} placeholder='{"field": "value"}' />
       </div>
+      {method?.clientStreaming && <StreamSource tab={tab} composing={composing} />}
       {method?.clientStreaming && !composing && (
         <div className="shrink-0 border-t border-line/60 px-3 py-2 text-[11.5px] text-faint">
           Send opens the stream. Then each <span className="text-muted">Send message</span> ({modKey}+Enter) sends the JSON above, and{" "}
           <span className="text-muted">End stream</span> tells the server you are done.
         </div>
+      )}
+    </div>
+  );
+}
+
+type Source = "message" | "file" | "mic";
+
+/**
+ * Client and bidirectional streams: send a file (paced, e.g. audio in real time) or the
+ * microphone, each chunk as a message with its bytes in the chunk field (`{"audioContent": …}`).
+ * Send the first message (a config) from the editor above, then start.
+ */
+function StreamSource({ tab, composing }: { tab: Tab; composing: boolean }) {
+  const composer = useComposerState(tab.id);
+  const source: Source = composer.binary ? (composer.source === "hex" ? "file" : composer.source) : "message";
+  const field = tab.draft.grpc?.chunkField ?? "";
+  const streaming = composer.file.run?.status === "running";
+  const micBusy = composer.mic.run != null;
+  const busy = streaming || micBusy;
+  const missing = field.trim() ? null : "Enter the field that carries the bytes";
+  const action =
+    source === "file" ? (
+      streaming ? (
+        <Button size="sm" variant="danger" icon={<Square size={11} />} onClick={() => void stopFileStream(tab.id)}>
+          Stop
+        </Button>
+      ) : (
+        <Button
+          size="sm"
+          variant="primary"
+          icon={<Play size={13} />}
+          disabled={!composing || !!missing || fileProblem(tab, composer.file) !== null}
+          title={composing ? (missing ?? undefined) : "Send to open the stream first"}
+          onClick={() => void startFileStream(tab.id)}
+        >
+          Start streaming
+        </Button>
+      )
+    ) : micBusy ? (
+      <Button size="sm" variant="danger" icon={<Square size={11} />} disabled={composer.mic.run?.status === "stopping"} onClick={() => void stopRecording(tab.id)}>
+        Stop recording
+      </Button>
+    ) : (
+      <Button
+        size="sm"
+        variant="primary"
+        icon={<Mic size={13} />}
+        disabled={!composing || !!missing}
+        title={composing ? (missing ?? undefined) : "Send to open the stream first"}
+        onClick={() => void startRecording(tab.id)}
+      >
+        Start recording
+      </Button>
+    );
+  return (
+    <div className={cx("flex shrink-0 flex-col border-t border-line/60", source !== "message" && "max-h-[55%] overflow-auto")} data-testid="grpc-stream-source">
+      <div className="flex flex-wrap items-center gap-2 px-3 py-1.5">
+        <Segmented<Source>
+          items={[
+            { id: "message", label: "Messages" },
+            { id: "file", label: "File" },
+            { id: "mic", label: "Microphone" },
+          ]}
+          value={source}
+          onChange={(next) => !busy && patchComposer(tab.id, () => (next === "message" ? { binary: false } : { binary: true, source: next }))}
+        />
+        {source !== "message" && (
+          <>
+            <label className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted">
+              Chunk field
+              <input
+                aria-label="Chunk field"
+                value={field}
+                disabled={busy}
+                placeholder="audioContent"
+                onChange={(e) => updateDraft(tab.id, (r) => ({ ...r, grpc: { ...(r.grpc ?? {}), chunkField: e.target.value || undefined } }))}
+                className={cx(
+                  "h-7 w-40 rounded-md border bg-panel-2 px-2 font-mono text-[12px] text-fg outline-none focus:border-accent disabled:opacity-60",
+                  missing ? "border-warning/60" : "border-line",
+                )}
+              />
+            </label>
+            <div className="flex-1" />
+            {action}
+          </>
+        )}
+      </div>
+      {source === "message" ? null : (
+        <>
+          <p className="px-3 text-[11.5px] text-faint">
+            Each chunk is sent as <code className="font-mono">{`{"${field.trim() || "field"}": "<bytes as base64>"}`}</code>. Send the first message (a
+            config) from the editor above, then start.
+          </p>
+          <label className="flex items-center gap-2 px-3 pt-1.5 text-[12px] text-muted">
+            <Checkbox
+              checked={composer.endWhenDone}
+              onChange={(endWhenDone) => patchComposer(tab.id, () => ({ endWhenDone }))}
+              label="End the stream when done"
+            />
+            End the stream when the {source === "file" ? "file has been sent" : "recording stops"} (speech services then send their final results)
+          </label>
+          {source === "file" ? <FileStreamPanel tab={tab} /> : <MicPanel tab={tab} locked={micBusy} />}
+        </>
       )}
     </div>
   );

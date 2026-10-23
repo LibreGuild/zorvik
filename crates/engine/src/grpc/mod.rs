@@ -74,7 +74,7 @@ pub struct GrpcStatus {
 }
 
 impl GrpcStatus {
-    pub(crate) fn new(code: u32, message: impl Into<String>, local: bool) -> Self {
+    pub fn new(code: u32, message: impl Into<String>, local: bool) -> Self {
         Self { code, name: status_name(code), message: message.into(), details: None, local }
     }
 
@@ -148,9 +148,18 @@ pub enum GrpcEvent {
     /// A problem that does not end the call.
     #[serde(rename_all = "camelCase")]
     Error { message: String },
+    /// A note about the call (what its steps did), never from the server.
+    #[serde(rename_all = "camelCase")]
+    Info { text: String, timestamp: f64 },
     /// The call is over; always the last event.
     #[serde(rename_all = "camelCase")]
     End { status: GrpcStatus, trailers: Vec<Header>, timing: Timing },
+}
+
+impl GrpcEvent {
+    pub fn info(text: impl Into<String>) -> Self {
+        GrpcEvent::Info { text: text.into(), timestamp: now_ms() }
+    }
 }
 
 pub struct GrpcStream {

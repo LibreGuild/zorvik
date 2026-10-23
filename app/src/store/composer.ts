@@ -1,6 +1,7 @@
 // The stream composer's state per request tab, beside the draft: binary mode and where its bytes
 // come from (typed hex, a file the backend streams, or the microphone), the file stream's
-// progress ("fileStream" events) and the recording. A closed tab or connection stops both.
+// progress ("fileStream" events) and the recording. A closed tab or connection stops both. A file
+// or the microphone can also feed a gRPC client or bidirectional stream (`openConnection`).
 import { create } from "zustand";
 import type { ChunkMessage } from "../bindings/ChunkMessage";
 import type { FileStreamInfo } from "../bindings/FileStreamInfo";
@@ -15,7 +16,8 @@ import { type MicOptions, type MicSession, startMic as openMic } from "../lib/mi
 import { pickFile } from "../lib/platform";
 import { api, errorMessage } from "../lib/rpc";
 import { prompt } from "./dialogs";
-import { chunkTarget, hexToBase64, isRequestTab, sendChunk, type Tab, updateDraft, useTabs, wsSend } from "./tabs";
+import { endStream, openCall, useGrpc } from "./grpc";
+import { chunkTarget, hexToBase64, isRequestTab, sendChunk, type Tab, updateDraft, updateTab, useTabs, wsSend } from "./tabs";
 import { toast } from "./toasts";
 
 export type BinarySource = "hex" | "file" | "mic";
@@ -66,6 +68,8 @@ export interface ComposerState {
   mic: MicState;
   /** The composer's message is being sent every `everyMs` on the connection `connId`. */
   repeat: { everyMs: number; connId: string } | null;
+  /** gRPC: end the stream (half-close) when the file has been sent or the recording stops. */
+  endWhenDone: boolean;
 }
 
 const MIC_KEY = "zorvik.mic";
@@ -99,6 +103,7 @@ function initial(): ComposerState {
     file: { path: null, info: null, chunkSize: 1024, intervalMs: 100, offset: 0, length: null, repeat: false, run: null },
     mic: { options: rememberedMic(), run: null, error: null },
     repeat: null,
+    endWhenDone: true,
   };
 }
 
@@ -256,18 +261,45 @@ export async function saveComposerAsMessage(tabId: string) {
   )?.trim();
   if (!name) return;
   const saved = { ...message, name, format: message.format === "text" ? undefined : message.format };
-  updateDraft(tabId, (r) => {
+  const withMessage = (r: Request): Request => {
     const list = savedOf(r);
     const messages = list.some((m) => m.name === name) ? list.map((m) => (m.name === name ? saved : m)) : [...list, saved];
     return r.kind === "socketio" ? { ...r, socketio: { ...(r.socketio ?? {}), messages } } : { ...r, websocket: { ...(r.websocket ?? {}), messages } };
-  });
+  };
+  updateDraft(tabId, withMessage);
+  // A saved request keeps it in its file right away (where AI agents and teammates see it),
+  // leaving the draft's other changes unsaved.
+  const current = requestTab(tabId);
+  if (current?.path && current.saved && !current.orphaned) {
+    const file = withMessage(current.saved);
+    try {
+      await api.saveRequest(current.path, file);
+      updateTab(tabId, () => ({ saved: file }));
+      toast("success", `Saved “${name}” with the request`);
+    } catch (e) {
+      toast("error", `Could not save “${name}”`, errorMessage(e));
+    }
+    return;
+  }
   toast("success", `Saved “${name}”`, "Save the request to keep it.");
+}
+
+/**
+ * The tab's open connection that a file or the microphone sends on: its WebSocket or socket
+ * session, or a gRPC stream that still takes messages (a client or bidirectional one).
+ */
+export function openConnection(tab: Tab): string | null {
+  if (tab.draft.kind === "grpc") {
+    const call = openCall(tab.id);
+    return call && !call.clientEnded && call.method?.clientStreaming ? call.id : null;
+  }
+  return tab.stream.status === "open" ? tab.stream.connId : null;
 }
 
 /** Whether the tab's connection is still `connId` and open. */
 function stillOpen(tabId: string, connId: string): boolean {
   const tab = requestTab(tabId);
-  return tab?.stream.status === "open" && tab.stream.connId === connId;
+  return !!tab && openConnection(tab) === connId;
 }
 
 /** The composer's repeating send on the tab's open connection, or null (it ends with its connection). */
@@ -362,7 +394,8 @@ export function fileProblem(tab: Tab, file: FileState): string | null {
 export async function startFileStream(tabId: string) {
   const tab = requestTab(tabId);
   const file = composerOf(tabId).file;
-  if (!tab || tab.stream.status !== "open" || !file.path) return;
+  const connId = tab ? openConnection(tab) : null;
+  if (!tab || !connId || !file.path) return;
   const problem = fileProblem(tab, file);
   if (problem) {
     toast("info", problem);
@@ -370,7 +403,7 @@ export async function startFileStream(tabId: string) {
   }
   const target = await chunkTarget(tab);
   // The connection changed, or another start won, while the target was worked out.
-  if (!stillOpen(tabId, tab.stream.connId) || composerOf(tabId).file.run?.status === "running") return;
+  if (!stillOpen(tabId, connId) || composerOf(tabId).file.run?.status === "running") return;
   if (typeof target === "string") {
     toast("info", target);
     return;
@@ -380,7 +413,7 @@ export async function startFileStream(tabId: string) {
   patchFile(tabId, { run: { status: "running", progress, startedAt: Date.now(), endedAt: null, error: null } });
   try {
     const { total } = await api.fileStreamStart({
-      connId: tab.stream.connId,
+      connId,
       path: file.path,
       // Whole numbers for the backend (fields and presets give them; saved state may not).
       chunkSize: Math.max(1, Math.floor(file.chunkSize)),
@@ -400,7 +433,8 @@ export async function startFileStream(tabId: string) {
 
 export async function stopFileStream(tabId: string) {
   const tab = requestTab(tabId);
-  if (tab) await api.fileStreamStop(tab.stream.connId).catch(() => {});
+  const connId = tab && (openConnection(tab) ?? (tab.draft.kind === "grpc" ? useGrpc.getState().calls[tab.id]?.id : tab.stream.connId));
+  if (connId) await api.fileStreamStop(connId).catch(() => {});
 }
 
 /** How the backend says a repeating send stopped by itself (a send failed); the composer's message has no name. */
@@ -414,7 +448,8 @@ onEvent((e) => {
     return;
   }
   if (e.type !== "fileStream") return;
-  const tab = useTabs.getState().tabs.find((t) => isRequestTab(t) && t.stream.connId === e.connId);
+  const calls = useGrpc.getState().calls;
+  const tab = useTabs.getState().tabs.find((t) => isRequestTab(t) && (t.stream.connId === e.connId || calls[t.id]?.id === e.connId));
   const run = tab ? composerOf(tab.id).file.run : null;
   if (!tab || !run) return;
   if (e.event.type === "progress") {
@@ -424,6 +459,8 @@ onEvent((e) => {
     const { progress, stopped, error } = e.event;
     const status = error ? "error" : stopped ? "stopped" : "done";
     patchFile(tab.id, { run: { ...run, progress, status, endedAt: Date.now(), error } });
+    // A gRPC stream ends once the whole file is sent: a speech service then gives its final results.
+    if (status === "done" && isRequestTab(tab) && tab.draft.kind === "grpc" && composerOf(tab.id).endWhenDone) void endStream(tab.id);
   }
 });
 
@@ -443,9 +480,9 @@ const recordings = new Map<string, Recording>();
 
 export async function startRecording(tabId: string) {
   const tab = requestTab(tabId);
-  if (!tab || tab.stream.status !== "open" || recordings.has(tabId)) return;
+  const connId = tab ? openConnection(tab) : null;
+  if (!tab || !connId || recordings.has(tabId)) return;
   const options = composerOf(tabId).mic.options;
-  const { connId } = tab.stream;
   const request = tab.draft;
   // Taken before the first await, so a second click can't start another recording.
   const rec: Recording = { session: null, connId, stopping: false, dropped: false, queue: Promise.resolve() };
@@ -513,6 +550,8 @@ export async function stopRecording(tabId: string, error: string | null = null) 
   await rec.session?.stop().catch(() => {});
   await rec.queue;
   recordings.delete(tabId);
+  const tab = requestTab(tabId);
+  if (!error && tab?.draft.kind === "grpc" && composerOf(tabId).endWhenDone && openConnection(tab) === rec.connId) await endStream(tabId);
   if (requestTab(tabId)) patchComposer(tabId, (s) => ({ mic: { ...s.mic, run: null } }));
 }
 
@@ -520,13 +559,22 @@ export function isRecording(tabId: string): boolean {
   return recordings.has(tabId);
 }
 
+/** Recordings whose connection closed (or whose gRPC stream stopped taking messages) stop. */
+function stopOrphanRecordings() {
+  for (const [tabId, rec] of recordings) {
+    const tab = useTabs.getState().tabs.find((t) => t.id === tabId);
+    if (!isRequestTab(tab) || openConnection(tab) !== rec.connId) void stopRecording(tabId);
+  }
+}
+
+useGrpc.subscribe((state, prev) => {
+  if (state.calls !== prev.calls) stopOrphanRecordings();
+});
+
 // A recording ends with its connection; a closed tab drops its composer state.
 useTabs.subscribe((state, prev) => {
   if (state.tabs === prev.tabs) return;
-  for (const [tabId, rec] of recordings) {
-    const tab = state.tabs.find((t) => t.id === tabId);
-    if (!isRequestTab(tab) || tab.stream.status !== "open" || tab.stream.connId !== rec.connId) void stopRecording(tabId);
-  }
+  stopOrphanRecordings();
   const byTab = useComposer.getState().byTab;
   // A repeating send ends with its connection (the backend stops it).
   for (const [tabId, c] of Object.entries(byTab)) {

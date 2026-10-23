@@ -3,4 +3,4 @@
 /**
  * How each chunk is sent on a socket session (a WebSocket always sends binary messages).
  */
-export type ChunkMessage = { "type": "binary" } | { "type": "publish", topic: string, qos: number, retain: boolean, } | { "type": "emit", event: string, ack: boolean, };
+export type ChunkMessage = { "type": "binary" } | { "type": "publish", topic: string, qos: number, retain: boolean, } | { "type": "emit", event: string, ack: boolean, } | { "type": "grpc", field: string, };

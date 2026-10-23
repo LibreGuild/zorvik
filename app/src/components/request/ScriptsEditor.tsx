@@ -5,15 +5,17 @@ import type { CompletionContext } from "@codemirror/autocomplete";
 import { javascriptLanguage } from "@codemirror/lang-javascript";
 import { syntaxTree } from "@codemirror/language";
 import { ChevronDown } from "lucide-react";
+import type { MessageScript } from "../../bindings/MessageScript";
 import type { Scripts } from "../../bindings/Scripts";
 import { CodeEditor } from "../CodeEditor";
 import { Button, Menu, Segmented } from "../ui";
+import { MessageScriptsEditor } from "./MessageScriptsEditor";
 import { completeMembers, hasScripts, type ScriptEvent, SNIPPETS } from "./scriptsModel";
 
 const NO_COMPLETION = new Set(["String", "TemplateString", "LineComment", "BlockComment", "RegExp"]);
 
 /** `pm.…`, `console.…` and `pm.expect(…).…` members; stable, so the editor doesn't reconfigure. */
-const pmCompletion = javascriptLanguage.data.of({
+export const pmCompletion = javascriptLanguage.data.of({
   autocomplete: (ctx: CompletionContext) => {
     if (NO_COMPLETION.has(syntaxTree(ctx.state).resolveInner(ctx.pos, -1).name)) return null;
     const line = ctx.state.doc.lineAt(ctx.pos);
@@ -27,11 +29,11 @@ const pmCompletion = javascriptLanguage.data.of({
 type Where = "request" | "folder" | "workspace";
 
 /** Tab label: "Scripts", with a dot when there are any. */
-export function ScriptsTabLabel({ scripts }: { scripts: Scripts | undefined }) {
+export function ScriptsTabLabel({ scripts, more }: { scripts: Scripts | undefined; more?: boolean }) {
   return (
     <>
       Scripts
-      {hasScripts(scripts) && <span className="h-1.5 w-1.5 rounded-full bg-accent" data-testid="scripts-dot" />}
+      {(hasScripts(scripts) || more) && <span className="h-1.5 w-1.5 rounded-full bg-accent" data-testid="scripts-dot" />}
     </>
   );
 }
@@ -49,11 +51,50 @@ const HINTS: Record<ScriptEvent, Record<Where, string>> = {
   },
 };
 
+/** Hints of a live connection's scripts (WebSocket, Socket.IO). */
+const LIVE_HINTS: Record<ScriptEvent | "onMessage", string> = {
+  preRequest: "Runs before connecting, after workspace and folder scripts. Can change the URL and headers and set variables.",
+  onMessage: "Runs on each message that matches, while connected and in collection runs.",
+  postResponse: "Runs in collection runs after the connection closes: pm.response.json() is the transcript of messages.",
+};
+
+/** gRPC requests: their scripts run in collection runs, not on Send. */
+const RUN_HINTS: Record<ScriptEvent, string> = {
+  preRequest: "Runs before the call in collection runs and zorvik run (not on Send). Can set variables and change the message.",
+  postResponse: "Runs on the answer in collection runs and zorvik run (not on Send): pm.response.json() is the message, or a stream's messages.",
+};
+
+/** A WebSocket or Socket.IO request: its message scripts too. */
+export interface LiveScripts {
+  socketio: boolean;
+  onMessage: MessageScript[];
+  onChange: (scripts: MessageScript[] | undefined) => void;
+}
+
 const Dot = ({ on }: { on: boolean }) => (on ? <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-accent align-middle" /> : null);
 
-export function ScriptsEditor({ scripts, onChange, where }: { scripts: Scripts; onChange: (s: Scripts) => void; where: Where }) {
-  const [event, setEvent] = useState<ScriptEvent>(!scripts.preRequest?.trim() && scripts.postResponse?.trim() ? "postResponse" : "preRequest");
+export function ScriptsEditor({
+  scripts,
+  onChange,
+  where,
+  live,
+  runsOnly,
+}: {
+  scripts: Scripts;
+  onChange: (s: Scripts) => void;
+  where: Where;
+  live?: LiveScripts;
+  /** The scripts run only in collection runs (gRPC). */
+  runsOnly?: boolean;
+}) {
+  const [shown, setEvent] = useState<ScriptEvent | "onMessage">(() => {
+    if (live?.onMessage.length && !scripts.preRequest?.trim()) return "onMessage";
+    return !scripts.preRequest?.trim() && scripts.postResponse?.trim() ? "postResponse" : "preRequest";
+  });
+  const messages = live && shown === "onMessage";
+  const event: ScriptEvent = shown === "onMessage" ? "preRequest" : shown;
   const code = scripts[event] ?? "";
+  const hint = live ? LIVE_HINTS[shown] : runsOnly ? RUN_HINTS[event] : HINTS[event][where];
   const set = (text: string) => {
     const next: Scripts = { ...scripts, [event]: text };
     // Empty scripts are left out of the file.
@@ -64,17 +105,26 @@ export function ScriptsEditor({ scripts, onChange, where }: { scripts: Scripts; 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="scripts-editor">
       <div className="flex h-9 shrink-0 items-center gap-2 px-3">
-        <Segmented
-          items={[
-            { id: "preRequest", label: <>Pre-request<Dot on={!!scripts.preRequest?.trim()} /></> },
-            { id: "postResponse", label: <>Post-response<Dot on={!!scripts.postResponse?.trim()} /></> },
-          ]}
-          value={event}
+        <Segmented<ScriptEvent | "onMessage">
+          items={
+            live
+              ? [
+                  { id: "preRequest", label: <>Before connecting<Dot on={!!scripts.preRequest?.trim()} /></> },
+                  { id: "onMessage", label: <>On message<Dot on={live.onMessage.length > 0} /></> },
+                  { id: "postResponse", label: <>In runs<Dot on={!!scripts.postResponse?.trim()} /></> },
+                ]
+              : [
+                  { id: "preRequest", label: <>Pre-request<Dot on={!!scripts.preRequest?.trim()} /></> },
+                  { id: "postResponse", label: <>Post-response<Dot on={!!scripts.postResponse?.trim()} /></> },
+                ]
+          }
+          value={shown}
           onChange={setEvent}
         />
-        <span className="min-w-0 flex-1 truncate text-[11.5px] text-faint" title={HINTS[event][where]}>
-          {HINTS[event][where]}
+        <span className="min-w-0 flex-1 truncate text-[11.5px] text-faint" title={hint}>
+          {hint}
         </span>
+        {!messages && (
         <Menu
           align="end"
           trigger={
@@ -87,7 +137,13 @@ export function ScriptsEditor({ scripts, onChange, where }: { scripts: Scripts; 
             onSelect: () => set(code.trim() ? `${code.replace(/\s*$/, "")}\n\n${s.code}\n` : `${s.code}\n`),
           }))}
         />
+        )}
       </div>
+      {messages ? (
+        <div className="min-h-0 flex-1 border-t border-line/60">
+          <MessageScriptsEditor scripts={live.onMessage} onChange={live.onChange} socketio={live.socketio} />
+        </div>
+      ) : (
       <div className="min-h-0 flex-1">
         {/* Keyed: each script keeps its own undo history. */}
         <CodeEditor
@@ -103,6 +159,7 @@ export function ScriptsEditor({ scripts, onChange, where }: { scripts: Scripts; 
           }
         />
       </div>
+      )}
     </div>
   );
 }

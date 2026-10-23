@@ -33,7 +33,7 @@ Read-only facts about the current script.
 
 | Property | Type | Description |
 |---|---|---|
-| `pm.info.eventName` | `"prerequest"` or `"test"` | Which script is running: `"prerequest"` in pre-request scripts, `"test"` in post-response scripts (Postman's names) |
+| `pm.info.eventName` | `"prerequest"`, `"test"` or `"message"` | Which script is running: `"prerequest"` in pre-request scripts, `"test"` in post-response scripts (Postman's names), `"message"` in [message scripts](#pmmessage-and-pmconnection) |
 | `pm.info.requestName` | string | The request's name |
 | `pm.info.requestId` | string | The request's file path under `requests/`, for example `Users/Get user.yaml`. Empty for a request that isn't saved. |
 | `pm.info.iteration` | number | The current iteration of a collection run, starting at `0`. Always `0` for a single send. |
@@ -440,6 +440,23 @@ The cookies the [cookie jar](../../requests/cookies/) sends to this request's UR
 | `unset(url, name, (err) => …)`, `clear(url, (err) => …)` | Remove one, or all, for that URL |
 
 Without a callback each returns a promise. With the cookie jar switched off (Settings → Requests), the jar methods fail with *The cookie jar is off*.
+
+## pm.message and pm.connection
+
+Only in message scripts of WebSocket and Socket.IO requests (see [WebSocket](../../protocols/websocket/#message-scripts) and [Socket.IO](../../protocols/socketio/#scripts)).
+
+| Name | Description |
+|---|---|
+| `pm.message.text()` | The message as text (a binary message: its bytes as text) |
+| `pm.message.json()` | The message parsed as JSON; Socket.IO: the arguments array |
+| `pm.message.args` | Socket.IO: the event's arguments |
+| `pm.message.event` | Socket.IO: the event's name |
+| `pm.message.direction` | `"received"` or `"sent"` |
+| `pm.message.size`, `pm.message.timestamp`, `pm.message.isBinary` | Bytes, Unix milliseconds, and whether it is binary |
+| `pm.connection.send(data)` | Sends a message: text as is, anything else as JSON. Socket.IO: emits `message` with `data`. |
+| `pm.connection.emit(event, ...args)` | Socket.IO: emits `event` with these arguments |
+
+A script sends at most 100 messages per run; they go out after it ends, in order, even when it fails later.
 
 ## pm.visualizer
 

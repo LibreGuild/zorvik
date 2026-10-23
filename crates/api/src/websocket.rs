@@ -18,7 +18,11 @@ use zorvik_workspace::formats::{MessageFormat, Request, SavedMessage, WebSocketO
 use crate::agents::redact::Redactor;
 use crate::file_stream::Settled;
 use crate::live::{self, Connected, MIN_REPEAT, MessageLog, StepResult, Steps, every_text, run_steps};
+use crate::message_scripts::{self, MessageScripts, Scripted};
 use crate::{Api, ApiError, ApiResult, StreamEvent, StreamOpened, lock, ok, params, remove_if_current};
+
+/// How long a collection run waits for message scripts to finish before it closes the connection.
+pub(crate) const SCRIPTS_FINISH: Duration = Duration::from_secs(5);
 
 /// A WebSocket by caller id. Registered before connecting (`session` is `None`
 /// until then) so `ws.close` can abort a pending connect; the generation keeps
@@ -183,9 +187,17 @@ impl Api {
             old.alive.cancel();
             crate::file_stream::stop_file_stream(&self.inner, conn_id);
         }
+        let (note_api, note_id) = (self.clone(), conn_id.to_string());
+        let note = move |text: String, error: bool| {
+            let event = if error { WsEvent::Error { message: text } } else { WsEvent::info(text) };
+            note_api.inner.sink.emit(StreamEvent::Ws { conn_id: note_id.clone(), event });
+        };
+        let mut request = request.clone();
         let connected = tokio::select! {
             r = async {
-                let mut resolved = self.prepare(&ws, request, path)?;
+                // Pre-request scripts first: they may change the request and set variables.
+                let (vars, scripts) = self.live_scripts(&ws, &mut request, path, &note).await?;
+                let mut resolved = self.prepare_with(&ws, &request, path, &vars.var_context())?;
                 let opts = crate::request_options(&settings, &request.settings)?;
                 self.authorize(&ws, &mut resolved, &opts).await?;
                 // An agent's connection: credentials of the handshake stay out of what it reads.
@@ -195,11 +207,11 @@ impl Api {
                 if let Some(jar) = &jar {
                     self.save_jar(&ws, jar);
                 }
-                Ok::<_, ApiError>((conn, resolved.unresolved))
+                Ok::<_, ApiError>((conn, resolved.unresolved, scripts))
             } => r,
             _ = cancel.cancelled() => Err(EngineError::cancelled().into()),
         };
-        let (conn, unresolved) = match connected {
+        let (conn, unresolved, scripts) = match connected {
             Ok(c) => c,
             Err(e) => {
                 remove_if_current(&self.inner.ws_sessions, conn_id, |entry| entry.generation == generation);
@@ -212,11 +224,21 @@ impl Api {
             // Closed or replaced while connecting: dropping the session closes the socket.
             _ => return Err(EngineError::cancelled().into()),
         }
+        let feed = scripts.map(|scripts| {
+            let (api, id) = (self.clone(), conn_id.to_string());
+            let send = Box::new(move |s: &zorvik_script::ScriptSend| {
+                api.ws_send(&id, Some(generation), WsOutgoing::Text { text: s.text.clone() }).map_err(|e| e.message)
+            });
+            self.start_message_scripts(&ws, scripts, send, Box::new(note), alive.clone())
+        });
         let inner = self.inner.clone();
         let id = conn_id.to_string();
         let (forward_log, forward_alive) = (log.clone(), alive.clone());
         tokio::spawn(async move {
             while let Some(event) = events.recv().await {
+                if let Some(feed) = &feed {
+                    feed.ws(&event);
+                }
                 let closed = matches!(event, WsEvent::Closed { .. });
                 settled.ws(&event);
                 forward_log.record_ws(&event);
@@ -353,16 +375,36 @@ pub(crate) async fn run_once(
     opts: &zorvik_engine::RequestOptions,
     jar: Option<&zorvik_engine::CookieJar>,
     render: &(dyn Fn(&str) -> String + Send + Sync),
-) -> ApiResult<(HttpResponse, Vec<StepResult>, Vec<String>)> {
+    scripts: Option<&Arc<MessageScripts>>,
+) -> ApiResult<(HttpResponse, Vec<StepResult>, Vec<String>, Scripted)> {
     let started = std::time::Instant::now();
     let conn = client.websocket(request, opts, jar).await?;
     let zorvik_engine::WsConnected { meta, mut timing, session, mut events } = conn;
+    let session = Arc::new(session);
     let log = Arc::new(MessageLog::default());
+    let stop = CancellationToken::new();
+    let (feed, worker) = match scripts {
+        Some(scripts) => {
+            let out = session.clone();
+            let sinks = message_scripts::Sinks {
+                send: Box::new(move |s| out.send(WsOutgoing::Text { text: s.text.clone() }).map_err(|e| e.message)),
+                note: Box::new(|_, _| {}),
+                keep: None,
+            };
+            let (feed, worker) = message_scripts::spawn(scripts.clone(), sinks, stop.clone());
+            (Some(feed), Some(worker))
+        }
+        None => (None, None),
+    };
     let pump = {
         let log = log.clone();
+        let feed = feed.clone();
         tokio::spawn(async move {
             while let Some(event) = events.recv().await {
                 log.record_ws(&event);
+                if let Some(feed) = &feed {
+                    feed.ws(&event);
+                }
                 if matches!(event, WsEvent::Closed { .. }) {
                     break;
                 }
@@ -372,9 +414,13 @@ pub(crate) async fn run_once(
     };
     let send = |m: &SavedMessage| session.send(outgoing(m, render)?).map_err(|e| e.message);
     let (results, notes) = live::run_steps_once(&options.on_connect, &options.messages, &log, &send).await;
+    if let Some(feed) = &feed {
+        feed.settled(SCRIPTS_FINISH).await;
+    }
     // Close politely and give the server a moment to answer.
     let _ = session.send(WsOutgoing::Close { code: Some(1000), reason: None });
     let _ = tokio::time::timeout(Duration::from_secs(2), pump).await;
+    let scripted = message_scripts::finish(feed, worker, &stop, SCRIPTS_FINISH).await;
     drop(session);
     let body = live::transcript(&log);
     timing.total_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -386,5 +432,5 @@ pub(crate) async fn run_once(
         body_truncated: false,
         decode_warning: None,
     };
-    Ok((response, results, notes))
+    Ok((response, results, notes, scripted))
 }

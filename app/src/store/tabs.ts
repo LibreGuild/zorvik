@@ -830,7 +830,8 @@ export async function wsSend(id: string, text: string, binary: boolean) {
 
 /**
  * How binary messages go out on the tab's connection: a binary message, an MQTT publish to the
- * topic or a Socket.IO emit of the event (variables filled in). A string says what is missing.
+ * topic, a Socket.IO emit of the event (variables filled in), or a gRPC message with the bytes in
+ * its chunk field. A string says what is missing.
  */
 export async function chunkTarget(tab: Tab): Promise<ChunkMessage | string> {
   if (tab.draft.kind === "socketio") {
@@ -843,12 +844,25 @@ export async function chunkTarget(tab: Tab): Promise<ChunkMessage | string> {
     const topic = mqtt?.topic?.includes("{{") ? await api.renderVariables(mqtt.topic) : (mqtt?.topic ?? "");
     return topic.trim() ? { type: "publish", topic, qos: mqtt?.qos ?? 0, retain: mqtt?.retain ?? false } : "Enter a topic to publish to";
   }
+  if (tab.draft.kind === "grpc") {
+    const field = tab.draft.grpc?.chunkField?.trim() ?? "";
+    // As the backend checks it (file streams): every part of a dotted path named.
+    if (!field || field.split(".").some((part) => !part.trim())) return "Enter the message field that carries the bytes (Chunk field), e.g. audioContent";
+    return { type: "grpc", field };
+  }
   return { type: "binary" };
+}
+
+/** A gRPC message with `base64` in `field` (dots nest objects), as the backend builds it. */
+export function grpcChunk(field: string, base64: string): string {
+  const parts = field.split(".").map((p) => p.trim());
+  return JSON.stringify(parts.reduceRight<unknown>((inner, name) => ({ [name]: inner }), base64));
 }
 
 /** Send one binary message (base64) on a connection, as `target` says. */
 export async function sendChunk(connId: string, request: Request, target: ChunkMessage, base64: string) {
-  if (!SOCKET_KINDS.includes(request.kind ?? "http")) await api.wsSend(connId, { type: "binary", base64 });
+  if (target.type === "grpc") await api.grpcSend(connId, grpcChunk(target.field, base64));
+  else if (!SOCKET_KINDS.includes(request.kind ?? "http")) await api.wsSend(connId, { type: "binary", base64 });
   else if (target.type === "emit") await api.socketSend(connId, { type: "emit", event: target.event, args: "", base64, ack: target.ack });
   else if (target.type === "publish") await api.socketSend(connId, { type: "publish", topic: target.topic, text: null, base64, qos: target.qos, retain: target.retain });
   else await api.socketSend(connId, { type: "binary", base64 });
@@ -1017,6 +1031,10 @@ function handleEvent(e: StreamEvent) {
       }
       return;
     }
+    case "variablesChanged":
+      // Scripts of a live connection set variables.
+      void refreshVariables();
+      return;
     case "openUrl":
       // Dev bridge only (Tauri opens it natively). The URL comes from workspace config: never run javascript: here.
       if (/^https?:\/\//i.test(e.url)) window.open(e.url, "_blank", "noopener");

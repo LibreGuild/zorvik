@@ -172,6 +172,15 @@ function CallView({ tab, call, running }: { tab: Tab; call: GrpcCall; running: b
         </Banner>
       ))}
       {call.errors.length > 3 && <div className="mx-3 mt-1 text-[11.5px] text-faint">and {call.errors.length - 3} earlier problems</div>}
+      {call.notes.length > 0 && (
+        <ul className="mx-3 mt-1 flex flex-col gap-0.5 text-[11.5px] text-muted" data-testid="grpc-notes" aria-label="What the steps did">
+          {call.notes.slice(-4).map((n, i) => (
+            <li key={i} className="truncate" title={n}>
+              {n}
+            </li>
+          ))}
+        </ul>
+      )}
       <Tabs items={items} value={view} onChange={(responseTab) => updateTab(tab.id, () => ({ responseTab }))} />
       <div className="min-h-0 flex-1 overflow-auto">
         {view === "body" && <MessagesView call={call} running={running} />}

@@ -50,4 +50,8 @@ skipReason?: string,
 /**
  * Sends made for "repeat until" (the result is the last one's).
  */
-attempts?: number, };
+attempts?: number, 
+/**
+ * The result's number in its run (1, 2, …): `runner.details` gives what it sent and got.
+ */
+seq: number, };

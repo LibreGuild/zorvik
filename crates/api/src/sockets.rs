@@ -18,6 +18,7 @@ use zorvik_workspace::resolve::Resolved;
 
 use crate::agents::redact::Redactor;
 use crate::live::{self, Connected, MIN_REPEAT, MessageLog, StepResult, Steps, every_text, run_steps};
+use crate::message_scripts::{self, MessageScripts, Scripted};
 use crate::{Api, ApiError, ApiResult, StreamEvent, lock, ok, params, remove_if_current};
 
 /// A socket session by caller id. Registered before connecting (`session` is
@@ -197,24 +198,32 @@ impl Api {
             old.alive.cancel();
             crate::file_stream::stop_file_stream(&self.inner, conn_id);
         }
+        let (note_api, note_id) = (self.clone(), conn_id.to_string());
+        let note = move |text: String, error: bool| {
+            let event = if error { SocketEvent::Error { message: text } } else { SocketEvent::info(text) };
+            note_api.inner.sink.emit(StreamEvent::Socket { conn_id: note_id.clone(), event });
+        };
+        let mut request = request.clone();
         let connected = tokio::select! {
             r = async {
-                let mut resolved = self.prepare(&ws, request, path)?;
+                // Pre-request scripts first: they may change the request and set variables.
+                let (vars, scripts) = self.live_scripts(&ws, &mut request, path, &note).await?;
+                let mut resolved = self.prepare_with(&ws, &request, path, &vars.var_context())?;
                 let opts = crate::request_options(&settings, &request.settings)?;
                 self.authorize(&ws, &mut resolved, &opts).await?;
                 // An agent's connection: credentials of the handshake stay out of what it reads.
                 log.redact_also(&Redactor::default().with_headers(&resolved.request.headers));
                 let jar = settings.cookie_jar.then(|| self.jar(&ws));
                 let unresolved = resolved.unresolved.clone();
-                let conn = self.connect_socket(request, resolved, &opts, jar.as_ref()).await?;
+                let conn = self.connect_socket(&request, resolved, &opts, jar.as_ref()).await?;
                 if let Some(jar) = &jar {
                     self.save_jar(&ws, jar);
                 }
-                Ok::<_, ApiError>((conn, unresolved))
+                Ok::<_, ApiError>((conn, unresolved, scripts))
             } => r,
             _ = cancel.cancelled() => Err(EngineError::cancelled().into()),
         };
-        let (conn, unresolved) = match connected {
+        let (conn, unresolved, scripts) = match connected {
             Ok(c) => c,
             Err(e) => {
                 remove_if_current(&self.inner.socket_sessions, conn_id, |e| e.generation == generation);
@@ -227,11 +236,21 @@ impl Api {
             // Closed or replaced while connecting: dropping the session closes it.
             _ => return Err(EngineError::cancelled().into()),
         }
+        let feed = scripts.map(|scripts| {
+            let (api, id) = (self.clone(), conn_id.to_string());
+            let send = Box::new(move |s: &zorvik_script::ScriptSend| {
+                api.socket_send(&id, Some(generation), script_emit(s)).map_err(|e| e.message)
+            });
+            self.start_message_scripts(&ws, scripts, send, Box::new(note), alive.clone())
+        });
         let inner = self.inner.clone();
         let id = conn_id.to_string();
         let (forward_log, forward_alive) = (log.clone(), alive.clone());
         tokio::spawn(async move {
             while let Some(event) = events.recv().await {
+                if let Some(feed) = &feed {
+                    feed.socket(&event);
+                }
                 let closed = matches!(event, SocketEvent::Closed { .. });
                 settled.socket(&event);
                 forward_log.record_socket(&event);
@@ -395,7 +414,8 @@ pub(crate) async fn run_once_socketio(
     opts: &zorvik_engine::RequestOptions,
     jar: Option<&Arc<zorvik_engine::CookieJar>>,
     render: &(dyn Fn(&str) -> String + Send + Sync),
-) -> ApiResult<(HttpResponse, Vec<StepResult>, Vec<String>)> {
+    scripts: Option<&Arc<MessageScripts>>,
+) -> ApiResult<(HttpResponse, Vec<StepResult>, Vec<String>, Scripted)> {
     use zorvik_engine::socketio::{SocketIoConfig, SocketIoTransport as Transport};
     use zorvik_workspace::formats::SocketIoTransport;
     let started = std::time::Instant::now();
@@ -411,12 +431,31 @@ pub(crate) async fn run_once_socketio(
     };
     let conn = client.socketio(resolved.request.clone(), config, opts, jar.cloned()).await?;
     let SocketConnected { opened, meta, session, mut events } = conn;
+    let session = Arc::new(session);
     let log = Arc::new(MessageLog::default());
+    let stop = CancellationToken::new();
+    let (feed, worker) = match scripts {
+        Some(scripts) => {
+            let out = session.clone();
+            let sinks = message_scripts::Sinks {
+                send: Box::new(move |s| out.send(script_emit(s)).map_err(|e| e.message)),
+                note: Box::new(|_, _| {}),
+                keep: None,
+            };
+            let (feed, worker) = message_scripts::spawn(scripts.clone(), sinks, stop.clone());
+            (Some(feed), Some(worker))
+        }
+        None => (None, None),
+    };
     let pump = {
         let log = log.clone();
+        let feed = feed.clone();
         tokio::spawn(async move {
             while let Some(event) = events.recv().await {
                 log.record_socket(&event);
+                if let Some(feed) = &feed {
+                    feed.socket(&event);
+                }
                 if matches!(event, SocketEvent::Closed { .. }) {
                     break;
                 }
@@ -427,7 +466,12 @@ pub(crate) async fn run_once_socketio(
     let send =
         |m: &SavedMessage| session.send(socket_outgoing(RequestKind::SocketIo, m, render)?).map_err(|e| e.message);
     let (results, notes) = live::run_steps_once(&options.on_connect, &options.messages, &log, &send).await;
-    // Dropping the session says goodbye; give the transcript a moment to take the last events.
+    if let Some(feed) = &feed {
+        feed.settled(crate::websocket::SCRIPTS_FINISH).await;
+    }
+    // The scripts are done (they hold the session too); dropping the session says goodbye. Give
+    // the transcript a moment to take the last events.
+    let scripted = message_scripts::finish(feed, worker, &stop, crate::websocket::SCRIPTS_FINISH).await;
     drop(session);
     let _ = tokio::time::timeout(Duration::from_secs(2), pump).await;
     let body = live::transcript(&log);
@@ -443,7 +487,17 @@ pub(crate) async fn run_once_socketio(
         body_truncated: false,
         decode_warning: None,
     };
-    Ok((response, results, notes))
+    Ok((response, results, notes, scripted))
+}
+
+/// A message script's emit (an event and its arguments as a JSON array).
+pub(crate) fn script_emit(s: &zorvik_script::ScriptSend) -> SocketOutgoing {
+    SocketOutgoing::Emit {
+        event: s.event.clone().unwrap_or_else(|| "message".into()),
+        args: s.text.clone(),
+        base64: None,
+        ack: false,
+    }
 }
 
 /// Start a GraphQL subscription: `request` is the resolved HTTP request (its body the operation).

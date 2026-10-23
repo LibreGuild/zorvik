@@ -9,10 +9,24 @@ import { copyText, pickSavePath } from "../../lib/platform";
 import { api, errorMessage } from "../../lib/rpc";
 import type { StreamMessage } from "../../store/tabs";
 import { toast } from "../../store/toasts";
-import { beautifyJson } from "../request/jsonFormat";
+import { prettyMessage } from "../request/jsonFormat";
 import { cx, EmptyState } from "../ui";
 
 export type TimeMode = "clock" | "delta" | "elapsed";
+
+/** Notes longer than this (or on several lines) open like messages; errors always do. */
+const LONG_NOTE = 80;
+
+const RAW_KEY = "zorvik.log.raw";
+
+/** Whether expanded messages show their text as it came (else JSON pretty), remembered. */
+let showRaw = (() => {
+  try {
+    return localStorage.getItem(RAW_KEY) === "1";
+  } catch {
+    return false;
+  }
+})();
 
 const EMPTY_HINT: Record<string, string> = {
   websocket: "Connect, then send messages below. Incoming messages appear here.",
@@ -189,10 +203,20 @@ const MessageRow = memo(function MessageRow({
   onEdit?: (m: StreamMessage) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [raw, setRaw] = useState(showRaw);
   const line = preview(m);
   const content = useMemo(() => (open ? (m.text ?? (m.base64 ? decodeBase64(m.base64) : "")) : ""), [open, m.text, m.base64]);
-  // Token-based, so large integer ids aren't rounded the way JSON.parse would.
-  const pretty = useMemo(() => (open && m.text ? beautifyJson(m.text) : null), [open, m.text]);
+  // JSON re-indented, with JSON held in strings (Socket.IO arguments) expanded.
+  const pretty = useMemo(() => (open && m.text ? prettyMessage(m.text) : null), [open, m.text]);
+  const toggleRaw = (next: boolean) => {
+    setRaw(next);
+    showRaw = next;
+    try {
+      localStorage.setItem(RAW_KEY, next ? "1" : "0");
+    } catch {
+      // Not remembered.
+    }
+  };
   const icon =
     m.direction === "sent" ? (
       <ArrowUpRight size={13} className="text-success" />
@@ -204,6 +228,8 @@ const MessageRow = memo(function MessageRow({
       <Info size={13} className="text-faint" />
     );
   const meta = m.direction === "info" || m.direction === "error";
+  // An error (a connection error with its cause) or a long note opens to show all of it.
+  const expandable = !meta || m.direction === "error" || (m.text?.length ?? 0) > LONG_NOTE || (m.text ?? "").includes("\n");
   const chip = ackChip(m.detail);
   return (
     <div
@@ -211,13 +237,14 @@ const MessageRow = memo(function MessageRow({
       className={cx("border-b border-line/60 transition-colors last:border-b-0", m.direction === "error" && "bg-danger/5", flash && "bg-accent-soft")}
       style={{ contentVisibility: "auto", containIntrinsicSize: "auto 30px" }}
     >
-      <div className={cx("flex w-full items-center gap-2 px-3 py-1.5", !meta && "hover:bg-hover/40")}>
+      <div className={cx("flex w-full items-center gap-2 px-3 py-1.5", expandable && "hover:bg-hover/40")}>
         <button
-          onClick={() => !meta && setOpen(!open)}
-          aria-expanded={meta ? undefined : open}
+          onClick={() => expandable && setOpen(!open)}
+          aria-expanded={expandable ? open : undefined}
+          title={meta && expandable && !open ? "Show all of it" : undefined}
           className="flex min-w-0 flex-1 items-center gap-2 text-left"
         >
-          {!meta ? <ChevronRight size={11} className={cx("shrink-0 text-faint transition-transform", open && "rotate-90")} /> : <span className="w-[11px]" />}
+          {expandable ? <ChevronRight size={11} className={cx("shrink-0 text-faint transition-transform", open && "rotate-90")} /> : <span className="w-[11px]" />}
           {icon}
           <span className="shrink-0 text-[11px] tabular-nums text-faint">{time}</span>
           {sse && m.direction === "received" && (
@@ -252,8 +279,24 @@ const MessageRow = memo(function MessageRow({
         <div className="group relative bg-panel-2/60 px-8 py-2">
           {m.eventId && <div className="mb-1 font-sans text-[11px] text-faint">id: {m.eventId}</div>}
           {m.detail && <div className="mb-1 font-sans text-[11px] text-faint">{m.detail}</div>}
-          <pre className="selectable max-h-80 overflow-auto whitespace-pre-wrap break-all text-fg">{pretty ?? content}</pre>
-          <div className="absolute right-2 top-2 flex gap-0.5 opacity-0 group-hover:opacity-100">
+          <pre className={cx("selectable max-h-80 overflow-auto whitespace-pre-wrap break-all", m.direction === "error" ? "font-sans text-danger" : "text-fg")} data-testid="message-content">
+            {pretty !== null && !raw ? pretty : content}
+          </pre>
+          <div className="absolute right-2 top-2 flex items-center gap-0.5 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
+            {pretty !== null && pretty !== content && (
+              <div className="mr-1 flex overflow-hidden rounded border border-line font-sans text-[10.5px]" role="group" aria-label="View">
+                {(["Pretty", "Raw"] as const).map((v) => (
+                  <button
+                    key={v}
+                    aria-pressed={(v === "Raw") === raw}
+                    onClick={() => toggleRaw(v === "Raw")}
+                    className={cx("px-1.5 py-0.5", (v === "Raw") === raw ? "bg-accent-soft text-accent" : "text-faint hover:bg-hover hover:text-fg")}
+                  >
+                    {v}
+                  </button>
+                ))}
+              </div>
+            )}
             {onEdit && (
               <button aria-label="Edit in the composer" title="Edit in the composer" onClick={() => onEdit(m)} className="rounded p-1 text-faint hover:bg-hover hover:text-fg">
                 <Pencil size={12} />
@@ -264,7 +307,7 @@ const MessageRow = memo(function MessageRow({
                 <Download size={12} />
               </button>
             )}
-            <button aria-label="Copy message" title="Copy" onClick={() => void copyText(content)} className="rounded p-1 text-faint hover:bg-hover hover:text-fg">
+            <button aria-label="Copy message" title="Copy" onClick={() => void copyText(pretty !== null && !raw ? pretty : content)} className="rounded p-1 text-faint hover:bg-hover hover:text-fg">
               <Copy size={12} />
             </button>
           </div>

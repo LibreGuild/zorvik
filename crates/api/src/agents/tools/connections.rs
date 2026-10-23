@@ -63,7 +63,7 @@ pub(super) fn defs() -> Vec<Def> {
         Def {
             name: "open_connection",
             title: "Open a connection",
-            description: "Open a live connection from a saved request (path), a saved one with changes (path + request), or an unsaved one (request) of kind websocket, socketio, tcp, udp or mqtt. WebSocket and Socket.IO requests run their on-connect steps (send saved messages, wait for replies). Returns a connectionId for the other connection tools, the handshake, the steps' results and the first messages. It stays open until close_connection, the server closing it, or the agent disconnecting. The user sees it live in Zorvik when they follow agents.",
+            description: "Open a live connection from a saved request (path), a saved one with changes (path + request), or an unsaved one (request) of kind websocket, socketio, tcp, udp or mqtt. WebSocket and Socket.IO requests run their on-connect steps (send saved messages, wait for replies). Returns a connectionId for the other connection tools, the handshake, the steps' results, the first messages and the request's saved messages (savedMessages: what send_message's `message` sends by name). Scripts of the request run too: scripts.preRequest before connecting, websocket.onMessage / socketio.onMessage on each message that matches (their notes show in the user's log). It stays open until close_connection, the server closing it, or the agent disconnecting. The user sees it live in Zorvik when they follow agents.",
             schema: obj(
                 json!({
                     "path": string("Saved request path as list_requests shows it."),
@@ -286,6 +286,14 @@ impl Api {
             RequestKind::SocketIo => request.socketio.messages.clone(),
             _ => Vec::new(),
         };
+        // What send_message can send by name.
+        let saved: Vec<Value> = messages
+            .iter()
+            .map(|m| match m.event.is_empty() {
+                true => json!({ "name": m.name, "format": m.format }),
+                false => json!({ "name": m.name, "event": m.event, "format": m.format }),
+            })
+            .collect();
         {
             let mut sockets = lock(&self.inner.agents.sockets);
             let session = &c.session.info.id;
@@ -359,6 +367,9 @@ impl Api {
         });
         if more > 0 {
             value["moreMessages"] = json!(more);
+        }
+        if !saved.is_empty() {
+            value["savedMessages"] = Value::Array(saved);
         }
         if websocket {
             let header = |name: &str| {

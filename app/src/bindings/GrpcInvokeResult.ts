@@ -2,13 +2,22 @@
 import type { GrpcMessage } from "./GrpcMessage";
 import type { GrpcStatus } from "./GrpcStatus";
 import type { Header } from "./Header";
+import type { TestResult } from "./TestResult";
 import type { Timing } from "./Timing";
 import type { TlsInfo } from "./TlsInfo";
 
 /**
  * A unary call's answer plus the variables that were referenced but not defined.
  */
-export type GrpcInvokeResult = { unresolved: Array<string>, status: GrpcStatus, 
+export type GrpcInvokeResult = { unresolved: Array<string>, 
+/**
+ * A streaming call's steps (waits are tests).
+ */
+steps?: Array<TestResult>, 
+/**
+ * What the steps did, and why reading stopped.
+ */
+notes?: Array<string>, status: GrpcStatus, 
 /**
  * Received messages (one for a successful unary call).
  */

@@ -348,10 +348,41 @@ async fn stop_during_the_delay_and_secrets_set_by_scripts_stay_hidden() {
     let login =
         h.request("", "Login", &server.url("/echo"), "", "pm.environment.set('token', 'tok-from-login');").await;
     let profile = h.request("", "Profile", &format!("{}?t={{{{token}}}}", server.url("/echo")), "", "").await;
-    let (_, results, summary) = h.run(json!({ "requests": [login, profile.clone()] })).await;
+    let (first_run, results, summary) = h.run(json!({ "requests": [login, profile.clone()] })).await;
     let url = results[1]["url"].as_str().unwrap();
     assert!(url.ends_with("/echo?t={{token}}"), "{url}");
     assert_eq!(summary["omitted"], 0);
+
+    // Each result's details: what was sent and what came back, secrets hidden.
+    assert_eq!(results.iter().map(|r| r["seq"].clone()).collect::<Vec<_>>(), [json!(1), json!(2)]);
+    let details = h.ok("runner.details", json!({ "runId": first_run, "seq": 2 })).await;
+    assert!(details["url"].as_str().unwrap().ends_with("/echo?t={{token}}"), "{details}");
+    let response = &details["response"];
+    assert_eq!(response["status"], 200);
+    let body = response["body"].as_str().unwrap();
+    assert!(body.contains("{{token}}") && !body.contains("tok-from-login"), "{body}");
+    assert!(
+        details["requestHeaders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|h| h["name"].as_str().unwrap().eq_ignore_ascii_case("user-agent"))
+    );
+    assert!(h.ok("runner.details", json!({ "runId": first_run, "seq": 9 })).await.is_null());
+    // The body as sent: a form, encoded, with its variables filled in.
+    let form = json!({ "name": "Form", "method": "POST", "url": server.url("/echo"),
+        "body": { "type": "formUrlencoded", "form": [{ "key": "who", "value": "{{$randomInt(7, 7)}}" }] } });
+    let form = h.ok("request.create", json!({ "parent": "", "request": form })).await;
+    let (run, _, _) = h.run(json!({ "requests": [form] })).await;
+    let details = h.ok("runner.details", json!({ "runId": run, "seq": 1 })).await;
+    assert_eq!(details["requestBody"], "who=7");
+    // A request that couldn't be sent: what it would have sent, no response.
+    let down = h.request("", "Down", "http://127.0.0.1:1/x?t={{token}}", "", "").await;
+    let (run, results, _) = h.run(json!({ "requests": [down] })).await;
+    assert!(results[0]["error"].is_string());
+    let details = h.ok("runner.details", json!({ "runId": run, "seq": 1 })).await;
+    assert_eq!(details["url"], "http://127.0.0.1:1/x?t={{token}}");
+    assert!(details["response"].is_null());
 
     // Stop while waiting between two requests: at once, and nothing more is reported.
     let started = h.ok("runner.start", json!({ "requests": [profile], "iterations": 3, "delayMs": 5000 })).await;

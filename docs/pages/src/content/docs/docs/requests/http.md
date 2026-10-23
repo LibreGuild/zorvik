@@ -162,8 +162,17 @@ The preview understands:
 | `\| a \| b \|` with a `\|---\|---\|` line below | Tables (`:---:` centers a column, `---:` aligns it right) |
 | `[text](https://…)`, `<https://…>` or a bare `https://…` address | Links |
 | `---` | A line across |
+| A fenced block with `mermaid` (```` ```mermaid ````) | A diagram drawn by [Mermaid](https://mermaid.js.org/): flowcharts, sequence, class, state and other diagrams |
 
-Docs come from the workspace files, which may come from anyone through Git, so the preview only shows text: HTML in the docs is shown as written, not run. Links open in your browser, and only `http`, `https` and `mailto` addresses become links. Pictures written into the docs as `data:image/…` addresses show in place; a picture on the web (`![alt](https://…)`) shows as a link instead of being downloaded.
+````md
+```mermaid
+sequenceDiagram
+  Client->>API: POST /orders
+  API-->>Client: 201 Created
+```
+````
+
+Docs come from the workspace files, which may come from anyone through Git, so the preview only shows text: HTML in the docs is shown as written, not run. Mermaid diagrams are drawn in Mermaid's strict mode (labels as text, no links or scripts that run); one Mermaid can't read shows its text with the reason. Links open in your browser, and only `http`, `https` and `mailto` addresses become links. Pictures written into the docs as `data:image/…` addresses show in place; a picture on the web (`![alt](https://…)`) shows as a link instead of being downloaded.
 
 Folders, the workspace, servers and load tests have docs too: in **Folder settings…**, **Workspace settings…**, and the **Docs** section at the bottom of a server's or load test's settings.
 

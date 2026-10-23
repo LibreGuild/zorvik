@@ -51,6 +51,8 @@ export const KIND_EDITOR_TABS: Partial<Record<RequestKind, KindEditorTab[]>> = {
   grpc: [
     { id: "message", label: "Message", View: GrpcMessageTab },
     { id: "metadata", label: "Metadata", View: GrpcMetadataTab },
+    { id: "messages", label: "Saved messages", View: MessagesTab, badge: (t) => t.draft.grpc?.messages?.length || undefined },
+    { id: "onConnect", label: "On connect", View: OnConnectTab, badge: (t) => t.draft.grpc?.onConnect?.length || undefined },
     { id: "protos", label: "Proto files", View: GrpcProtoFilesTab },
   ],
   // Shown before the HTTP-like tabs (Params, Headers, Auth, …).

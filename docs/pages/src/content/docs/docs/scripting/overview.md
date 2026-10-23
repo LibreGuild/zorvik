@@ -31,8 +31,9 @@ pm.environment.set("userId", body.id);
 | HTTP requests an AI agent sends with `send_request`, and runs it starts with `run_collection` | Yes |
 | The live Server-Sent Events tab in the app | No, only collection runs run scripts for SSE requests |
 | GraphQL subscriptions in the app (live) | No, only collection runs run scripts for them |
-| WebSocket and Socket.IO requests | No in the app; in collection runs, workspace and folder scripts run around them, and `pm.response.json()` is the conversation (see [WebSocket](../../protocols/websocket/#in-collection-runs) and [Socket.IO](../../protocols/socketio/#in-collection-runs) in collection runs) |
-| gRPC, TCP, UDP, MQTT and DNS requests | No |
+| WebSocket and Socket.IO requests | Yes: pre-request scripts before connecting, and [message scripts](../../protocols/websocket/#message-scripts) on the messages that match. In collection runs, post-response scripts run after the connection closes, and `pm.response.json()` is the conversation (see [WebSocket](../../protocols/websocket/#in-collection-runs) and [Socket.IO](../../protocols/socketio/#in-collection-runs) in collection runs) |
+| gRPC requests | In collection runs, `zorvik run` and calls an AI agent makes: pre-request scripts before the call, post-response scripts after it, with `pm.response.json()` the answer (a stream's received messages as an array). See [gRPC](../../protocols/grpc/#in-collection-runs). |
+| TCP, UDP, MQTT and DNS requests | No |
 
 ## Where scripts live
 

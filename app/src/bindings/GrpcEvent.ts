@@ -7,4 +7,4 @@ import type { Timing } from "./Timing";
 /**
  * Something that happened on a streaming call.
  */
-export type GrpcEvent = { "type": "headers", headers: Array<Header>, timestamp: number, } | { "type": "message", message: GrpcMessage, } | { "type": "error", message: string, } | { "type": "end", status: GrpcStatus, trailers: Array<Header>, timing: Timing, };
+export type GrpcEvent = { "type": "headers", headers: Array<Header>, timestamp: number, } | { "type": "message", message: GrpcMessage, } | { "type": "error", message: string, } | { "type": "info", text: string, timestamp: number, } | { "type": "end", status: GrpcStatus, trailers: Array<Header>, timing: Timing, };

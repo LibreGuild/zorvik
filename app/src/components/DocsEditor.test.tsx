@@ -7,6 +7,15 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve(nul
 const openExternal = vi.fn((_url: string) => Promise.resolve());
 vi.mock("../lib/platform", () => ({ openExternal: (url: string) => openExternal(url) }));
 
+const mermaid = {
+  initialize: vi.fn(),
+  render: vi.fn(async (_id: string, code: string) => {
+    if (code.includes("oops")) throw new Error("Parse error on line 1:\nexpecting graph");
+    return { svg: '<svg data-testid="diagram-svg"></svg>' };
+  }),
+};
+vi.mock("mermaid", () => ({ default: mermaid }));
+
 const { DocsEditor, DocsView } = await import("./DocsEditor");
 
 afterEach(() => {
@@ -15,6 +24,16 @@ afterEach(() => {
 });
 
 describe("rendered docs", () => {
+  it("draws mermaid code blocks in Mermaid's strict mode, and shows the text of one it can't draw", async () => {
+    render(<DocsView source={"```mermaid\ngraph TD; A-->B\n```\n\n```mermaid\noops\n```\n\n```js\nmermaid()\n```"} />);
+    expect(await screen.findByTestId("diagram-svg")).toBeTruthy();
+    expect(mermaid.initialize).toHaveBeenCalledWith(expect.objectContaining({ securityLevel: "strict", startOnLoad: false }));
+    expect(await screen.findByText(/can't be drawn: Parse error on line 1:$/)).toBeTruthy();
+    expect(screen.getByText("oops")).toBeTruthy();
+    // Other code blocks stay code.
+    expect(screen.getByText("mermaid()").tagName).toBe("CODE");
+  });
+
   it("shows HTML as text and runs nothing", () => {
     const { container } = render(
       <DocsView source={'<script>window.hacked = 1</script>\n\n<img src=x onerror="window.hacked = 1">\n\n<a href="javascript:alert(1)">x</a>'} />,

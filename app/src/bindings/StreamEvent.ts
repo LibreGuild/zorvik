@@ -20,4 +20,4 @@ export type StreamEvent = { "type": "ws", connId: string, event: WsEvent, } | { 
 /**
  * An AI agent started the run (the UI shows it only when following agents).
  */
-agent?: boolean, } | { "type": "agent", event: AgentEvent, } | { "type": "settingsChanged", settings: Settings, } | { "type": "academy", update: AcademyUpdate, } | { "type": "batch", events: Array<StreamEvent>, };
+agent?: boolean, } | { "type": "agent", event: AgentEvent, } | { "type": "variablesChanged", } | { "type": "settingsChanged", settings: Settings, } | { "type": "academy", update: AcademyUpdate, } | { "type": "batch", events: Array<StreamEvent>, };

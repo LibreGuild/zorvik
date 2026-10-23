@@ -14,6 +14,7 @@ mod grpc;
 mod live;
 mod load;
 pub mod mcp;
+mod message_scripts;
 mod mock;
 pub mod runner;
 mod scripting;
@@ -1115,6 +1116,23 @@ impl Api {
     /// Resolve a request against the open workspace.
     fn prepare(&self, ws: &Workspace, request: &Request, path: Option<&str>) -> ApiResult<Resolved> {
         let resolved = self.resolve_only(ws, request, path)?;
+        check_url_variables(&resolved)?;
+        Ok(resolved)
+    }
+
+    /// [`Self::prepare`] with the variables of a send (what its pre-request scripts set).
+    fn prepare_with(
+        &self,
+        ws: &Workspace,
+        request: &Request,
+        path: Option<&str>,
+        vars: &VarContext,
+    ) -> ApiResult<Resolved> {
+        let folders = path.map(|p| ws.ancestors(p)).unwrap_or_default();
+        let meta = self.revealed_meta(ws);
+        let outside_files = self.settings().files_outside_workspace;
+        let inherit = Inheritance { workspace: &meta, folders: &folders, base_dir: ws.root(), outside_files };
+        let resolved = resolve(request, &inherit, vars)?;
         check_url_variables(&resolved)?;
         Ok(resolved)
     }

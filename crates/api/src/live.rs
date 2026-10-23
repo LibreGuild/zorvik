@@ -187,6 +187,32 @@ impl MessageLog {
         }
     }
 
+    /// A gRPC stream's messages (their JSON); its end ends the log.
+    pub fn record_grpc(&self, event: &zorvik_engine::GrpcEvent) {
+        match event {
+            zorvik_engine::GrpcEvent::Message { message } => self.push(NewMessage {
+                direction: message.direction,
+                text: Some(&message.json),
+                base64: None,
+                size: message.size,
+                timestamp: message.timestamp,
+                event: None,
+                detail: None,
+            }),
+            zorvik_engine::GrpcEvent::End { status, .. } => {
+                let why = if status.is_ok() {
+                    "The call ended (OK)".to_string()
+                } else if status.message.is_empty() {
+                    format!("The call ended ({})", status.name)
+                } else {
+                    format!("The call ended ({}: {})", status.name, status.message)
+                };
+                self.end_with(why);
+            }
+            _ => {}
+        }
+    }
+
     fn push(&self, m: NewMessage<'_>) {
         if !self.keep {
             return;

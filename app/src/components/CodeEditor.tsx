@@ -33,6 +33,7 @@ import {
   EditorView,
   highlightActiveLine,
   highlightActiveLineGutter,
+  hoverTooltip,
   keymap,
   lineNumbers,
   placeholder as cmPlaceholder,
@@ -41,6 +42,7 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
+import { HINT_BOX, HINT_TONE, variableHint } from "./VarInput";
 
 export type EditorLanguage =
   | "json"
@@ -234,6 +236,43 @@ function variablePlugin(known: { current: Set<string> }) {
   );
 }
 
+/** The `{{variable}}` at `pos` in `line` (offsets in the line), if any. */
+export function variableAt(line: string, pos: number): { name: string; from: number; to: number } | null {
+  for (const m of line.matchAll(VAR_RE)) {
+    const from = m.index ?? 0;
+    const to = from + m[0].length;
+    if (pos >= from && pos <= to) return { name: m[1].trim(), from, to };
+  }
+  return null;
+}
+
+/** Hovering a `{{variable}}` shows its value and where it comes from (as in the URL field). */
+const variableHover = hoverTooltip(
+  (view, pos) => {
+    const line = view.state.doc.lineAt(pos);
+    const found = variableAt(line.text, pos - line.from);
+    if (!found) return null;
+    return {
+      pos: line.from + found.from,
+      end: line.from + found.to,
+      above: false,
+      create: () => {
+        const dom = document.createElement("div");
+        dom.className = HINT_BOX;
+        dom.dataset.testid = "variable-hint";
+        for (const l of variableHint(found.name)) {
+          const row = document.createElement("div");
+          row.className = HINT_TONE[l.tone];
+          row.textContent = l.text;
+          dom.append(row);
+        }
+        return { dom };
+      },
+    };
+  },
+  { hoverTime: 250 },
+);
+
 function variableCompletion(names: { current: string[] }) {
   return (ctx: CompletionContext) => {
     const m = ctx.matchBefore(/\{\{\s*[\w$.-]*/);
@@ -340,6 +379,8 @@ export function CodeEditor({
       const completeVariables = variableCompletion(names);
       extensions.push(
         variablePlugin(known),
+        variableHover,
+        EditorView.theme({ ".cm-tooltip-hover": { background: "transparent", border: "none" } }),
         extra
           ? [autocompletion({ icons: false }), EditorState.languageData.of(() => [{ autocomplete: completeVariables }])]
           : autocompletion({ override: [completeVariables], icons: false }),

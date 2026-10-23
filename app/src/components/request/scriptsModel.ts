@@ -142,6 +142,20 @@ export const SCRIPT_GLOBALS: Record<string, Member> = {
       skipRequest: fn("()", "Pre-request scripts: don't send this request"),
     }),
     require: fn("(\"npm:name@version\")", "A built-in library, e.g. pm.require('npm:lodash@4')"),
+    message: prop("Message scripts (WebSocket, Socket.IO): the message that matched", {
+      text: fn("()", "The message as text"),
+      json: fn("()", "The message parsed as JSON (Socket.IO: the arguments array)"),
+      args: prop("Socket.IO: the event's arguments"),
+      event: prop("Socket.IO: the event's name"),
+      direction: prop("received or sent"),
+      isBinary: prop(),
+      size: prop("Bytes"),
+      timestamp: prop("Unix epoch milliseconds"),
+    }),
+    connection: prop("Message scripts: the connection the message came on", {
+      send: fn("(data)", "Send a message (objects as JSON; Socket.IO: emits message)"),
+      emit: fn("(event, ...args)", "Socket.IO: emit an event"),
+    }),
   }),
   require: fn("(name)", "A built-in library: lodash, crypto-js, moment, ajv, uuid, tv4, chai, csv-parse, xml2js, cheerio, handlebars…"),
   setTimeout: fn("(fn, ms)", "Run fn later; the script waits for it"),
@@ -240,6 +254,15 @@ export function testSummary(report: ScriptReport | undefined | null): { passed: 
 }
 
 /** Snippets offered by the editor's menu. */
+/** Snippets of message scripts (WebSocket and Socket.IO). */
+export const MESSAGE_SNIPPETS: { label: string; code: string }[] = [
+  { label: "Test the message", code: 'pm.test("Has a type", () => {\n  pm.expect(pm.message.json()).to.have.property("type");\n});' },
+  { label: "Save a value from the message", code: 'pm.environment.set("lastId", pm.message.json().id);' },
+  { label: "Reply", code: "pm.connection.send({ ack: pm.message.json().id });" },
+  { label: "Socket.IO: emit an event", code: 'pm.connection.emit("ack", pm.message.args[0]);' },
+  { label: "Log it", code: 'console.log(pm.message.event ?? "", pm.message.text());' },
+];
+
 export const SNIPPETS: Record<ScriptEvent, { label: string; code: string }[]> = {
   preRequest: [
     { label: "Set a variable for this send", code: 'pm.variables.set("name", "value");' },

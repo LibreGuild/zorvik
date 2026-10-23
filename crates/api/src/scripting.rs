@@ -30,6 +30,7 @@ use zorvik_workspace::secrets::{env_scope, workspace_scope};
 use zorvik_workspace::settings::Settings;
 use zorvik_workspace::vars::VarContext;
 
+use crate::message_scripts::MessageScripts;
 use crate::{Api, ApiError, ApiResult, join_err};
 
 /// Console lines kept per send (each script keeps up to 1000 itself).
@@ -177,7 +178,12 @@ pub struct Sent {
     pub unresolved: Vec<String>,
     /// An event stream: how many events were read and why reading stopped.
     pub stream: Option<(usize, crate::sse_read::SseEnd)>,
+    /// The start of the body as sent (variables filled in, forms encoded), for run details.
+    pub sent_body: Option<String>,
 }
+
+/// Body bytes a send keeps for its run details.
+const SENT_BODY: usize = 64 * 1024;
 
 /// Outcome of [`send_scripted`]. The report is kept when the send fails.
 pub struct ScriptedSend {
@@ -230,37 +236,25 @@ pub(crate) async fn send_scripted_with(
         Err(e) => return ScriptedSend { report, result: Err(e), next_request },
     };
 
-    let pre = chain(cx.meta, &folders, &request, |s| &s.pre_request);
-    if !pre.is_empty() {
-        let before = request_snapshot(&request);
-        let mut input = script_input(Event::PreRequest, &info, vars, before.clone(), None);
-        input.cookies = jar_cookies(cx.jar, &url);
-        let chain_host = host.clone();
-        let outcome =
-            match run_chain(Event::PreRequest, pre, input, vars.environment.is_some(), limits, chain_host).await {
-                Ok(outcome) => outcome,
-                Err(e) => return ScriptedSend { report, result: Err(e), next_request },
-            };
-        vars.values = outcome.values;
-        vars.changes.extend(outcome.changes);
-        apply_request(&mut request, &before, outcome.request);
-        next_request = outcome.next_request;
-        let failure = outcome.report.errors.first().map(ScriptFailure::describe);
-        report = Some(outcome.report);
-        if let Some(message) = failure {
-            return ScriptedSend { report, result: Err(ApiError::new("script", message)), next_request };
-        }
-        if outcome.skip {
-            let message = "Skipped by a pre-request script (pm.execution.skipRequest)";
-            return ScriptedSend { report, result: Err(ApiError::new(SKIPPED, message)), next_request };
-        }
+    let pre = Pre { cx, folders: &folders, info: &info, host: host.clone(), url: &url, limits };
+    let ran = pre_request(&pre, &mut request, vars).await;
+    report = ran.report;
+    next_request = ran.next_request;
+    if let Err(e) = ran.result {
+        return ScriptedSend { report, result: Err(e), next_request };
     }
+    // Message scripts of WebSocket and Socket.IO requests run on the messages of the send.
+    let messages = MessageScripts::new(&request, path, &info, vars, limits, host.clone());
 
-    let (resolved, response, events, steps) = match send(cx, &request, &folders, vars).await {
+    let sending = send(cx, &request, &folders, vars, messages.as_ref());
+    let (resolved, response, events, steps) = match Box::pin(sending).await {
         Ok(sent) => sent,
         Err(e) => return ScriptedSend { report, result: Err(e), next_request },
     };
 
+    if let Some(messages) = &messages {
+        messages.merge_into(vars);
+    }
     let mut post = chain(cx.meta, &folders, &request, |s| &s.post_response);
     post.extend(extra.map(|(label, code)| ChainScript { label, owner: request.name.clone(), code }));
     if !post.is_empty() {
@@ -308,11 +302,64 @@ pub(crate) async fn send_scripted_with(
     }
     let url = resolved.request.url.clone();
     let stream = events.map(|(list, end)| (list.len(), end));
+    let body = &resolved.request.body;
+    let sent_body = (!body.is_empty()).then(|| {
+        let mut end = body.len().min(SENT_BODY);
+        while end < body.len() && end > 0 && (body[end] & 0xC0) == 0x80 {
+            end -= 1;
+        }
+        String::from_utf8_lossy(&body[..end]).into_owned()
+    });
     ScriptedSend {
         report,
-        result: Ok(Sent { request, url, response, unresolved: resolved.unresolved, stream }),
+        result: Ok(Sent { request, url, response, unresolved: resolved.unresolved, stream, sent_body }),
         next_request,
     }
+}
+
+/// What the pre-request scripts of one send need.
+pub(crate) struct Pre<'a> {
+    pub cx: &'a SendContext<'a>,
+    pub folders: &'a [FolderMeta],
+    pub info: &'a Info,
+    pub host: Option<Arc<dyn Host>>,
+    /// The URL with its variables filled in (its site's cookies are `pm.cookies`).
+    pub url: &'a str,
+    pub limits: Limits,
+}
+
+/// What the pre-request scripts did: their report, `setNextRequest`, and whether to go on (a
+/// script error or `skipRequest` stops the send).
+pub(crate) struct PreRan {
+    pub report: Option<ScriptReport>,
+    pub next_request: Option<NextRequest>,
+    pub result: ApiResult<()>,
+}
+
+/// Run the workspace's, folders' and request's pre-request scripts, which may change `request`.
+pub(crate) async fn pre_request(p: &Pre<'_>, request: &mut Request, vars: &mut ScriptVars) -> PreRan {
+    let pre = chain(p.cx.meta, p.folders, request, |s| &s.pre_request);
+    if pre.is_empty() {
+        return PreRan { report: None, next_request: None, result: Ok(()) };
+    }
+    let before = request_snapshot(request);
+    let mut input = script_input(Event::PreRequest, p.info, vars, before.clone(), None);
+    input.cookies = jar_cookies(p.cx.jar, p.url);
+    let outcome =
+        match run_chain(Event::PreRequest, pre, input, vars.environment.is_some(), p.limits, p.host.clone()).await {
+            Ok(outcome) => outcome,
+            Err(e) => return PreRan { report: None, next_request: None, result: Err(e) },
+        };
+    vars.values = outcome.values;
+    vars.changes.extend(outcome.changes);
+    apply_request(request, &before, outcome.request);
+    let failure = outcome.report.errors.first().map(ScriptFailure::describe);
+    let result = match (failure, outcome.skip) {
+        (Some(message), _) => Err(ApiError::new("script", message)),
+        (None, true) => Err(ApiError::new(SKIPPED, "Skipped by a pre-request script (pm.execution.skipRequest)")),
+        (None, false) => Ok(()),
+    };
+    PreRan { report: Some(outcome.report), next_request: outcome.next_request, result }
 }
 
 /// Events an event stream was read to, and why reading stopped.
@@ -329,6 +376,7 @@ async fn send(
     request: &Request,
     folders: &[FolderMeta],
     vars: &ScriptVars,
+    messages: Option<&Arc<MessageScripts>>,
 ) -> ApiResult<(Resolved, HttpResponse, Option<StreamRead>, Option<StepsRun>)> {
     let outside_files = cx.settings.files_outside_workspace;
     let inherit = Inheritance { workspace: cx.meta, folders, base_dir: cx.ws.root(), outside_files };
@@ -350,23 +398,54 @@ async fn send(
         let response = crate::mcp::as_response(&resolved.request.url, &info, &call);
         return Ok((resolved, response, None, None));
     }
+    if request.kind == zorvik_workspace::formats::RequestKind::Grpc {
+        let ctx = vars.var_context();
+        let render = move |text: &str| ctx.render(text, &mut std::collections::BTreeSet::new());
+        let target = zorvik_engine::grpc::GrpcTarget {
+            url: resolved.request.url.clone(),
+            metadata: resolved.request.headers.clone(),
+        };
+        let outside = cx.settings.files_outside_workspace;
+        let running = crate::grpc::run_once(cx.client, cx.ws.root(), outside, request, &target, &opts, &render);
+        let (response, steps, notes) = Box::pin(running).await?;
+        let tests = steps.iter().map(crate::live::StepResult::test).collect();
+        return Ok((resolved, response, None, Some((tests, notes))));
+    }
     if request.kind == zorvik_workspace::formats::RequestKind::SocketIo {
         let ctx = vars.var_context();
         let render = move |text: &str| ctx.render(text, &mut std::collections::BTreeSet::new());
-        let running =
-            crate::sockets::run_once_socketio(cx.client, &resolved, &request.socketio, &opts, cx.jar, &render);
-        let (response, steps, notes) = Box::pin(running).await?;
-        let tests = steps.iter().map(crate::live::StepResult::test).collect();
+        let running = crate::sockets::run_once_socketio(
+            cx.client,
+            &resolved,
+            &request.socketio,
+            &opts,
+            cx.jar,
+            &render,
+            messages,
+        );
+        let (response, steps, mut notes, scripted) = Box::pin(running).await?;
+        let mut tests: Vec<_> = steps.iter().map(crate::live::StepResult::test).collect();
+        tests.extend(scripted.tests);
+        notes.extend(scripted.notes);
         return Ok((resolved, response, None, Some((tests, notes))));
     }
     if request.kind == zorvik_workspace::formats::RequestKind::Websocket {
         let ctx = vars.var_context();
         let render = move |text: &str| ctx.render(text, &mut std::collections::BTreeSet::new());
         let jar = cx.jar.map(|j| j.as_ref());
-        let running =
-            crate::websocket::run_once(cx.client, resolved.request.clone(), &request.websocket, &opts, jar, &render);
-        let (response, steps, notes) = Box::pin(running).await?;
-        let tests = steps.iter().map(crate::live::StepResult::test).collect();
+        let running = crate::websocket::run_once(
+            cx.client,
+            resolved.request.clone(),
+            &request.websocket,
+            &opts,
+            jar,
+            &render,
+            messages,
+        );
+        let (response, steps, mut notes, scripted) = Box::pin(running).await?;
+        let mut tests: Vec<_> = steps.iter().map(crate::live::StepResult::test).collect();
+        tests.extend(scripted.tests);
+        notes.extend(scripted.notes);
         return Ok((resolved, response, None, Some((tests, notes))));
     }
     if let Some(subscription) = resolved.subscription.clone() {
@@ -565,7 +644,7 @@ impl Host for AppHost {
 }
 
 /// The app's side of the scripts of one send.
-fn script_host(cx: &SendContext<'_>, url: &str) -> ApiResult<Option<Arc<dyn Host>>> {
+pub(crate) fn script_host(cx: &SendContext<'_>, url: &str) -> ApiResult<Option<Arc<dyn Host>>> {
     let mut options = cx.settings.request_options(&Default::default())?;
     options.host_guard = cx.guard.clone();
     let host = AppHost {
@@ -580,12 +659,12 @@ fn script_host(cx: &SendContext<'_>, url: &str) -> ApiResult<Option<Arc<dyn Host
 
 /// One script of a chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ChainScript {
+pub(crate) struct ChainScript {
     /// For messages: "folder 'Users'".
-    label: String,
+    pub label: String,
     /// The workspace's, folder's or request's name (`pm.execution.location.current`).
-    owner: String,
-    code: String,
+    pub owner: String,
+    pub code: String,
 }
 
 /// The non-empty scripts for `request`, outermost first, with names for messages.
@@ -605,7 +684,7 @@ fn chain(
         .collect()
 }
 
-fn script_input(
+pub(crate) fn script_input(
     event: Event,
     info: &Info,
     vars: &ScriptVars,
@@ -620,15 +699,18 @@ fn script_input(
         response,
         variables: vars.values.clone(),
         cookies: Vec::new(),
+        message: None,
     }
 }
 
-struct ChainOutcome {
+pub(crate) struct ChainOutcome {
     request: ScriptRequest,
-    values: Variables,
+    pub values: Variables,
     /// Changes to keep (not `pm.variables`, and not the environment when none is active).
-    changes: Vec<VariableChange>,
-    report: ScriptReport,
+    pub changes: Vec<VariableChange>,
+    pub report: ScriptReport,
+    /// Message scripts: what they sent on the connection.
+    pub sends: Vec<zorvik_script::ScriptSend>,
     /// The last `setNextRequest` of the chain.
     next_request: Option<NextRequest>,
     /// A pre-request script called `pm.execution.skipRequest()`.
@@ -637,7 +719,7 @@ struct ChainOutcome {
 
 /// Run scripts one after the other on a blocking thread; each sees what the
 /// previous ones did. A pre-request error stops the rest, a post-response one doesn't.
-async fn run_chain(
+pub(crate) async fn run_chain(
     event: Event,
     scripts: Vec<ChainScript>,
     input: ScriptInput,
@@ -652,11 +734,17 @@ async fn run_chain(
         let mut warned = false;
         let mut next_request = None;
         let mut skip = false;
-        let kind = if event == Event::PreRequest { "Pre-request" } else { "Post-response" };
+        let mut sends = Vec::new();
+        let kind = match event {
+            Event::PreRequest => "Pre-request",
+            Event::PostResponse => "Post-response",
+            Event::Message => "Message",
+        };
         for ChainScript { label, owner, code } in scripts {
             input.info.current = owner;
             let out = zorvik_script::run_with(&code, &input, &limits, host.clone());
             skip |= out.skip_request;
+            sends.extend(out.sends);
             if out.visualization.is_some() {
                 report.visualization = out.visualization;
             }
@@ -692,7 +780,7 @@ async fn run_chain(
                 }
             }
         }
-        ChainOutcome { request: input.request, values: input.variables, changes, report, next_request, skip }
+        ChainOutcome { request: input.request, values: input.variables, changes, report, next_request, skip, sends }
     })
     .await
     .map_err(join_err)
@@ -750,7 +838,7 @@ fn form_fields(r: &Request, render: &dyn Fn(&str) -> String) -> Vec<ScriptField>
 }
 
 /// `pm.request` for pre-request scripts: the request as saved (enabled headers only).
-fn request_snapshot(r: &Request) -> ScriptRequest {
+pub(crate) fn request_snapshot(r: &Request) -> ScriptRequest {
     let same = |s: &str| s.to_string();
     ScriptRequest {
         url: r.url.clone(),
