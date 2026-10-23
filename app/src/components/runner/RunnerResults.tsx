@@ -1,12 +1,17 @@
 // The results side of a runner tab: a summary header, then every request of every
 // iteration (status, time, tests), expandable to its tests, errors and console.
-import { memo, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { ChevronRight, CircleCheck, CircleMinus, CircleX, Download, ListChecks } from "lucide-react";
 import type { ConsoleLevel } from "../../bindings/ConsoleLevel";
+import type { Header } from "../../bindings/Header";
+import type { RunDetails } from "../../bindings/RunDetails";
 import type { RunResult } from "../../bindings/RunResult";
 import { formatBytes, formatMs, statusTone, toneText } from "../../lib/format";
 import { methodColor, methodLabel } from "../../lib/http";
 import { modKey } from "../../lib/platform";
+import { api } from "../../lib/rpc";
+import { prettyMessage } from "../request/jsonFormat";
+import { HeaderTable } from "../response/ResponsePane";
 import { exportRun, groupResults, type IterationGroup, liveCounts, MAX_RESULTS, type RunView, setFilter, testCounts, useRunner } from "../../store/runner";
 import { cx, EmptyState, Menu, Segmented } from "../ui";
 import { useTicker, Verdict } from "../loadtests/parts";
@@ -70,7 +75,7 @@ export function RunnerResults({ tabId }: { tabId: string }) {
         {groups.slice(0, limit).map((g, i) => {
           const open = groups.length <= 3 || (live && i === groups.length - 1) || (g.failed > 0 && failedOpen++ < OPEN_FAILED);
           // Keyed by the filter too: rows are listed by position, their open state must not move to another result.
-          return <Iteration key={`${filter}:${g.iteration}`} group={g} count={run.iterations} open={open} />;
+          return <Iteration key={`${filter}:${g.iteration}`} group={g} count={run.iterations} open={open} runId={run.runId} />;
         })}
         {hidden > 0 && (
           <button className="rounded-xl border border-dashed border-line-strong py-1.5 text-[12px] text-accent hover:underline" onClick={() => setLimit((l) => l + GROUP_LIMIT)}>
@@ -131,7 +136,7 @@ function SummaryLine({ run }: { run: RunView }) {
   );
 }
 
-const Iteration = memo(function Iteration({ group, count, open: initiallyOpen }: { group: IterationGroup; count: number; open: boolean }) {
+const Iteration = memo(function Iteration({ group, count, open: initiallyOpen, runId }: { group: IterationGroup; count: number; open: boolean; runId: string }) {
   const [open, setOpen] = useState<boolean | null>(null);
   const [all, setAll] = useState(false);
   const shown = open ?? initiallyOpen;
@@ -151,7 +156,7 @@ const Iteration = memo(function Iteration({ group, count, open: initiallyOpen }:
       {shown && (
         <div className="border-t border-line/60">
           {rows.map((r, i) => (
-            <ResultRow key={i} result={r} />
+            <ResultRow key={i} result={r} runId={runId} />
           ))}
           {rows.length < group.results.length && (
             <button className="w-full border-t border-line/60 py-1.5 text-[12px] text-accent hover:underline" onClick={() => setAll(true)}>
@@ -164,7 +169,7 @@ const Iteration = memo(function Iteration({ group, count, open: initiallyOpen }:
   );
 });
 
-const ResultRow = memo(function ResultRow({ result: r }: { result: RunResult }) {
+const ResultRow = memo(function ResultRow({ result: r, runId }: { result: RunResult; runId: string }) {
   const [open, setOpen] = useState(false);
   const t = testCounts(r);
   const problem = r.error ?? r.scriptErrors[0] ?? null;
@@ -192,7 +197,7 @@ const ResultRow = memo(function ResultRow({ result: r }: { result: RunResult }) 
           </div>
           {r.skipped ? (
             <div className="truncate text-[11px] text-faint" title={r.skipReason}>
-              Skipped: {r.skipReason ?? "the runner sends HTTP, GraphQL, SSE, WebSocket, Socket.IO and MCP requests"}
+              Skipped: {r.skipReason ?? "the runner sends HTTP, GraphQL, SSE, WebSocket, Socket.IO, gRPC and MCP requests"}
             </div>
           ) : problem ? (
             <div className="truncate text-[11px] text-danger" title={problem}>
@@ -213,7 +218,7 @@ const ResultRow = memo(function ResultRow({ result: r }: { result: RunResult }) 
         {r.status != null && <span className={cx("w-9 shrink-0 text-right font-mono text-[12px] font-semibold", toneText[statusTone(r.status)])}>{r.status}</span>}
         <span className="w-14 shrink-0 text-right text-[11.5px] tabular-nums text-faint">{r.durationMs != null ? formatMs(r.durationMs) : ""}</span>
       </button>
-      {open && <ResultDetails result={r} />}
+      {open && <ResultDetails result={r} runId={runId} />}
     </div>
   );
 });
@@ -226,13 +231,106 @@ const LEVEL_CLASS: Record<ConsoleLevel, string> = {
   error: "text-danger",
 };
 
-function ResultDetails({ result: r }: { result: RunResult }) {
+type DetailView = "result" | "request" | "response";
+
+function ResultDetails({ result: r, runId }: { result: RunResult; runId: string }) {
+  const [view, setView] = useState<DetailView>("result");
+  // What it sent and got, fetched once when first asked for (the app keeps it, not the UI).
+  const [details, setDetails] = useState<RunDetails | null | "loading" | "gone">(null);
+  useEffect(() => {
+    if (view === "result" || details !== null || !r.seq) return;
+    setDetails("loading");
+    api
+      .runDetails(runId, r.seq)
+      .then((d) => setDetails(d ?? "gone"))
+      .catch(() => setDetails("gone"));
+  }, [view, details, runId, r.seq]);
   return (
     <div className="selectable flex flex-col gap-2 bg-panel-2/40 px-3 pb-3 pt-1.5 pl-[70px] text-[12px]" data-testid="runner-result-details">
-      <div className="break-all font-mono text-[11.5px] text-muted">
-        {r.method} {r.url}
-        {r.size != null && <span className="text-faint"> · {formatBytes(r.size)}</span>}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="min-w-0 flex-1 break-all font-mono text-[11.5px] text-muted">
+          {r.method} {r.url}
+          {r.size != null && <span className="text-faint"> · {formatBytes(r.size)}</span>}
+        </div>
+        {r.seq > 0 && (
+          <Segmented<DetailView>
+            items={[
+              { id: "result", label: "Result" },
+              { id: "request", label: "Request" },
+              { id: "response", label: "Response" },
+            ]}
+            value={view}
+            onChange={setView}
+          />
+        )}
       </div>
+      {view === "result" ? <ResultBody result={r} /> : <Exchange details={details} view={view} error={r.error ?? null} />}
+    </div>
+  );
+}
+
+/** What a result sent (request) or got (response), with headers and the body. */
+function Exchange({ details, view, error }: { details: RunDetails | null | "loading" | "gone"; view: "request" | "response"; error: string | null }) {
+  if (details === null || details === "loading") return <div className="text-faint">Loading…</div>;
+  if (details === "gone") return <div className="text-faint">No longer kept: run it again to see what it sent and got.</div>;
+  if (view === "request") {
+    return (
+      <div className="flex flex-col gap-2" data-testid="runner-request">
+        <div className="break-all font-mono text-[11.5px] text-fg">
+          {details.method} {details.url}
+        </div>
+        <Headers headers={details.requestHeaders} />
+        {details.requestBody && <Body text={details.requestBody} />}
+      </div>
+    );
+  }
+  const res = details.response;
+  if (!res) {
+    return (
+      <div className="flex flex-col gap-1" data-testid="runner-response">
+        <div className="text-muted">No response.</div>
+        {error && <div className="whitespace-pre-wrap break-words text-danger">{error}</div>}
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-2" data-testid="runner-response">
+      <div className="flex flex-wrap items-center gap-x-3 font-mono text-[11.5px]">
+        <span className={cx("font-semibold", toneText[statusTone(res.status)])}>
+          {res.status} {res.statusText}
+        </span>
+        <span className="text-faint">{res.httpVersion}</span>
+        <span className="text-faint">{formatMs(res.timing.totalMs)}</span>
+        <span className="text-faint">{formatBytes(res.size)}</span>
+      </div>
+      <Headers headers={res.headers} />
+      {res.body ? <Body text={res.body} truncated={res.bodyTruncated} /> : <div className="text-faint">Empty body</div>}
+    </div>
+  );
+}
+
+function Headers({ headers }: { headers: Header[] }) {
+  if (!headers.length) return null;
+  return (
+    <div className="overflow-hidden rounded-lg border border-line/60 bg-bg">
+      <HeaderTable headers={headers} />
+    </div>
+  );
+}
+
+function Body({ text, truncated }: { text: string; truncated?: boolean }) {
+  const pretty = useMemo(() => prettyMessage(text), [text]);
+  return (
+    <div className="flex flex-col gap-1">
+      <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-line/60 bg-bg px-2 py-1.5 font-mono text-[11.5px] text-fg">{pretty ?? text}</pre>
+      {truncated && <span className="text-[11px] text-faint">Only the first 64 KB are kept here.</span>}
+    </div>
+  );
+}
+
+function ResultBody({ result: r }: { result: RunResult }) {
+  return (
+    <>
       {r.error && <div className="whitespace-pre-wrap break-words text-danger">{r.error}</div>}
       {r.scriptErrors.map((e, i) => (
         <div key={i} className="whitespace-pre-wrap break-words text-danger">
@@ -269,6 +367,6 @@ function ResultDetails({ result: r }: { result: RunResult }) {
           ))}
         </div>
       )}
-    </div>
+    </>
   );
 }

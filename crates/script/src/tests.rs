@@ -20,6 +20,7 @@ fn pre() -> ScriptInput {
         response: None,
         variables: Variables::default(),
         cookies: Vec::new(),
+        message: None,
     }
 }
 
@@ -1197,4 +1198,63 @@ fn chai_typos_and_more_assertions_fail_clearly() {
     // Returning an assertion from a test is fine (it isn't a promise).
     let out = run_ok("pm.test('t', () => pm.expect(1).to.equal(1));", &input);
     assert!(out.tests[0].passed, "{:?}", out.tests);
+}
+
+fn message(text: Option<&str>, event: Option<&str>) -> ScriptInput {
+    ScriptInput {
+        event: Event::Message,
+        message: Some(ScriptMessage {
+            direction: "received".into(),
+            text: text.map(str::to_string),
+            base64: None,
+            event: event.map(str::to_string),
+            size: text.map_or(0, |t| t.len() as u64),
+            timestamp: 1.0,
+        }),
+        ..pre()
+    }
+}
+
+#[test]
+fn message_scripts_read_the_message_and_send_replies() {
+    let source = r#"
+        pm.test('a trade', () => pm.expect(pm.message.json().type).to.eql('trade'));
+        pm.environment.set('price', pm.message.json().price);
+        pm.connection.send({ ack: pm.message.json().id });
+        pm.connection.send('plain');
+        console.log(pm.info.eventName, pm.message.direction);
+    "#;
+    let out = run_ok(source, &message(Some(r#"{"type":"trade","price":12.5,"id":7}"#), None));
+    assert!(out.tests[0].passed, "{:?}", out.tests);
+    assert_eq!(out.variables[0].value.as_deref(), Some("12.5"));
+    assert_eq!(
+        out.sends,
+        [ScriptSend { text: r#"{"ack":7}"#.into(), event: None }, ScriptSend { text: "plain".into(), event: None }]
+    );
+    assert_eq!(logs(&out), ["message received"]);
+}
+
+#[test]
+fn socketio_message_scripts_see_arguments_and_emit() {
+    let source = r#"
+        pm.test('joined', () => pm.expect(pm.message.args[0].room).to.eql('lobby'));
+        pm.connection.emit('hello', pm.message.event, 2);
+        pm.connection.send('hi');
+    "#;
+    let out = run_ok(source, &message(Some(r#"[{"room":"lobby"}]"#), Some("joined")));
+    assert!(out.tests[0].passed, "{:?}", out.tests);
+    assert_eq!(
+        out.sends,
+        [
+            ScriptSend { text: r#"["joined",2]"#.into(), event: Some("hello".into()) },
+            ScriptSend { text: r#"["hi"]"#.into(), event: Some("message".into()) },
+        ]
+    );
+    // Emitting is for Socket.IO only, and sends are capped.
+    let out = run("pm.connection.emit('x')", &message(Some("hi"), None), &Limits::default());
+    assert!(out.error.unwrap().message.contains("pm.connection.send"));
+    let out =
+        run("for (let i = 0; i < 101; i++) pm.connection.send('x')", &message(Some("hi"), None), &Limits::default());
+    assert!(out.error.unwrap().message.contains("at most 100"));
+    assert_eq!(out.sends.len(), 100, "what it sent before the error goes out, like its tests and variables");
 }

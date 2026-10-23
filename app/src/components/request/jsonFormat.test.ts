@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { beautifyJson } from "./jsonFormat";
+import { beautifyJson, prettyMessage } from "./jsonFormat";
 
 describe("beautifyJson", () => {
   it("matches JSON.stringify indentation for plain JSON", () => {
@@ -28,5 +28,20 @@ describe("beautifyJson", () => {
     expect(beautifyJson('{"a":}')).toBeNull();
     expect(beautifyJson("{a:1}")).toBeNull();
     expect(beautifyJson("")).toBeNull();
+  });
+});
+
+describe("prettyMessage", () => {
+  it("re-indents JSON and keeps it exact when nothing is nested", () => {
+    expect(prettyMessage('{"id":12345678901234567890}')).toBe('{\n  "id": 12345678901234567890\n}');
+    expect(prettyMessage("not json")).toBeNull();
+  });
+
+  it("expands string values that hold JSON (a Socket.IO argument sent as a JSON string)", () => {
+    const args = JSON.stringify(["update", JSON.stringify({ price: 12.5, tags: ["a"] })]);
+    expect(prettyMessage(args)).toBe(JSON.stringify(["update", { price: 12.5, tags: ["a"] }], null, 2));
+    // JSON inside JSON inside JSON, and strings that only look like JSON stay as they are.
+    const twice = JSON.stringify({ data: JSON.stringify({ inner: JSON.stringify({ ok: true }) }), note: "[not json]" });
+    expect(prettyMessage(twice)).toBe(JSON.stringify({ data: { inner: { ok: true } }, note: "[not json]" }, null, 2));
   });
 });

@@ -81,7 +81,7 @@ The **Emits** tab keeps events with the request, so you don't type them again: j
 | **Text**, **JSON** or **Hex** | How the arguments are written: **Text** is one string argument, **JSON** the arguments (an array for several, anything else one), **Hex** one binary argument written as hex bytes (`48 65 6c 6c 6f`). |
 | The arguments | `{{variables}}` are filled in each time it is emitted (not in hex). |
 
-The buttons on each emit: **Put in the composer**, **Send now** (while connected) and **Remove message**. **Add emit** adds an empty one. **Save as emit…** in the composer's **Saved emits** menu does the same from what you typed; a name that is already taken replaces that emit. Saved emits are part of the request: save the request to keep them.
+The buttons on each emit: **Put in the composer**, **Send now** (while connected) and **Remove message**. **Add emit** adds an empty one. **Save as emit…** in the composer's **Saved emits** menu does the same from what you typed; a name that is already taken replaces that emit. For a saved request it writes the emit to the request's file at once, so teammates and [AI agents](#ai-agents) can use it; emits added in the **Emits** tab are kept when you save the request.
 
 ## On connect
 
@@ -117,7 +117,7 @@ The steps report in the event log as notes: **On connect: sent Join**, **On conn
 
 ## The event log
 
-Received events show the event name as a badge and their arguments as JSON; click a row for the pretty-printed arguments. Binary arguments are shown as `{"base64": "…", "bytes": 3}`; typing that shape in the JSON arguments sends a binary argument too. Events that ask for an acknowledgement are marked **wants ack**, and acknowledgements **ack** with the same number. The filter box searches event names and arguments; the filter's JSON conditions, the **View** menu and **Export the log…** work as for [WebSocket](../websocket/#the-message-log).
+Received events show the event name as a badge and their arguments as JSON; click a row for the pretty-printed arguments. An argument sent as a JSON string (`socket.emit("update", JSON.stringify(data))`) is shown as the JSON it holds; **Raw** shows the arguments as they came. Binary arguments are shown as `{"base64": "…", "bytes": 3}`; typing that shape in the JSON arguments sends a binary argument too. Events that ask for an acknowledgement are marked **wants ack**, and acknowledgements **ack** with the same number. The filter box searches event names and arguments; the filter's JSON conditions, the **View** menu and **Export the log…** work as for [WebSocket](../websocket/#the-message-log).
 
 ### Event chips
 
@@ -129,6 +129,25 @@ Above the log, a chip for each event name says how often it came up, sent and re
 
 The chips work with the filter box: a chip narrows the log to an event, the filter to what is inside it.
 
+## Scripts
+
+The **Scripts** tab works as for [WebSocket requests](../websocket/#scripts): a script **Before connecting**, **On message** scripts, and a script that runs **In runs** after the connection closes. A message script can also match one **event** (empty: every event), and its pattern is matched against the event's arguments as a JSON array (`$[0].room == lobby`). In the script:
+
+| Name | Description |
+|---|---|
+| `pm.message.event` | The event's name. |
+| `pm.message.args` | Its arguments, as an array (`pm.message.json()` is the same array). |
+| `pm.connection.emit(event, ...args)` | Emits an event. |
+| `pm.connection.send(data)` | Emits `message` with `data`. |
+
+```js
+// On the event "joined"
+pm.test("Joined the lobby", () => pm.expect(pm.message.args[0].room).to.eql("lobby"));
+pm.connection.emit("hello", pm.message.args[0].room);
+```
+
+Acknowledgements have no event name and don't run message scripts.
+
 ## In collection runs
 
 Socket.IO requests run in the Runner tab, in [`zorvik run`](../../cli/run/) and in runs an AI agent starts. Zorvik connects, runs the [On connect](#on-connect) steps, and disconnects when they are done. This works as for [WebSocket requests in runs](../websocket/#in-collection-runs):
@@ -137,6 +156,7 @@ Socket.IO requests run in the Runner tab, in [`zorvik run`](../../cli/run/) and 
 - A **Send** step that fails (an emit that isn't saved or has no event, hex that isn't valid) is a failed test named `Send Join`.
 - **Keep sending** steps don't run: the connection closes when the steps end.
 - **Answer acknowledgements** works in runs too.
+- **On message** scripts run on the events of the run; their tests count, as for [WebSocket](../websocket/#in-collection-runs).
 - A request without wait steps passes when it connects. One that can't connect (a refused namespace, a timeout) fails with the error.
 - The result's status is the handshake's (`101` over WebSocket, `200` over long-polling), its time is the whole conversation, and its response body is the conversation as JSON, with each event's name in `event`. Workspace and folder post-response scripts read it with `pm.response.json()`:
 
@@ -158,7 +178,7 @@ Load tests don't send Socket.IO requests.
 
 ## AI agents
 
-Coding agents connected through `zorvik mcp` can open Socket.IO connections: `open_connection` connects (running the request's On connect steps), then `send_message` emits (with `event`, and `ack` to ask for an acknowledgement), `wait_for_message` waits for an event (`event`, with the pattern matched against its arguments), `read_messages` reads the log (each message with its `event`) and `close_connection` disconnects. While you follow agents, the connection shows live in a tab. See [Tools](../../agents/tools/#live-connections).
+Coding agents connected through `zorvik mcp` can open Socket.IO connections: `open_connection` connects (running the request's scripts and On connect steps, and listing its saved emits), then `send_message` emits (with `event`, and `ack` to ask for an acknowledgement), `wait_for_message` waits for an event (`event`, with the pattern matched against its arguments), `read_messages` reads the log (each message with its `event`) and `close_connection` disconnects. While you follow agents, the connection shows live in a tab. See [Tools](../../agents/tools/#live-connections).
 
 ## Saved format
 

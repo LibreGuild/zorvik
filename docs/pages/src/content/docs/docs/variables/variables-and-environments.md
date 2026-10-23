@@ -46,7 +46,7 @@ Scripts read variables with `pm.variables.get("name")` and friends. See [Scripts
 
 - Known variables are highlighted. **Undefined ones turn red** before you send.
 - Type `{{` to get suggestions: every defined variable and every dynamic variable. <kbd>↑</kbd>/<kbd>↓</kbd> choose, <kbd>Enter</kbd> or <kbd>Tab</kbd> inserts, <kbd>Esc</kbd> closes.
-- **Hover a variable** to see its value and where it comes from: *From the active environment*, *workspace variables* or *globals*, and *set by a script (this computer only)* for [values set by scripts](#values-set-by-scripts). Secret values show as `••••••`. An undefined one says *Not defined in the active environment or workspace*.
+- **Hover a variable**, in the URL, a body, a header, a message or a script, to see its value and where it comes from: *From the active environment*, *workspace variables* or *globals*, and *set by a script (this computer only)* for [values set by scripts](#values-set-by-scripts). Secret values show as `••••••`. An undefined one says *Not defined in the active environment or workspace*.
 
 ## Scopes and precedence
 

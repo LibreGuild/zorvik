@@ -1,6 +1,8 @@
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
-import { LONG_LINE, longLines, showMore } from "./CodeEditor";
+import { LONG_LINE, longLines, showMore, variableAt } from "./CodeEditor";
+import { variableHint } from "./VarInput";
+import { useWorkspace } from "../store/workspace";
 
 /** The parts of each shortened line that aren't drawn, as [from, to]. */
 function hidden(state: EditorState): [number, number][] {
@@ -49,5 +51,20 @@ describe("very long lines", () => {
     // A long line typed or pasted is shortened.
     state = state.update({ changes: { from: state.doc.length, insert: `\n${"z".repeat(20_000)}` } }).state;
     expect(hidden(state)).toHaveLength(1);
+  });
+});
+
+describe("hovering {{variables}} in an editor", () => {
+  it("finds the variable under the pointer", () => {
+    const line = '{"user": "{{ userId }}", "at": {{$timestamp}}}';
+    expect(variableAt(line, line.indexOf("userId"))).toEqual({ name: "userId", from: 10, to: 22 });
+    expect(variableAt(line, line.indexOf("$timestamp"))?.name).toBe("$timestamp");
+    expect(variableAt(line, 2)).toBeNull();
+  });
+
+  it("tells the value and where it comes from, or that it isn't defined", () => {
+    useWorkspace.setState({ variables: [{ key: "userId", value: "42", source: "environment", secret: false }] } as never);
+    expect(variableHint("userId").map((l) => l.text)).toEqual(["{{userId}}", "42", "From the active environment"]);
+    expect(variableHint("nope")[1]).toEqual({ text: "Not defined in the active environment or workspace", tone: "danger" });
   });
 });

@@ -43,7 +43,7 @@ export const RunnerSettingsPane = memo(function RunnerSettingsPane({ tab, entrie
           <RequestList tabId={tab.id} ordered={ordered} excluded={excluded} />
         ) : (
           <p className="rounded-xl border border-dashed border-line-strong px-4 py-5 text-center text-[12.5px] text-muted">
-            Nothing to run here. The runner sends HTTP, GraphQL, SSE, WebSocket, Socket.IO and MCP requests; gRPC, TCP, UDP, MQTT and DNS don't run in it.
+            Nothing to run here. The runner sends HTTP, GraphQL, SSE, WebSocket, Socket.IO, gRPC and MCP requests; TCP, UDP, MQTT and DNS don't run in it.
           </p>
         )}
       </EditorSection>

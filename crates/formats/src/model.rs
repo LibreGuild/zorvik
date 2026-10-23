@@ -153,6 +153,10 @@ pub struct SocketIoOptions {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(optional, as = "Option<Vec<ConnectStep>>")]
     pub on_connect: Vec<ConnectStep>,
+    /// Scripts run on the events that match (as for WebSocket requests).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<MessageScript>>")]
+    pub on_message: Vec<MessageScript>,
     /// When set, events from the server that ask for an acknowledgement get one with these
     /// arguments (JSON: an array for several, else one; may contain `{{variables}}`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -176,6 +180,7 @@ impl Default for SocketIoOptions {
             ack: false,
             messages: Vec::new(),
             on_connect: Vec::new(),
+            on_message: Vec::new(),
             auto_ack: String::new(),
         }
     }
@@ -279,6 +284,72 @@ pub enum ConnectStep {
     Repeat(RepeatStep),
 }
 
+/// Which messages a message script looks at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum MessageDirection {
+    /// Messages from the server.
+    #[default]
+    Received,
+    /// Messages this side sent (the composer's, steps', repeats'; not the scripts' own).
+    Sent,
+    Both,
+}
+
+/// "When a message matches, run this script" (WebSocket and Socket.IO requests). The script
+/// sees the message as `pm.message` and can test it, set variables and send replies.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MessageScript {
+    /// A label for the log and test results (default: what it matches).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "is_default")]
+    #[ts(optional, as = "Option<MessageDirection>")]
+    pub direction: MessageDirection,
+    /// Socket.IO: only this event (empty: every event).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub event: String,
+    /// What the message (Socket.IO: its arguments as a JSON array) must match.
+    #[serde(default = "match_any", rename = "match", skip_serializing_if = "is_match_any")]
+    #[ts(optional, as = "Option<crate::server::MatchKind>")]
+    pub matcher: crate::server::MatchKind,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub pattern: String,
+    /// JavaScript, with `pm.message` and `pm.connection`.
+    #[serde(default)]
+    pub script: String,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    #[ts(optional, as = "Option<bool>")]
+    pub enabled: bool,
+}
+
+fn match_any() -> crate::server::MatchKind {
+    crate::server::MatchKind::Any
+}
+fn is_match_any(v: &crate::server::MatchKind) -> bool {
+    *v == crate::server::MatchKind::Any
+}
+
+impl Default for MessageScript {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            direction: MessageDirection::Received,
+            event: String::new(),
+            matcher: match_any(),
+            pattern: String::new(),
+            script: String::new(),
+            enabled: true,
+        }
+    }
+}
+
 /// Options of WebSocket requests.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -294,6 +365,10 @@ pub struct WebSocketOptions {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(optional, as = "Option<Vec<ConnectStep>>")]
     pub on_connect: Vec<ConnectStep>,
+    /// Scripts run on the messages that match, while the connection is open.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<MessageScript>>")]
+    pub on_message: Vec<MessageScript>,
     /// The JSON path whose value pairs a reply with the message it answers (empty: `$.id`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     #[ts(optional, as = "Option<String>")]
@@ -593,6 +668,25 @@ pub struct GrpcOptions {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(optional, as = "Option<Vec<String>>")]
     pub import_paths: Vec<String>,
+    /// Saved messages (JSON) for streaming calls: sent from the composer or by steps.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<SavedMessage>>")]
+    pub messages: Vec<SavedMessage>,
+    /// What a streaming call does once it is open: send saved messages, wait for replies (tests
+    /// in collection runs), keep sending one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<ConnectStep>>")]
+    pub on_connect: Vec<ConnectStep>,
+    /// End the client side once the steps are done (client and bidirectional streams). Collection
+    /// runs and agents always do.
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional, as = "Option<bool>")]
+    pub end_after_steps: bool,
+    /// Where a streamed file or the microphone puts its bytes in each message: a field of the
+    /// input type (`audioContent`), or a dotted path to a nested one.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(optional, as = "Option<String>")]
+    pub chunk_field: String,
 }
 
 /// JavaScript run before sending and after the response (Postman-compatible `pm` API).

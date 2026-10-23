@@ -1,7 +1,7 @@
-// WebSocket and Socket.IO requests: saved messages (Socket.IO: emits, with their event and
-// acknowledgement), the on-connect steps (send, wait for a reply, keep sending), and WebSocket
-// settings (subprotocols). Steps run in the backend on every connect; in collection runs each
-// wait is a test.
+// WebSocket, Socket.IO and gRPC stream requests: saved messages (Socket.IO: emits, with their
+// event and acknowledgement; gRPC: JSON messages), the on-connect steps (send, wait for a reply,
+// keep sending), and WebSocket settings (subprotocols). Steps run in the backend on every connect
+// (gRPC: once a stream is open); in collection runs each wait is a test.
 import { useEffect, useState } from "react";
 import { ArrowDown, ArrowUp, Bookmark, Hourglass, Plus, Repeat, Send, Trash2, Upload } from "lucide-react";
 import type { ConnectStep } from "../../bindings/ConnectStep";
@@ -13,6 +13,7 @@ import { Checkbox } from "../ui";
 import { patternProblem } from "../../lib/messageMatch";
 import { useRegexProblem } from "../../lib/regexCheck";
 import { freeName, loadIntoComposer, sendSaved } from "../../store/composer";
+import { sendMessage as sendGrpcMessage, useGrpc } from "../../store/grpc";
 import { type Tab, updateDraft, updateTab } from "../../store/tabs";
 import { useVariableNames } from "../../store/workspace";
 import { CodeEditor } from "../CodeEditor";
@@ -42,20 +43,23 @@ export interface Options {
 }
 
 const isSocketIo = (tab: Tab) => tab.draft.kind === "socketio";
+const isGrpc = (tab: Tab) => tab.draft.kind === "grpc";
 
 export function wsOptions(tab: Tab): WebSocketOptions {
   return tab.draft.websocket ?? {};
 }
 
-/** The request's saved messages and steps (WebSocket or Socket.IO). */
+/** The request's saved messages and steps (WebSocket, Socket.IO or gRPC). */
 export function liveOptions(tab: Tab): Options {
+  if (isGrpc(tab)) return tab.draft.grpc ?? {};
   return isSocketIo(tab) ? (tab.draft.socketio ?? {}) : (tab.draft.websocket ?? {});
 }
 
 function setOptions(tab: Tab, fn: (o: Options) => Options) {
-  updateDraft(tab.id, (r) =>
-    r.kind === "socketio" ? { ...r, socketio: { ...(r.socketio ?? {}), ...fn(r.socketio ?? {}) } } : { ...r, websocket: { ...(r.websocket ?? {}), ...fn(r.websocket ?? {}) } },
-  );
+  updateDraft(tab.id, (r) => {
+    if (r.kind === "grpc") return { ...r, grpc: { ...(r.grpc ?? {}), ...fn(r.grpc ?? {}) } };
+    return r.kind === "socketio" ? { ...r, socketio: { ...(r.socketio ?? {}), ...fn(r.socketio ?? {}) } } : { ...r, websocket: { ...(r.websocket ?? {}), ...fn(r.websocket ?? {}) } };
+  });
 }
 
 function setWsOptions(tab: Tab, fn: (o: WebSocketOptions) => WebSocketOptions) {
@@ -112,9 +116,12 @@ function MessageName({ name, taken, onRename }: { name: string; taken: (name: st
 export function MessagesTab({ tab }: KindPaneProps) {
   const { names } = useVariableNames();
   const io = isSocketIo(tab);
+  const grpc = isGrpc(tab);
   const o = liveOptions(tab);
   const messages = o.messages ?? [];
   const open = tab.stream.status === "open";
+  const call = useGrpc((st) => st.calls[tab.id]);
+  const grpcOpen = !!call && call.streaming && call.state !== "ended" && !call.clientEnded && !!call.method?.clientStreaming;
   const update = (i: number, patch: Partial<Omit<SavedMessage, "name">>) =>
     setOptions(tab, (w) => {
       const list = [...(w.messages ?? [])];
@@ -126,16 +133,26 @@ export function MessagesTab({ tab }: KindPaneProps) {
   const add = () =>
     setOptions(tab, (w) => ({
       ...w,
-      messages: [...(w.messages ?? []), { name: freeName((w.messages ?? []).map((m) => m.name), io ? "Emit" : "Message"), text: "", ...(io ? { event: "" } : {}) }],
+      messages: [
+        ...(w.messages ?? []),
+        { name: freeName((w.messages ?? []).map((m) => m.name), io ? "Emit" : "Message"), text: "", ...(io ? { event: "" } : {}), ...(grpc ? { format: "json" as const } : {}) },
+      ],
     }));
   const remove = (i: number) => setOptions(tab, (w) => ({ ...w, messages: (w.messages ?? []).filter((_, j) => j !== i) }));
   return (
     <div className="flex max-w-3xl flex-col gap-3 p-4" data-testid="ws-messages">
+      {grpc ? (
+        <p className="text-[12.5px] text-muted">
+          Messages (JSON of the method's input type) kept with this request, for streaming calls: sent by <b>On connect</b> steps once the stream is open,
+          or from the Message tab while it is. <code className="font-mono">{"{{variables}}"}</code> are filled in when one is sent.
+        </p>
+      ) : (
       <p className="text-[12.5px] text-muted">
         {io ? "Emits" : "Messages"} kept with this request. Send them from the composer's <Bookmark size={12} className="inline align-[-2px]" /> menu, or
         from <b>On connect</b> steps. <code className="font-mono">{"{{variables}}"}</code> are filled in when {io ? "one is emitted" : "a message is sent"}.
         {io && " JSON is the arguments (an array for several); Text is one string argument; Hex is one binary argument."}
       </p>
+      )}
       {messages.map((m, i) => (
         <div key={i} className="overflow-hidden rounded-xl border border-line bg-input" data-testid="ws-message">
           <div className="flex items-center gap-2 border-b border-line px-2 py-1.5">
@@ -155,11 +172,17 @@ export function MessagesTab({ tab }: KindPaneProps) {
                 </label>
               </>
             )}
-            <Segmented items={FORMATS} value={m.format ?? "text"} onChange={(format) => update(i, { format })} />
-            <IconButton label="Put in the composer" onClick={() => loadIntoComposer(tab.id, m)}>
-              <Upload size={13} />
-            </IconButton>
-            <IconButton label={open ? "Send now" : "Connect to send"} disabled={!open} onClick={() => void sendSaved(tab.id, m)}>
+            {!grpc && <Segmented items={FORMATS} value={m.format ?? "text"} onChange={(format) => update(i, { format })} />}
+            {!grpc && (
+              <IconButton label="Put in the composer" onClick={() => loadIntoComposer(tab.id, m)}>
+                <Upload size={13} />
+              </IconButton>
+            )}
+            <IconButton
+              label={grpc ? (grpcOpen ? "Send on the open stream" : "Open a client or bidirectional stream to send") : open ? "Send now" : "Connect to send"}
+              disabled={grpc ? !grpcOpen : !open}
+              onClick={() => void (grpc ? sendGrpcMessage(tab.id, m.text) : sendSaved(tab.id, m))}
+            >
               <Send size={13} />
             </IconButton>
             <IconButton label="Remove message" onClick={() => remove(i)}>
@@ -170,7 +193,7 @@ export function MessagesTab({ tab }: KindPaneProps) {
             <CodeEditor
               value={m.text}
               onChange={(text) => update(i, { text })}
-              language={m.format === "json" ? "json" : "text"}
+              language={m.format === "json" || grpc ? "json" : "text"}
               variables={m.format === "binary" ? undefined : names}
               lineNumbers={false}
               placeholder={
@@ -184,9 +207,9 @@ export function MessagesTab({ tab }: KindPaneProps) {
         <Button size="sm" icon={<Plus size={13} />} onClick={add}>
           {io ? "Add emit" : "Add message"}
         </Button>
-        {messages.length === 0 && <span className="text-[12px] text-faint">Or type one in the composer and choose “Save as message…”.</span>}
+        {messages.length === 0 && !grpc && <span className="text-[12px] text-faint">Or type one in the composer and choose “Save as message…”.</span>}
       </div>
-      {!io && (
+      {!io && !grpc && (
       <Field
         label="Match replies by"
         hint="A reply whose value at this JSON path equals that of a message you sent shows how long it took, in the log."
@@ -221,6 +244,7 @@ function newStep(type: ConnectStep["type"], first: string): ConnectStep {
 
 export function OnConnectTab({ tab }: KindPaneProps) {
   const io = isSocketIo(tab);
+  const grpc = isGrpc(tab);
   const o = liveOptions(tab);
   const steps = o.onConnect ?? [];
   const names = (o.messages ?? []).map((m) => m.name);
@@ -235,10 +259,28 @@ export function OnConnectTab({ tab }: KindPaneProps) {
   const add = (type: ConnectStep["type"]) => setSteps((s) => [...s, newStep(type, names[0] ?? "")]);
   return (
     <div className="flex max-w-3xl flex-col gap-3 p-4" data-testid="ws-on-connect">
+      {grpc ? (
+        <>
+          <p className="text-[12.5px] text-muted">
+            Runs in order once a streaming call is open: send messages, wait for the server's answers (matched as JSON, e.g.{" "}
+            <code className="font-mono">$.status == READY</code>), keep sending one. For server streams the Message tab's message goes first. In collection runs,{" "}
+            <code className="font-mono">zorvik run</code> and for AI agents the call runs to its end and each wait is a test.
+          </p>
+          <label className="flex items-center gap-2 text-[12.5px] text-muted">
+            <Checkbox
+              checked={tab.draft.grpc?.endAfterSteps ?? false}
+              onChange={(endAfterSteps) => updateDraft(tab.id, (r) => ({ ...r, grpc: { ...(r.grpc ?? {}), endAfterSteps: endAfterSteps || undefined } }))}
+              label="End the stream after the steps"
+            />
+            End the stream after the steps (client and bidirectional streams; runs always do)
+          </label>
+        </>
+      ) : (
       <p className="text-[12.5px] text-muted">
         Runs in order every time you connect: {io ? "join rooms, wait for the server's event" : "log in, subscribe, wait for the server's answer"}, keep a heartbeat going. A step that fails stops
         the rest (the connection stays open). In collection runs and <code className="font-mono">zorvik run</code>, each wait is a test.
       </p>
+      )}
       {steps.length > 0 && (
         <ol className="flex flex-col gap-1.5">
           {steps.map((step, i) => (

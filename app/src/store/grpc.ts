@@ -52,6 +52,8 @@ export interface GrpcCall {
   remoteAddr: string | null;
   /** Messages that could not be decoded, send failures (the newest MAX_ERRORS). */
   errors: string[];
+  /** What the call's On connect steps did (the newest MAX_ERRORS). */
+  notes: string[];
   /** The client side was ended (half-close). */
   clientEnded: boolean;
   unresolved: string[];
@@ -228,6 +230,7 @@ function newCall(id: string, method: GrpcMethod | null, streaming: boolean): Grp
     requestHeaders: [],
     remoteAddr: null,
     errors: [],
+    notes: [],
     clientEnded: false,
     unresolved: [],
   };
@@ -246,6 +249,7 @@ export function callFromInvoke(call: GrpcCall, r: GrpcInvokeResult): GrpcCall {
     requestHeaders: r.requestHeaders,
     remoteAddr: r.remoteAddr,
     errors: r.warnings,
+    notes: r.notes ?? [],
     clientEnded: true,
     unresolved: r.unresolved,
   };
@@ -263,6 +267,7 @@ export function applyEvents(call: GrpcCall, events: GrpcEvent[]): GrpcCall {
   let next = call;
   let messages: GrpcMessage[] | null = null;
   let errors: string[] | null = null;
+  let notes: string[] | null = null;
   for (const event of events) {
     switch (event.type) {
       case "headers":
@@ -274,6 +279,9 @@ export function applyEvents(call: GrpcCall, events: GrpcEvent[]): GrpcCall {
       case "error":
         (errors ??= [...call.errors]).push(event.message);
         break;
+      case "info":
+        (notes ??= [...call.notes]).push(event.text);
+        break;
       case "end":
         next = { ...next, state: "ended", status: event.status, trailers: event.trailers, timing: event.timing };
         break;
@@ -284,6 +292,7 @@ export function applyEvents(call: GrpcCall, events: GrpcEvent[]): GrpcCall {
     next = { ...next, messages: over ? messages.slice(over) : messages, dropped: call.dropped + over };
   }
   if (errors) next = { ...next, errors: errors.slice(-MAX_ERRORS) };
+  if (notes) next = { ...next, notes: notes.slice(-MAX_ERRORS) };
   return next;
 }
 

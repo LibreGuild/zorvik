@@ -45,6 +45,7 @@ const call: GrpcCall = {
   requestHeaders: [],
   remoteAddr: null,
   errors: [],
+  notes: [],
   clientEnded: false,
   unresolved: [],
 };

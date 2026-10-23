@@ -118,7 +118,7 @@ export function runnableRequests(tree: TreeNode[], folder: string): RequestEntry
     nodes = found[0].children;
     trail = [...found[1], found[0].name];
   }
-  return flattenRequests(nodes, trail).filter((r) => (r.kind === "http" || r.kind === "sse" || r.kind === "websocket" || r.kind === "socketio" || r.kind === "mcp") && !r.error);
+  return flattenRequests(nodes, trail).filter((r) => (r.kind === "http" || r.kind === "sse" || r.kind === "websocket" || r.kind === "socketio" || r.kind === "grpc" || r.kind === "mcp") && !r.error);
 }
 
 /** Requests in run order: the saved order first, then the others in sidebar order. */

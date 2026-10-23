@@ -166,7 +166,7 @@ Versions follow [SemVer](https://semver.org). While Zorvik is `0.x`, a minor rel
 
 You need:
 
-- **Rust** stable, 1.88 or newer
+- **Rust** stable, 1.90 or newer
 - **Node.js** 22 or newer
 - **macOS:** Xcode command line tools (`xcode-select --install`)
 - **Windows:** Visual Studio Build Tools with "Desktop development with C++", and WebView2 (already on Windows 10 and 11)

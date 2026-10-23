@@ -34,6 +34,10 @@ vi.mock("../lib/rpc", async (importOriginal) => {
       fileStreamStop: done(),
       wsRepeat: done(),
       wsStopRepeat: done(),
+      saveRequest: done(),
+      grpcSend: done(),
+      grpcCancel: done(),
+      grpcEnd: done(),
     },
   };
 });
@@ -186,6 +190,37 @@ describe("recording", () => {
   });
 });
 
+describe("streaming into a gRPC call", () => {
+  it("sends a file or the microphone on an open client stream, each chunk in the chunk field", async () => {
+    const { useGrpc } = await import("./grpc");
+    const { grpcChunk } = await import("./tabs");
+    expect(grpcChunk("audio.content", "AAE=")).toBe('{"audio":{"content":"AAE="}}');
+    const id = openDraft({ name: "s", seq: 1, method: "speech.Speech/Stream", url: "grpcs://h", kind: "grpc" });
+    patchFile(id, { path: "/a.raw", info: { name: "a.raw", size: 3200, wav: null }, chunkSize: 320, intervalMs: 10 });
+    // No stream open yet: nothing starts.
+    await startFileStream(id);
+    expect(mocked.fileStreamStart).not.toHaveBeenCalled();
+    const method = { path: "speech.Speech/Stream", inputType: "In", outputType: "Out", clientStreaming: true, serverStreaming: true, example: "{}" };
+    const call = { id: "call-1", method, streaming: true, state: "open", clientEnded: false } as unknown as import("./grpc").GrpcCall;
+    useGrpc.setState({ calls: { [id]: call } });
+    // The field that carries the bytes is needed first.
+    await startFileStream(id);
+    expect(mocked.fileStreamStart).not.toHaveBeenCalled();
+    updateTab(id, (t) => ({ draft: { ...t.draft, grpc: { chunkField: "audioContent" } } }));
+    await startFileStream(id);
+    expect(mocked.fileStreamStart).toHaveBeenCalledWith(expect.objectContaining({ connId: "call-1", message: { type: "grpc", field: "audioContent" } }));
+    // The microphone's chunks go out as gRPC messages, and recording stops when the client side ends.
+    await startRecording(id);
+    await vi.waitFor(() => expect(mocked.grpcSend).toHaveBeenCalledWith("call-1", JSON.stringify({ audioContent: "AQ==" })));
+    useGrpc.setState({ calls: { [id]: { ...call, clientEnded: true } } });
+    await vi.waitFor(() => expect(isRecording(id)).toBe(false));
+    // When the whole file has been sent, the stream ends (the server then gives its last answers).
+    useGrpc.setState({ calls: { [id]: call } });
+    for (const h of handlers) h({ type: "fileStream", connId: "call-1", event: { type: "ended", progress: { sent: 3200, messages: 10, pass: 1, position: 3200, total: 3200 }, stopped: false, error: null } });
+    await vi.waitFor(() => expect(mocked.grpcEnd).toHaveBeenCalledWith("call-1"));
+  });
+});
+
 describe("saved messages, repeating sends and closing", () => {
   it("saves the composer as a message, loads one back and sends one every so often", async () => {
     const id = await connected({ name: "w", seq: 1, method: "GET", url: "ws://h", kind: "websocket", body: { type: "json", text: '{"op": 1}' } });
@@ -205,6 +240,21 @@ describe("saved messages, repeating sends and closing", () => {
     await stopRepeat(id);
     expect(mocked.wsStopRepeat).toHaveBeenCalled();
     expect(composerOf(id).repeat).toBeNull();
+  });
+
+  it("keeps a saved emit in the request's file at once, leaving other draft changes unsaved", async () => {
+    const saved: Request = { name: "io", seq: 1, method: "GET", url: "http://h", kind: "socketio", socketio: { event: "join" } };
+    const id = openDraft(structuredClone(saved));
+    updateTab(id, () => ({ path: "io.yaml", saved }));
+    updateTab(id, (t) => ({ draft: { ...t.draft, url: "http://changed", body: { type: "json", text: '["lobby"]' } } }));
+    const saving = saveComposerAsMessage(id);
+    await answer("Join");
+    await saving;
+    const emit = { name: "Join", format: "json", text: '["lobby"]', event: "join" };
+    expect(mocked.saveRequest).toHaveBeenCalledWith("io.yaml", { ...saved, socketio: { event: "join", messages: [emit] } });
+    expect(tabById(id).saved?.socketio?.messages).toEqual([emit]);
+    expect(tabById(id).saved?.url).toBe("http://h");
+    expect(tabById(id).draft.socketio?.messages).toEqual([emit]);
   });
 
   it("stops showing a repeat the backend stopped or whose connection closed", async () => {

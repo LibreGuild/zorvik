@@ -197,6 +197,9 @@ pub enum StreamEvent {
     /// AI agents: connections, activity, questions for the user, what to show.
     #[serde(rename_all = "camelCase")]
     Agent { event: crate::agents::AgentEvent },
+    /// Scripts of a live connection changed variables (the UI reads them again).
+    #[serde(rename_all = "camelCase")]
+    VariablesChanged {},
     /// Settings changed in the backend (e.g. the user allowed AI agents).
     #[serde(rename_all = "camelCase")]
     SettingsChanged { settings: zorvik_workspace::settings::Settings },

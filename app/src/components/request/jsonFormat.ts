@@ -78,3 +78,46 @@ export function beautifyJson(text: string): string | null {
   }
   return out;
 }
+
+/** Text that looks like a JSON object or array. */
+function looksLikeJson(text: string): boolean {
+  const t = text.trim();
+  return (t.startsWith("{") && t.endsWith("}")) || (t.startsWith("[") && t.endsWith("]"));
+}
+
+/**
+ * A received message, pretty: JSON re-indented, and string values that hold JSON themselves
+ * (a Socket.IO argument sent as `JSON.stringify(...)`, a message wrapped in another) expanded in
+ * place. Null when the text isn't JSON. Without such strings the text keeps its numbers exactly
+ * (see `beautifyJson`); with them, it is parsed (integers beyond 2^53 are rounded).
+ */
+export function prettyMessage(text: string): string | null {
+  const plain = beautifyJson(text);
+  if (plain === null) return null;
+  let nested = false;
+  const expand = (value: unknown, depth: number): unknown => {
+    if (typeof value === "string" && depth < 20 && looksLikeJson(value)) {
+      try {
+        const inner: unknown = JSON.parse(value);
+        nested = true;
+        return expand(inner, depth + 1);
+      } catch {
+        return value;
+      }
+    }
+    if (Array.isArray(value)) return value.map((v) => expand(v, depth));
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, expand(v, depth)]));
+    }
+    return value;
+  };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    // Variables outside strings: valid for beautifyJson only.
+    return plain;
+  }
+  const expanded = expand(parsed, 0);
+  return nested ? JSON.stringify(expanded, null, 2) : plain;
+}

@@ -98,6 +98,29 @@ fn string(description: &str) -> Value {
     json!({ "type": "string", "description": description })
 }
 
+/// `send_request`'s `stream`: when reading an event stream, subscription or gRPC stream stops.
+/// `None` when the agent didn't give it.
+fn stream_arg(c: &Call<'_>) -> Result<Option<zorvik_workspace::formats::StreamUntil>, Fail> {
+    #[derive(Deserialize, Default)]
+    #[serde(rename_all = "camelCase", default)]
+    struct Stream {
+        until_event: String,
+        max_events: Option<u32>,
+        timeout_ms: Option<u64>,
+    }
+    let stream: Stream = match c.args.get("stream") {
+        Some(v) if !v.is_null() => {
+            serde_json::from_value(v.clone()).map_err(|e| Fail::Invalid(format!("stream: {e}")))?
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(zorvik_workspace::formats::StreamUntil {
+        event: stream.until_event.trim().to_string(),
+        max_events: stream.max_events.unwrap_or(100),
+        timeout_ms: stream.timeout_ms.unwrap_or(10_000).clamp(100, MAX_SSE_WAIT_MS),
+    }))
+}
+
 fn request_schema() -> Value {
     let kv = json!({
         "type": "array",
@@ -140,7 +163,22 @@ fn request_schema() -> Value {
                 "postResponse": string("JavaScript run after the response; tests: pm.test('ok', () => pm.response.to.have.status(200))."),
             }), &[]),
             "settings": obj(json!({ "timeoutMs": { "type": "integer" }, "followRedirects": { "type": "boolean" }, "verifyTls": { "type": "boolean" } }), &[]),
-            "grpc": obj(json!({ "protoFiles": { "type": "array", "items": { "type": "string" }, "description": ".proto files (relative to the workspace folder). Empty: server reflection." } }), &[]),
+            "grpc": obj(json!({
+                "protoFiles": { "type": "array", "items": { "type": "string" }, "description": ".proto files (relative to the workspace folder). Empty: server reflection." },
+                "importPaths": { "type": "array", "items": { "type": "string" }, "description": "Folders searched for imports (relative to the workspace folder)." },
+                "messages": {
+                    "type": "array",
+                    "description": "Saved messages for streaming calls (JSON of the method's input type), sent by onConnect steps.",
+                    "items": obj(json!({ "name": { "type": "string" }, "format": { "type": "string", "enum": ["json"] }, "text": string("The JSON message; {{variables}} are filled in when it is sent.") }), &["name", "text"]),
+                },
+                "onConnect": {
+                    "type": "array",
+                    "description": "Steps once a stream is open, as for websocket requests: {\"type\": \"send\", \"message\": \"<saved message name>\"}, {\"type\": \"wait\", \"match\": \"json\", \"pattern\": \"$.status == READY\", \"timeoutMs\": 5000} (matched against each received message as JSON), or {\"type\": \"repeat\", \"message\": \"<name>\", \"everyMs\": 1000}. Waits are tests in collection runs and send_request.",
+                    "items": { "type": "object" },
+                },
+                "endAfterSteps": { "type": "boolean", "description": "In the app: end the client side when the steps are done (runs and send_request always do)." },
+                "chunkField": string("In the app: the field of the input message that a streamed file or the microphone fills with each chunk's bytes (base64), e.g. audioContent."),
+            }), &[]),
             "socketio": obj(json!({
                 "path": string("The server's Socket.IO path (default /socket.io/)."),
                 "auth": string("The connection's auth payload as JSON text, e.g. {\"token\": \"{{token}}\"}."),
@@ -161,6 +199,11 @@ fn request_schema() -> Value {
                 "onConnect": {
                     "type": "array",
                     "description": "Steps right after connecting, as for websocket requests: {\"type\": \"send\", \"message\": \"<saved emit name>\"}, {\"type\": \"wait\", \"event\": \"joined\", \"match\": \"json\", \"pattern\": \"$[0].room == lobby\", \"timeoutMs\": 5000} (the pattern is matched against the event's arguments as a JSON array; no event: any event), or {\"type\": \"repeat\", \"message\": \"<name>\", \"everyMs\": 30000}. In collection runs each wait is a test.",
+                    "items": { "type": "object" },
+                },
+                "onMessage": {
+                    "type": "array",
+                    "description": "Message scripts: JavaScript run on each message that matches, with pm.message (text(), json(), direction, event, args for Socket.IO) and pm.connection.send(data) (Socket.IO: pm.connection.emit(event, ...args)); pm.test, pm.environment and the rest of the pm API work. Each: {\"direction\": \"received\" (default) | \"sent\" | \"both\", \"event\": \"<Socket.IO event>\", \"match\": \"any\" (default) | \"contains\" | \"exact\" | \"regex\" | \"json\", \"pattern\": \"...\", \"name\": \"...\", \"script\": \"...\", \"enabled\": true}. In collection runs their tests count. Before connecting, the request's scripts.preRequest runs.",
                     "items": { "type": "object" },
                 },
                 "autoAck": string("When set, events from the server that ask for an acknowledgement get one with these arguments (JSON: an array for several, else one), e.g. [\"ok\"]."),
@@ -187,6 +230,11 @@ fn request_schema() -> Value {
                 "onConnect": {
                     "type": "array",
                     "description": "Steps right after connecting, in order; the first failure skips the rest. Each is one of {\"type\": \"send\", \"message\": \"<saved message name>\"}, {\"type\": \"wait\", \"match\": \"contains\", \"pattern\": \"welcome\", \"timeoutMs\": 5000} (match: any, contains, exact, regex or json, where the pattern is a condition like $.type == \"welcome\"; timeoutMs default 5000), or {\"type\": \"repeat\", \"message\": \"<saved message name>\", \"everyMs\": 30000} (a heartbeat). In collection runs each wait is a test.",
+                    "items": { "type": "object" },
+                },
+                "onMessage": {
+                    "type": "array",
+                    "description": "Message scripts: JavaScript run on each message that matches, with pm.message (text(), json(), direction, event, args for Socket.IO) and pm.connection.send(data) (Socket.IO: pm.connection.emit(event, ...args)); pm.test, pm.environment and the rest of the pm API work. Each: {\"direction\": \"received\" (default) | \"sent\" | \"both\", \"event\": \"<Socket.IO event>\", \"match\": \"any\" (default) | \"contains\" | \"exact\" | \"regex\" | \"json\", \"pattern\": \"...\", \"name\": \"...\", \"script\": \"...\", \"enabled\": true}. In collection runs their tests count. Before connecting, the request's scripts.preRequest runs.",
                     "items": { "type": "object" },
                 },
                 "replyKey": string("The JSON path whose value pairs a reply with the message it answers, shown as the reply time in the log (default $.id)."),
@@ -517,7 +565,7 @@ fn defs() -> Vec<Def> {
         Def {
             name: "send_request",
             title: "Send a request",
-            description: "Send a saved request (`path`), a saved one with changes (`path` + `request`: only the fields given change, nothing is saved), or an unsaved one (`request`), with its scripts and tests, and return the response. HTTP, GraphQL, gRPC (unary), DNS, MCP (one tool call, resource read or prompt; the user is asked before a program starts), and Server-Sent Events: an SSE request is read until the event named in stream.untilEvent, stream.maxEvents events, or stream.timeoutMs, and returns the events. A GraphQL subscription is read the same way: each result is an event named \"next\". For a large JSON response, pass `filter` (JSONPath or jq) to get only the part you need: it runs on the whole body. The user sees it in Zorvik.",
+            description: "Send a saved request (`path`), a saved one with changes (`path` + `request`: only the fields given change, nothing is saved), or an unsaved one (`request`), with its scripts and tests, and return the response. HTTP, GraphQL, gRPC (unary, and streams run to their end: the message, or the grpc.onConnect steps, then the client side ends; read until stream.maxEvents messages or stream.timeoutMs; a gRPC request's scripts run only in run_collection), DNS, MCP (one tool call, resource read or prompt; the user is asked before a program starts), and Server-Sent Events: an SSE request is read until the event named in stream.untilEvent, stream.maxEvents events, or stream.timeoutMs, and returns the events. A GraphQL subscription is read the same way: each result is an event named \"next\". For a large JSON response, pass `filter` (JSONPath or jq) to get only the part you need: it runs on the whole body. The user sees it in Zorvik.",
             schema: obj(
                 json!({
                     "path": path("Saved request"),
@@ -530,8 +578,8 @@ fn defs() -> Vec<Def> {
                     }), &["language", "expression"]),
                     "stream": obj(json!({
                         "untilEvent": string("SSE: stop after the first event with this name (\"message\" for events without a name; \"next\" for a subscription's results)."),
-                        "maxEvents": { "type": "integer", "description": "SSE and subscriptions: stop after this many events (default 100; 0 = only the time limit)." },
-                        "timeoutMs": { "type": "integer", "description": "SSE and subscriptions: stop after this long (default 10000, at most 120000)." },
+                        "maxEvents": { "type": "integer", "description": "SSE, subscriptions and gRPC streams: stop after this many events or received messages (default 100; 0 = only the time limit)." },
+                        "timeoutMs": { "type": "integer", "description": "SSE, subscriptions and gRPC streams: stop after this long (default 10000, at most 120000)." },
                     }), &[]),
                 }),
                 &[],
@@ -2075,6 +2123,11 @@ impl Api {
                 Ok(Done { value, detail, target })
             }
             RequestKind::Grpc => {
+                // A stream reads as long as the agent asked (default: the request's settings).
+                let mut request = request.clone();
+                if let Some(until) = stream_arg(c)? {
+                    request.settings.stream = Some(until);
+                }
                 let params = json!({ "requestId": request_id, "request": request, "path": path });
                 let result = self
                     .cancellable(&c.cancel, &request_id, self.call("grpc.invoke", params))
@@ -2088,14 +2141,35 @@ impl Api {
                 });
                 let redactor = self.redactor(ws);
                 let status = result["status"]["name"].as_str().unwrap_or_default().to_string();
-                let value = json!({
+                let messages = |direction: &str| {
+                    result["messages"].as_array().map(|m| {
+                        m.iter()
+                            .filter(|x| x["direction"] == direction)
+                            .map(|x| {
+                                let text = x["json"].as_str().unwrap_or("null");
+                                redact_value(&serde_json::from_str(text).unwrap_or(Value::Null), &redactor)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                };
+                let mut value = json!({
                     "status": result["status"],
-                    "messages": result["messages"].as_array().map(|m| m.iter().map(|x| redact_value(&x["json"], &redactor)).collect::<Vec<_>>()),
+                    "messages": messages("received"),
                     "headers": result["headers"], "trailers": result["trailers"],
                     "timeMs": result["timing"]["totalMs"],
                     "warnings": result["warnings"],
                     "unresolvedVariables": result["unresolved"],
                 });
+                // A stream: what was sent, the steps (waits are tests) and why reading stopped.
+                // (Unary answers hold only the received message.)
+                if let Some(sent) = messages("sent").filter(|s| !s.is_empty()) {
+                    value["sent"] = Value::Array(sent);
+                }
+                for key in ["steps", "notes"] {
+                    if !result[key].is_null() {
+                        value[key] = result[key].clone();
+                    }
+                }
                 Ok(Done { value: redact_value(&value, &redactor), detail: status, target })
             }
             RequestKind::Dns => {
@@ -2132,24 +2206,7 @@ impl Api {
         path: Option<&str>,
         target: Option<AgentTarget>,
     ) -> Outcome {
-        #[derive(Deserialize, Default)]
-        #[serde(rename_all = "camelCase", default)]
-        struct Stream {
-            until_event: String,
-            max_events: Option<u32>,
-            timeout_ms: Option<u64>,
-        }
-        let stream: Stream = match c.args.get("stream") {
-            Some(v) if !v.is_null() => {
-                serde_json::from_value(v.clone()).map_err(|e| Fail::Invalid(format!("stream: {e}")))?
-            }
-            _ => Stream::default(),
-        };
-        let until = zorvik_workspace::formats::StreamUntil {
-            event: stream.until_event.trim().to_string(),
-            max_events: stream.max_events.unwrap_or(100),
-            timeout_ms: stream.timeout_ms.unwrap_or(10_000).clamp(100, MAX_SSE_WAIT_MS),
-        };
+        let until = stream_arg(c)?.unwrap_or_default();
         let started = Instant::now();
         let reading = async {
             match request.is_graphql_subscription() {

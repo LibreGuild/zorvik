@@ -582,6 +582,8 @@ async fn agent_talks_over_a_websocket() {
     assert_eq!(steps.len(), 2, "{text}");
     assert!(steps.iter().all(|s| s["passed"] == true), "{text}");
     assert_eq!(steps[1]["message"]["text"], "{\"id\": 1, \"q\": \"5\"}");
+    // The saved messages it can send by name.
+    assert_eq!(opened["savedMessages"], json!([{ "name": "Ask", "format": "json" }]), "{text}");
     let id = opened["connectionId"].as_str().unwrap().to_string();
 
     // A reply that came back before the wait still counts.

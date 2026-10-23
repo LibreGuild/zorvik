@@ -159,6 +159,7 @@ describe("helpers", () => {
       requestHeaders: [],
       remoteAddr: null,
       errors: [],
+      notes: [],
       clientEnded: false,
       unresolved: [],
     };
@@ -166,6 +167,8 @@ describe("helpers", () => {
     call = applyEvent(call, { type: "headers", headers: [{ name: "content-type", value: "application/grpc" }], timestamp: 1 });
     call = applyEvent(call, { type: "message", message: { direction: "received", json: "{}", size: 0, timestamp: 2 } });
     call = applyEvent(call, { type: "error", message: "bad message" });
+    call = applyEvent(call, { type: "info", text: "On connect: sent Hi", timestamp: 3 });
+    expect(call.notes).toEqual(["On connect: sent Hi"]);
     expect(call.headers).toHaveLength(1);
     expect(call.messages).toHaveLength(1);
     expect(call.errors).toEqual(["bad message"]);

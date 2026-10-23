@@ -194,10 +194,13 @@ async fn unary_calls_carry_metadata_auth_and_variables_and_land_in_history() {
     assert_eq!(history[1]["method"], "zorvik.test.v1.Echo/Unary");
     assert_eq!(history[1]["request"]["kind"], "grpc");
 
-    // Streaming methods need grpc.start; unknown methods are named.
-    let request = grpc_request(&url, "zorvik.test.v1.Echo/Bidi", "{}");
-    let err = h.err("grpc.invoke", json!({ "requestId": "r4", "request": request })).await;
-    assert!(err.message.contains("streaming"), "{}", err.message);
+    // Streaming methods run to their end in one go (the message is sent, then the stream ends);
+    // unknown methods are named.
+    let request = grpc_request(&url, "zorvik.test.v1.Echo/Bidi", r#"{"message": "solo"}"#);
+    let r = h.ok("grpc.invoke", json!({ "requestId": "r4", "request": request })).await;
+    assert_eq!(r["status"]["name"], "OK");
+    let messages = r["messages"].as_array().unwrap();
+    assert_eq!(messages.iter().map(|m| m["direction"].clone()).collect::<Vec<_>>(), [json!("sent"), json!("received")]);
     let request = grpc_request(&url, "zorvik.test.v1.Echo/Nope", "{}");
     let err = h.err("grpc.invoke", json!({ "requestId": "r5", "request": request })).await;
     assert!(err.message.contains("no method 'Nope'"), "{}", err.message);
@@ -271,4 +274,175 @@ async fn streaming_sessions() {
     let err = h.err("grpc.start", json!({ "sessionId": "s5", "request": request })).await;
     assert!(err.message.contains("EchoRequest"), "{}", err.message);
     assert!(h.grpc_events("s5").is_empty());
+}
+
+#[tokio::test]
+async fn stream_steps_live_in_one_go_and_in_runs() {
+    let server = GrpcTestServer::start().await;
+    let h = Harness::new().await;
+    let url = format!("grpc://{}", server.addr);
+    let env = h
+        .ok("env.create", json!({ "environment": { "name": "Dev", "variables": [{ "key": "who", "value": "ada" }] } }))
+        .await;
+    h.ok("env.setActive", json!({ "id": env })).await;
+    let mut request = grpc_request(&url, "zorvik.test.v1.Echo/Bidi", "");
+    request["grpc"] = json!({
+        "messages": [
+            { "name": "Hi", "format": "json", "text": "{\"message\": \"hi {{who}}\"}" },
+            { "name": "Bye", "format": "json", "text": "{\"message\": \"bye\"}" },
+        ],
+        "onConnect": [
+            { "type": "send", "message": "Hi" },
+            { "type": "wait", "match": "json", "pattern": "$.message == hi ada" },
+            { "type": "send", "message": "Bye" },
+            { "type": "wait", "match": "contains", "pattern": "bye" },
+        ],
+        "endAfterSteps": true,
+    });
+
+    // Live: the steps run once the stream is open, then the client side ends.
+    h.ok("grpc.start", json!({ "sessionId": "live", "request": request })).await;
+    let events = h.session_events("live").await;
+    assert!(end_status(&events).is_ok());
+    assert_eq!(
+        received(&events).iter().map(|m| m["message"].clone()).collect::<Vec<_>>(),
+        [json!("hi ada"), json!("bye")]
+    );
+    let notes: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            GrpcEvent::Info { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(notes.contains(&"On connect: sent Hi".to_string()), "{notes:?}");
+    assert!(notes.iter().any(|n| n.starts_with("On connect: ended the stream")), "{notes:?}");
+
+    // In one go (agents): the waits are tests.
+    let r = h.ok("grpc.invoke", json!({ "requestId": "once", "request": request })).await;
+    assert_eq!(r["status"]["name"], "OK");
+    let steps = r["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 2);
+    assert!(steps.iter().all(|s| s["passed"] == true), "{steps:?}");
+
+    // A server stream stops being read after `settings.stream.maxEvents` messages, without failing.
+    let mut endless =
+        grpc_request(&url, "zorvik.test.v1.Echo/ServerStream", r#"{"message": "tick", "count": 50, "delayMs": 5}"#);
+    endless["settings"] = json!({ "stream": { "maxEvents": 3, "timeoutMs": 5000 } });
+    let r = h.ok("grpc.invoke", json!({ "requestId": "few", "request": endless })).await;
+    assert_eq!(r["status"]["name"], "OK", "{r}");
+    let got = r["messages"].as_array().unwrap().iter().filter(|m| m["direction"] == "received").count();
+    assert_eq!(got, 3);
+    assert!(r["notes"].as_array().unwrap().iter().any(|n| n == "Stopped reading after 3 messages"), "{r}");
+
+    // Collection runs send gRPC calls: the steps' waits and the scripts' tests count.
+    let folder = h.ok("folder.create", json!({ "parent": "", "name": "Calls" })).await;
+    let mut unary = grpc_request(&url, "zorvik.test.v1.Echo/Unary", r#"{"message": "x"}"#);
+    unary["name"] = json!("Unary");
+    unary["scripts"] =
+        json!({ "postResponse": "pm.test('echo', () => pm.expect(pm.response.json().message).to.eql('x'));" });
+    h.ok("request.create", json!({ "parent": folder, "request": unary })).await;
+    request["name"] = json!("Chat");
+    h.ok("request.create", json!({ "parent": folder, "request": request })).await;
+    let mut failing = grpc_request(&url, "zorvik.test.v1.Echo/Fail", "{}");
+    failing["name"] = json!("Fails");
+    h.ok("request.create", json!({ "parent": folder, "request": failing })).await;
+    let started = h.ok("runner.start", json!({ "folder": folder })).await;
+    let run_id = started["runId"].as_str().unwrap().to_string();
+    let mut results = Vec::new();
+    for _ in 0..250 {
+        results =
+            h.events
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|e| match e {
+                    StreamEvent::Runner {
+                        run_id: r, event: zorvik_api::runner::RunEvent::Result { result }, ..
+                    } if *r == run_id => Some(serde_json::to_value(result).unwrap()),
+                    _ => None,
+                })
+                .collect();
+        if results.len() == 3 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(40)).await;
+    }
+    assert_eq!(results.len(), 3, "{results:?}");
+    assert_eq!(results[0]["passed"], true, "{}", results[0]);
+    assert_eq!(results[0]["status"], 200);
+    assert_eq!(results[0]["method"], "gRPC");
+    assert_eq!(results[0]["tests"][0]["name"], "echo");
+    assert_eq!(results[1]["passed"], true, "{}", results[1]);
+    assert_eq!(results[1]["tests"].as_array().unwrap().len(), 2);
+    assert_eq!(results[2]["passed"], false, "a non-OK status fails: {}", results[2]);
+}
+
+#[tokio::test]
+async fn a_file_streams_into_a_grpc_stream_one_field_per_message() {
+    let server = GrpcTestServer::start().await;
+    let h = Harness::new().await;
+    let url = format!("grpc://{}", server.addr);
+    let file = h.ws_dir.path().join("audio.raw");
+    std::fs::write(&file, b"0123456789").unwrap();
+    let request = grpc_request(&url, "zorvik.test.v1.Echo/Bidi", "");
+    h.ok("grpc.start", json!({ "sessionId": "audio", "request": request })).await;
+    let started = h
+        .ok(
+            "fileStream.start",
+            json!({ "connId": "audio", "path": file, "chunkSize": 4, "intervalMs": 5,
+                    "message": { "type": "grpc", "field": "data" } }),
+        )
+        .await;
+    assert_eq!(started["total"], 10);
+    // Each chunk went out as {"data": <base64>} and the echo server answered each.
+    for _ in 0..250 {
+        if received(&h.grpc_events("audio")).len() == 3 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let sent: Vec<Value> = h
+        .grpc_events("audio")
+        .iter()
+        .filter_map(|e| match e {
+            GrpcEvent::Message { message } if message.direction == zorvik_engine::Direction::Sent => {
+                serde_json::from_str::<Value>(&message.json).ok().map(|m| m["data"].clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sent, [json!("MDEyMw=="), json!("NDU2Nw=="), json!("ODk=")]);
+    assert_eq!(received(&h.grpc_events("audio")).len(), 3);
+    h.ok("grpc.end", json!({ "sessionId": "audio" })).await;
+    assert!(end_status(&h.session_events("audio").await).is_ok());
+
+    // A field the input type doesn't have fails the stream; an empty one isn't accepted.
+    h.ok("grpc.start", json!({ "sessionId": "bad", "request": grpc_request(&url, "zorvik.test.v1.Echo/Bidi", "") }))
+        .await;
+    let err = h
+        .err("fileStream.start", json!({ "connId": "bad", "path": file, "chunkSize": 4, "intervalMs": 5, "message": { "type": "grpc", "field": " " } }))
+        .await;
+    assert!(err.message.contains("audioContent"), "{}", err.message);
+    h.ok("fileStream.start", json!({ "connId": "bad", "path": file, "chunkSize": 4, "intervalMs": 5, "message": { "type": "grpc", "field": "nope" } }))
+        .await;
+    let ended = || {
+        h.events.0.lock().unwrap().iter().find_map(|e| match e {
+            StreamEvent::FileStream { conn_id, event } if conn_id == "bad" => {
+                let v = serde_json::to_value(event).unwrap();
+                (v["type"] == "ended").then_some(v)
+            }
+            _ => None,
+        })
+    };
+    for _ in 0..250 {
+        if ended().is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let ended = ended().expect("the stream ended");
+    assert!(ended["error"].as_str().unwrap().contains("nope"), "{ended}");
+    h.ok("grpc.cancel", json!({ "sessionId": "bad" })).await;
 }

@@ -49,11 +49,12 @@ Changes made while a run is in progress apply to the next run.
 | MCP calls | Sent: each connects to the MCP server, makes its call (a tool, a resource or a prompt) and disconnects; its tests get the answer as the body. A program (stdio server) starts only if you allowed it in the app; `zorvik run` needs `--allow-programs`. See [MCP client](../../mcp/client/#in-runs-the-cli-and-for-agents). |
 | WebSocket | Connected: the request's **On connect** steps run (each wait is a test), then it closes. See [WebSocket in collection runs](../../protocols/websocket/#in-collection-runs). |
 | Socket.IO | Connected: the request's **On connect** steps run (each wait for an event is a test), then it disconnects. See [Socket.IO in collection runs](../../protocols/socketio/#in-collection-runs). |
+| gRPC | Called: unary calls send the message; streams run their **On connect** steps (each wait is a test) and end. See [gRPC in collection runs](../../protocols/grpc/#in-collection-runs). |
 | TCP, UDP, MQTT | Skipped: they are live sessions |
-| gRPC, DNS | Skipped: they don't run in the collection runner |
+| DNS | Skipped: it doesn't run in the collection runner |
 
 :::note
-The Runner tab in the app, `zorvik run` and runs an AI agent starts all send HTTP, GraphQL, SSE, WebSocket, Socket.IO and MCP requests.
+The Runner tab in the app, `zorvik run` and runs an AI agent starts all send HTTP, GraphQL, SSE, WebSocket, Socket.IO, gRPC and MCP requests.
 :::
 
 Skipped requests are listed in `zorvik run` output and reports with the reason (see [skip reasons](../reports/#skip-reasons)). They don't count as passed or failed, and they don't wait for the delay.
@@ -129,7 +130,7 @@ The results side shows:
 - **Export** (after the run ends): **JSON report…** or **JUnit XML…**. See [Run reports](../reports/).
 - **One group per iteration** (named **Iteration N**, or **Requests** for a single iteration), with its counts. Groups with failures open by themselves.
 - **One row per request**: a passed, failed or skipped mark, the method and name, the error or skip reason, the number of sends for "repeat until" (for example **3×**), tests passed/total, the status code and the time.
-- **Click a row** to see the URL that was sent, the size, errors, undefined variables, each test with its error, and the console output.
+- **Click a row** to see the URL that was sent, the size, errors, undefined variables, each test with its error, and the console output. **Request** shows what was sent (the headers as sent, and the body), and **Response** what came back (status, protocol, time, size, headers and the body, JSON pretty-printed); a request that couldn't be sent shows what it would have sent and the error. Secret values show as `{{name}}`. The app keeps the last runs' details (the first 64 KB of each body); older ones say to run again.
 
 When a run finishes, a notification sums it up, for example **"Users" passed** with the request and test counts.
 

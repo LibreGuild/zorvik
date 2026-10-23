@@ -17,6 +17,7 @@
   var MAX_RENDER = 16 * 1024 * 1024;
   var MAX_VISUALIZATION = 5 * 1024 * 1024;
   var MAX_TYPED_DEPTH = 100;
+  var MAX_SENDS = 100;
 
   // ---- helpers ----------------------------------------------------------------
 
@@ -2644,6 +2645,58 @@
         },
       },
     };
+    // Message scripts: the message, and sending on its connection.
+    var sends = [];
+    if (input.message) {
+      var m = input.message;
+      var text = m.text === undefined ? null : m.text;
+      var parsed;
+      pm.message = {
+        direction: m.direction,
+        event: m.event === undefined ? undefined : m.event,
+        size: m.size,
+        timestamp: m.timestamp,
+        /** The message as text (binary messages: their bytes as latin-1 text). */
+        text: function () {
+          return text !== null ? text : m.base64 ? atob(m.base64) : '';
+        },
+        /** The message parsed as JSON (Socket.IO: the arguments array). */
+        json: function () {
+          if (parsed === undefined) parsed = jsonParse(pm.message.text());
+          return parsed;
+        },
+        isBinary: text === null,
+      };
+      // Socket.IO: the event's arguments.
+      if (m.event !== undefined) {
+        define(pm.message, 'args', function () {
+          try {
+            var a = pm.message.json();
+            return Array.isArray(a) ? a : [a];
+          } catch (e) {
+            return [];
+          }
+        });
+      }
+      var queue = function (entry) {
+        if (sends.length >= MAX_SENDS) throw new Error('pm.connection: at most ' + MAX_SENDS + ' messages per script run');
+        sends.push(entry);
+      };
+      pm.connection = {
+        /** Send a message (objects and arrays as JSON). Socket.IO: emits `message`. */
+        send: function (data) {
+          var t = typeof data === 'string' ? data : jsonStringify(data === undefined ? null : data);
+          if (m.event !== undefined) queue({ event: 'message', text: jsonStringify([typeof data === 'string' ? data : jsonParse(t)]) });
+          else queue({ text: t });
+        },
+        /** Socket.IO: emit `event` with these arguments. */
+        emit: function (event) {
+          if (m.event === undefined) throw new Error('pm.connection.emit is for Socket.IO connections; use pm.connection.send');
+          var args = Array.prototype.slice.call(arguments, 1);
+          queue({ event: String(event), text: jsonStringify(args.map(function (a) { return a === undefined ? null : a; })) });
+        },
+      };
+    }
     var cookies = cookieList(input.cookies || []);
     cookies.jar = function () {
       return cookieJar(host);
@@ -2756,6 +2809,7 @@
         nextRequest: nextRequest,
         skipRequest: skip,
         visualization: visualization,
+        sends: sends,
       };
       if (dropped) {
         out.console.push({ level: 'warn', message: dropped + ' more console messages were not kept (limit ' + MAX_CONSOLE + ').' });

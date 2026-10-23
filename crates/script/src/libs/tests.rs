@@ -12,6 +12,7 @@ fn pre() -> ScriptInput {
         response: None,
         variables: Variables::default(),
         cookies: Vec::new(),
+        message: None,
     }
 }
 

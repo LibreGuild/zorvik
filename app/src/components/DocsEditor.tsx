@@ -1,11 +1,13 @@
 // Docs: Markdown notes about a request, folder, workspace, server or load test. Shown
 // rendered (Preview) when there is text; Edit (the switch, a double-click or Enter on the
-// preview) opens the text. Rendering makes React elements only (see lib/markdown).
+// preview) opens the text. Rendering makes React elements only (see lib/markdown), except ```mermaid
+// blocks: Mermaid draws those (MermaidDiagram, strict mode).
 import { memo, useMemo, useState, type ReactNode } from "react";
 import { AlertOctagon, AlertTriangle, Image as ImageIcon, Info, Lightbulb, MessageSquareWarning, Pencil } from "lucide-react";
 import { type Alert, type Block, type Inline, inlineImage, parseMarkdown, previewPart, safeHref } from "../lib/markdown";
 import { openExternal } from "../lib/platform";
 import { CodeEditor } from "./CodeEditor";
+import { MermaidDiagram } from "./MermaidDiagram";
 import { Button, cx, Segmented } from "./ui";
 
 type Mode = "preview" | "edit";
@@ -130,6 +132,7 @@ function BlockView({ block, tight }: { block: Block; tight?: boolean }) {
         </p>
       );
     case "code":
+      if (block.lang === "mermaid") return <MermaidDiagram code={block.code} />;
       return (
         <pre className="my-3 overflow-x-auto rounded-lg border border-line bg-panel px-3 py-2 font-mono text-[12px] leading-relaxed text-fg first:mt-0 last:mb-0">
           <code>{block.code}</code>
@@ -257,7 +260,7 @@ export function DocsEditor({
 
   const toolbar = (
     <div className={cx("flex shrink-0 items-center gap-2", section ? "h-8 border-b border-line px-2" : "h-9 px-3")}>
-      <span className="truncate text-[11.5px] text-faint">{mode === "edit" ? "Markdown: # heading, **bold**, `code`, - list, [link](https://…)" : ""}</span>
+      <span className="truncate text-[11.5px] text-faint">{mode === "edit" ? "Markdown: # heading, **bold**, `code`, - list, [link](https://…), ```mermaid diagrams" : ""}</span>
       <div className="flex-1" />
       <Segmented<Mode>
         items={[

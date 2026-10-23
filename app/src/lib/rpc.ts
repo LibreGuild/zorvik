@@ -49,6 +49,7 @@ import type { PortCheckStarted } from "../bindings/PortCheckStarted";
 import type { RecentWorkspace } from "../bindings/RecentWorkspace";
 import type { Request } from "../bindings/Request";
 import type { RunningServerInfo } from "../bindings/RunningServerInfo";
+import type { RunDetails } from "../bindings/RunDetails";
 import type { RunStarted } from "../bindings/RunStarted";
 import type { SendResult } from "../bindings/SendResult";
 import type { Server } from "../bindings/Server";
@@ -272,6 +273,8 @@ export const api = {
   previewRunData: (dataFile: string) => call<DataPreview>("runner.preview", { dataFile }),
   /** Save one of the last finished runs as a JSON report or JUnit XML. */
   exportRun: (runId: string, path: string, format: "json" | "junit") => call<null>("runner.export", { runId, path, format }),
+  /** What a result sent and got (null once the app no longer keeps it). */
+  runDetails: (runId: string, seq: number) => call<RunDetails | null>("runner.details", { runId, seq }),
 
   /** Generic call for feature modules (DNS, tools) that own their method names. */
   call: <T>(method: string, params: unknown = {}) => call<T>(method, params),
