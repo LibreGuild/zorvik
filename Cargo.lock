@@ -7524,7 +7524,6 @@ name = "zorvik-desktop"
 version = "0.4.0"
 dependencies = [
  "objc2-app-kit",
- "semver",
  "serde",
  "serde_json",
  "tauri",

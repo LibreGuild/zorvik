@@ -503,7 +503,7 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
             <p class="sub">
               {version ? <>Version <b data-version>{version}</b>{released && <> · released {released}</>} · <a href={release.notesUrl}>what's new</a></> : <>The newest version from <a href={`${github}/releases/latest`}>GitHub Releases</a>.</>}
               <br />Every download includes the app <em>and</em> the <code>zorvik</code> command line.
-              {NEXT && <><br />These are the latest release. Nightly builds of the next version are on the <a href={`${github}/releases/tag/nightly`}>releases page</a>.</>}
+              {NEXT && <><br />These are the latest release.</>}
             </p>
           </div>
           <div class="os-grid">
@@ -578,7 +578,7 @@ curl -fsSL {github}/releases/latest/download/zorvik-cli-linux-x86_64.tar.gz \
             <p>
               The app keeps itself up to date: it reads the newest version from this project's releases on GitHub, and sends nothing about you.
               Builds aren't code-signed yet: on Windows choose <b>More info → Run anyway</b>; on macOS allow it in <b>System Settings → Privacy &amp; Security</b>.
-              Want the newest changes? Try the <a href={`${github}/releases/tag/nightly`}>nightly build</a>, or <a href={`${github}#build-from-source`}>build from source</a>.
+              Want the newest changes? <a href={`${github}#build-from-source`}>Build from source</a>.
             </p>
           </div>
         </div>

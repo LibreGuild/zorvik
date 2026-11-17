@@ -35,14 +35,8 @@ As with any download, GitHub counts how many times a release file was downloaded
 | **Updates** | **Automatic** (default) | Checks, downloads in the background, installs when you restart or quit. |
 | | **Tell me, don't download** | Checks, and shows a notice with **Download** when a new version is out. |
 | | **Off** | Never checks. **Check for updates** still works when you click it. |
-| **Channel** | **Stable releases** (default) | Versioned releases. |
-| | **Nightly builds** | A build of the newest code, once a day when there are changes. Less tested. |
 
-The section also shows this version, where the update stands, and **Check for updates**. In `settings.json` these are `updates.mode` (`automatic`, `notify`, `off`) and `updates.channel` (`stable`, `nightly`).
-
-:::tip[Switching back from nightly]
-Moving from the nightly channel back to stable doesn't downgrade you: you stay on your nightly until the next stable release, which then updates you.
-:::
+The section also shows this version, where the update stands, and **Check for updates**. In `settings.json` this is `updates.mode` (`automatic`, `notify`, `off`).
 
 ## Which downloads update themselves
 

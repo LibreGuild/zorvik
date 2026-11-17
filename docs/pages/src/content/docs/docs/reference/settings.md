@@ -7,7 +7,7 @@ sidebar:
 
 Open **Settings** with the gear in the title bar or <kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>,</kbd>. Settings belong to your computer, not to a workspace: they are saved in `settings.json` in the app's data folder (see [Data locations](../data-locations/)) and apply to every workspace.
 
-Changes apply when you press **Save**, except **Zoom** and **Response position**, which apply (and are kept) at once. Font changes preview while the window is open and go back if you close it without saving. The footer shows the Zorvik version (and, for nightly builds, the build).
+Changes apply when you press **Save**, except **Zoom** and **Response position**, which apply (and are kept) at once. Font changes preview while the window is open and go back if you close it without saving. The footer shows the Zorvik version.
 
 A missing or unreadable `settings.json` means defaults. The file can be partial: missing keys take their defaults.
 
@@ -83,7 +83,6 @@ See [Updates](../../getting-started/updates/).
 |---|---|---|---|
 | This version | (read only) | | The version, where the update stands, and **Check for updates**. |
 | Updates | `updates.mode` | `automatic` | `automatic` (check, download in the background, install on restart or quit), `notify` (check and tell you, download when you click) or `off` (never check by itself). |
-| Channel | `updates.channel` | `stable` | `stable` (versioned releases) or `nightly` (a daily build of the newest code). |
 
 The update check reads one file from the project's releases on GitHub and sends nothing about you.
 

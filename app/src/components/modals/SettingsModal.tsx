@@ -225,9 +225,8 @@ export function SettingsModal() {
     setSaving(true);
     try {
       await saveSettings(s);
-      // Turned on, or a different channel: look now instead of in a few hours.
-      const was = original.updates;
-      if (isTauri && s.updates.mode !== "off" && (was.mode !== s.updates.mode || was.channel !== s.updates.channel)) void checkForUpdates();
+      // Turned on: look now instead of in a few hours.
+      if (isTauri && s.updates.mode !== "off" && original.updates.mode !== s.updates.mode) void checkForUpdates();
       toast("success", "Settings saved");
       closeModal();
     } catch (e) {
@@ -470,17 +469,6 @@ export function SettingsModal() {
                   <option value="automatic">Automatic</option>
                   <option value="notify">Tell me, don't download</option>
                   <option value="off">Off</option>
-                </Select>
-              </Row>
-              <Row label="Channel" hint="Nightly: a build of the newest code every day there are changes. Less tested; use it to try what's coming.">
-                <Select
-                  value={s.updates.channel}
-                  onChange={(e) => setS({ ...s, updates: { ...s.updates, channel: e.target.value as Settings["updates"]["channel"] } })}
-                  className="w-60"
-                  aria-label="Update channel"
-                >
-                  <option value="stable">Stable releases</option>
-                  <option value="nightly">Nightly builds</option>
                 </Select>
               </Row>
               <Row label="What is sent" hint="The update check is the only connection Zorvik makes by itself.">

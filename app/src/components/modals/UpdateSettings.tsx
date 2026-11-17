@@ -3,7 +3,6 @@ import { useState } from "react";
 import { errorMessage, isTauri } from "../../lib/rpc";
 import { openExternal } from "../../lib/platform";
 import { toast } from "../../store/toasts";
-import { useSettings } from "../../store/settings";
 import { checkForUpdates, downloadUpdate, installsByHand, installUpdate, releaseNotesUrl, useUpdates, type UpdateInfo } from "../../store/updates";
 import { Button, Spinner } from "../ui";
 
@@ -32,7 +31,6 @@ function describe(info: UpdateInfo): string {
 
 export function UpdateStatusRow({ version, build }: { version: string; build: string | null }) {
   const info = useUpdates((s) => s.info);
-  const channel = useSettings((s) => s.settings?.updates.channel ?? "stable");
   const [busy, setBusy] = useState(false);
   const run = async (f: () => Promise<unknown>) => {
     setBusy(true);
@@ -69,7 +67,7 @@ export function UpdateStatusRow({ version, build }: { version: string; build: st
               Download and install
             </Button>
           ) : out ? (
-            <Button size="sm" variant="primary" onClick={() => void openExternal(releaseNotesUrl(info, out.version, channel))}>
+            <Button size="sm" variant="primary" onClick={() => void openExternal(releaseNotesUrl(info, out.version))}>
               Open downloads
             </Button>
           ) : null}

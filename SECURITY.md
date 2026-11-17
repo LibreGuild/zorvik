@@ -1,7 +1,7 @@
 # Security policy
 
 ## Supported versions
-Security fixes go into the latest release and the nightly build. Please update to the [latest release](https://github.com/LibreGuild/zorvik/releases/latest) before reporting.
+Security fixes go into the latest release. Please update to the [latest release](https://github.com/LibreGuild/zorvik/releases/latest) before reporting.
 
 With automatic updates on (Settings → Updates, the default), the app gets fixes by itself. It installs an update only when the download is signed with the project's update key, which is built into the app, and it only ever downloads from this repository's releases on GitHub.
 

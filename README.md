@@ -150,7 +150,7 @@ TLS inspector (chain, expiry, protocol versions, cipher suites), DNS lookup, por
 - **Import** Postman collections and environments, OpenAPI 3 and Swagger 2 (realistic examples, path parameters as variables), Google API Discovery documents, AWS service models and cURL commands. When the API changes, **update from the spec**: new operations come in, your edits stay.
 - **Export** any request as cURL, HTTPie or Wget, or as code: JavaScript (fetch, axios), Python (requests, HTTPX), Go, Java, Kotlin (OkHttp), Swift, C#, PHP, Ruby, Rust, Dart, C (libcurl) or PowerShell.
 - **Built-in docs** for every feature (the book icon in the left rail), a command palette (<kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>K</kbd>) and keyboard shortcuts.
-- **Updates itself** from GitHub Releases: it downloads in the background and installs when you quit, or tells you and waits (Settings → Updates). Stable or nightly channel.
+- **Updates itself** from GitHub Releases: it downloads in the background and installs when you quit, or tells you and waits (Settings → Updates).
 - **Light and dark themes,** zoom (<kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>+</kbd> <kbd>−</kbd> <kbd>0</kbd>), and your choice of interface and code fonts.
 
 ## Download
@@ -164,8 +164,6 @@ Get the newest version from [**Releases**](https://github.com/LibreGuild/zorvik/
 | Ubuntu 22.04+, Debian 12+ | `Zorvik-Linux-amd64.deb` | `sudo apt install ./Zorvik-Linux-amd64.deb` |
 | Fedora, RHEL, openSUSE | `Zorvik-Linux-x86_64.rpm` | `sudo dnf install ./Zorvik-Linux-x86_64.rpm` |
 | Any Linux (x86-64) | `Zorvik-Linux-x86_64.AppImage` | `chmod +x`, then run |
-
-Want the newest changes before a release? The [nightly build](https://github.com/LibreGuild/zorvik/releases/tag/nightly) is made from `main` once a day when it changed; choose the nightly channel in Settings → Updates to follow it.
 
 ### Only the command line
 For CI machines, servers and containers, each release also has the `zorvik` command on its own:
@@ -182,7 +180,7 @@ curl -fsSL https://github.com/LibreGuild/zorvik/releases/latest/download/zorvik-
 ```
 
 ### Updates
-The installer on Windows, the app on macOS and the AppImage on Linux update themselves: Zorvik checks GitHub Releases, downloads the new version in the background, and installs it when you quit (or when you choose **Restart now**). It asks first if a restart would stop a server, a load test or unsaved work. The portable zip, `.deb` and `.rpm` tell you a new version is out and link to it. Settings → Updates switches between automatic, notify only and off, and between the stable and nightly channels.
+The installer on Windows, the app on macOS and the AppImage on Linux update themselves: Zorvik checks GitHub Releases, downloads the new version in the background, and installs it when you quit (or when you choose **Restart now**). It asks first if a restart would stop a server, a load test or unsaved work. The portable zip, `.deb` and `.rpm` tell you a new version is out and link to it. Settings → Updates switches between automatic, notify only and off.
 
 The update check goes to GitHub only and sends nothing about you: no ID, no usage data, just the download request your computer makes to GitHub.
 

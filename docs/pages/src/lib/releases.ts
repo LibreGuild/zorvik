@@ -87,11 +87,12 @@ export const CLI_FILES = [
 
 /**
  * The latest release's files on the project's own storage, where the release workflow copies
- * them: for networks that can't reach GitHub. The second address is a backup of the first.
+ * them (the newest release only, under the files' own names): for networks that can't reach
+ * GitHub. The second address is a backup of the first.
  */
 export const MIRRORS = [
-  { label: "Mirror", base: "https://libreguild.skatech.org/zorvik/latest/" },
-  { label: "Backup", base: "https://pub-6c540d377bd4404f87ff33fb14c18c21.r2.dev/zorvik/latest/" },
+  { label: "Mirror", base: "https://libreguild.skatech.org/zorvik/" },
+  { label: "Backup", base: "https://pub-6c540d377bd4404f87ff33fb14c18c21.r2.dev/zorvik/" },
 ];
 
 /** What a mirror link is called: the system, and which of its files when it has several. */

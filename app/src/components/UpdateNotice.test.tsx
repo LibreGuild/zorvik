@@ -32,7 +32,7 @@ const show = (status: Info["status"], canInstall = true) =>
 
 beforeEach(() => {
   vi.mocked(openExternal).mockClear();
-  useSettings.setState({ settings: { updates: { mode: "automatic", channel: "stable" } } as Settings });
+  useSettings.setState({ settings: { updates: { mode: "automatic" } } as Settings });
 });
 afterEach(cleanup);
 
