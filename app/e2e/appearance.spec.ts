@@ -58,3 +58,29 @@ test("zoom keys and font settings", async ({ page }) => {
     await rpc("settings.save", { settings: before });
   }
 });
+
+// A short window: the dialog's panes shrink, so only the open section scrolls (one scrollbar, not two).
+test("settings scroll in one place on a short window", async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 600 });
+  await page.goto("/");
+  await expect(page.getByTestId("workspace-menu")).toContainText("E2E Workspace");
+  await page.keyboard.press("ControlOrMeta+,");
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog).toBeVisible();
+  const scrolls = (testId: string) =>
+    dialog.getByTestId(testId).evaluate((el) => {
+      // The element itself, and the dialog's body around the panes.
+      const overflows = (e: Element) => e.scrollHeight > e.clientHeight + 1;
+      return { self: overflows(el), around: el.closest('[data-testid="settings-panes"]')!.parentElement!.scrollHeight > el.closest('[data-testid="settings-panes"]')!.parentElement!.clientHeight + 1 };
+    });
+  // General is longer than the window leaves room for: it scrolls, the dialog around it doesn't.
+  expect(await scrolls("settings-section")).toEqual({ self: true, around: false });
+  // The whole dialog fits the window, with its buttons.
+  const box = (await dialog.boundingBox())!;
+  expect(box.y + box.height).toBeLessThanOrEqual(600);
+  await expect(dialog.getByRole("button", { name: "Save", exact: true })).toBeInViewport();
+  // The section scrolls to its end.
+  const section = dialog.getByTestId("settings-section");
+  await section.evaluate((el) => el.scrollTo(0, el.scrollHeight));
+  expect(await section.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+});

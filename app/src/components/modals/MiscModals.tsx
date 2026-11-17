@@ -399,6 +399,8 @@ export function ExportModal({ tabId }: { tabId: string }) {
       onClose={closeModal}
       title="Copy as cURL or code"
       width={880}
+      // A column: the panes shrink with a short window, so only the lists inside scroll.
+      bodyClassName="flex flex-col"
       footer={
         <>
           <Button variant="ghost" onClick={closeModal}>

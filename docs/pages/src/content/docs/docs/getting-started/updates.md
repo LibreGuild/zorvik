@@ -48,7 +48,7 @@ Moving from the nightly channel back to stable doesn't downgrade you: you stay o
 
 | Download | Updates |
 |---|---|
-| Windows installer | Itself. The installer runs with a small progress window and needs no administrator rights. |
+| Windows installer | Itself. The installer runs with a small progress window and needs no administrator rights. A `zorvik` command that is still running (an AI agent's `zorvik mcp`, a `zorvik serve` in a terminal) carries on with the version it started with; start it again to use the new one. |
 | macOS app | Itself, when it is in a folder you can write to (for example `/Applications`). A copy running from the disk image, or in a folder you can't write to, tells you when a new version is out. |
 | Linux AppImage | Itself. |
 | Windows portable zip, `.deb`, `.rpm` | They tell you when a new version is out, with a link to the download. `.deb` and `.rpm` belong to your package manager; install the new package the same way as the first one. |

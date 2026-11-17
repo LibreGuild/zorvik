@@ -12,6 +12,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **Console:** every request Zorvik sends is logged in a console under the open tab (the **Console** button at the foot of the left rail, or <kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>J</kbd>): requests from tabs, collection runs and AI agents, the requests scripts make with `pm.sendRequest`, OAuth 2.0 token requests, and connections opening and closing (WebSocket, Socket.IO, SSE, TCP, UDP, MQTT, gRPC, MCP, DNS). Open a line to see the headers and body that went out and came back, the address, TLS, redirects and timing. A request that failed shows why, with the request that was prepared for it. What scripts write with `console.log` shows between the requests, in the order it happened and while the script still runs. Filter by requests, logs or errors and by text; a red number on the button counts what failed while the console was closed. The console is kept in memory only (the newest 5000 lines), shows values as they were sent, and is cleared when another workspace opens.
 - **`read_console` for AI agents:** agents read the console to see why a request failed, with secret values and credential headers hidden, and token requests without their headers and bodies.
 
+### Fixed
+- **Windows: an update no longer stops at "Error opening file for writing" for `zorvik.exe`.** The command line was often still running when the installer wanted to replace it (an AI agent's `zorvik mcp`, a `zorvik serve` in a terminal). The installer now moves a running `zorvik.exe` aside: those programs carry on, and the update installs.
+- **Settings, Environments and Copy as cURL or code scroll in one place.** In a short window these dialogs showed two scrollbars, one for the dialog and one for the open section; now the panes fit the window and only the section scrolls.
+
 ### Security
 - Dependencies updated, including the fixes in undici 8.12, Hono 4.13.16 and `@hono/node-server` 2.1.6, fast-uri 3.1.9, body-parser, qs and zod (used by the test and build tools) and Astro 7.4.12 (the website); Tauri 2.12.5 and its plugins, Tokio 1.54, React 19.3.1, Vite 8.3.8 and others.
 

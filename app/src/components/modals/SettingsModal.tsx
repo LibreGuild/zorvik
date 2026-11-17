@@ -243,7 +243,9 @@ export function SettingsModal() {
       onClose={closeModal}
       title="Settings"
       width={860}
-      bodyClassName="p-0"
+      // A column, so the panes below shrink with a short window instead of making the dialog's
+      // body scroll too: only the open section scrolls.
+      bodyClassName="flex flex-col p-0"
       focusFirstField={false}
       dirty={dirty}
       footer={
@@ -261,8 +263,8 @@ export function SettingsModal() {
         </>
       }
     >
-      <div className="flex h-[480px]">
-        <nav className="w-48 shrink-0 p-2">
+      <div className="flex h-[480px] min-h-0" data-testid="settings-panes">
+        <nav className="w-48 shrink-0 overflow-auto p-2">
           {SECTIONS.map((x) => (
             <button
               key={x.id}
@@ -273,7 +275,7 @@ export function SettingsModal() {
             </button>
           ))}
         </nav>
-        <div className="min-w-0 flex-1 overflow-auto px-6 py-2">
+        <div className="min-w-0 flex-1 overflow-auto px-6 py-2" data-testid="settings-section">
           {section === "general" && (
             <>
               <Row label="Theme">
