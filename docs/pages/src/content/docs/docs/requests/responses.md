@@ -153,7 +153,7 @@ Every request uses a fresh connection, so DNS, connect and TLS are always measur
 | **Redirects** | Each hop: status, method, URL and where it pointed |
 | **Request sent** | The method, body size, URL and **every header that was really sent**, including those Zorvik added (`User-Agent`, `Content-Type`, `Authorization`, `Cookie`, …) |
 
-**Request sent** is the place to check what your auth, inherited headers and cookie jar really produced.
+**Request sent** is the place to check what your auth, inherited headers and cookie jar really produced. The [console](../console/) keeps the same for every request you sent, with the request and response bodies.
 
 ## When a request fails
 
@@ -171,6 +171,8 @@ If no response arrives, the pane shows what went wrong, the error message and ho
 | **Pre-request script failed** | A pre-request script threw an error; nothing was sent | Fix the script in the request's, its folder's or the workspace's **Scripts** tab |
 | **Invalid request** | For example an invalid URL, method or header value | |
 | **Request cancelled** | You chose **Cancel** | |
+
+The [console](../console/) (<kbd>Mod</kbd>+<kbd>J</kbd>) lists the failed request with the URL, headers and body that were prepared for it, next to the requests before it.
 
 See [Troubleshooting](../../help/troubleshooting/) for more.
 

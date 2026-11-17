@@ -28,6 +28,9 @@ interface UiState {
   serverSplit: number;
   /** Fraction of a load test tab given to its settings (the rest shows results). */
   loadSplit: number;
+  /** The console is shown under the open tab, this many pixels high. */
+  consoleOpen: boolean;
+  consoleHeight: number;
   expanded: Record<string, boolean>;
 }
 
@@ -51,13 +54,18 @@ export const useUi = create<UiState>(() => ({
   layout: saved.layout ?? "side",
   serverSplit: saved.serverSplit ?? 0.5,
   loadSplit: saved.loadSplit ?? 0.42,
+  consoleOpen: saved.consoleOpen ?? false,
+  consoleHeight: saved.consoleHeight ?? 260,
   expanded: saved.expanded ?? {},
 }));
 
 useUi.subscribe((s) => {
   try {
-    const { sidebarTab, sidebarWidth, split, layout, serverSplit, loadSplit, expanded } = s;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ sidebarTab, sidebarWidth, split, layout, serverSplit, loadSplit, expanded }));
+    const { sidebarTab, sidebarWidth, split, layout, serverSplit, loadSplit, consoleOpen, consoleHeight, expanded } = s;
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ sidebarTab, sidebarWidth, split, layout, serverSplit, loadSplit, consoleOpen, consoleHeight, expanded }),
+    );
   } catch {
     /* storage unavailable */
   }

@@ -34,7 +34,7 @@ pub use graphql::GraphqlWsProtocol;
 pub use grpc::{GrpcDescriptors, GrpcEvent, GrpcResponse, GrpcSession, GrpcStatus, GrpcTarget};
 pub use http::{
     BodyStream, ChallengeAuth, ChallengeAuthRef, Client, Header, HostGuard, HttpRequest, HttpResponse, HttpVersionPref,
-    RedirectHop, RequestOptions, ResponseMeta, SentRequest, StreamingResponse, Timing,
+    Observer, RedirectHop, RequestOptions, ResponseMeta, SentRequest, StreamingResponse, Timing,
 };
 pub use mqtt::{MqttConfig, MqttProtocol};
 pub use proxy::{ProxyMode, ProxySettings};

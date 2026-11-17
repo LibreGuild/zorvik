@@ -225,9 +225,8 @@ export function SettingsModal() {
     setSaving(true);
     try {
       await saveSettings(s);
-      // Turned on, or a different channel: look now instead of in a few hours.
-      const was = original.updates;
-      if (isTauri && s.updates.mode !== "off" && (was.mode !== s.updates.mode || was.channel !== s.updates.channel)) void checkForUpdates();
+      // Turned on: look now instead of in a few hours.
+      if (isTauri && s.updates.mode !== "off" && original.updates.mode !== s.updates.mode) void checkForUpdates();
       toast("success", "Settings saved");
       closeModal();
     } catch (e) {
@@ -243,7 +242,9 @@ export function SettingsModal() {
       onClose={closeModal}
       title="Settings"
       width={860}
-      bodyClassName="p-0"
+      // A column, so the panes below shrink with a short window instead of making the dialog's
+      // body scroll too: only the open section scrolls.
+      bodyClassName="flex flex-col p-0"
       focusFirstField={false}
       dirty={dirty}
       footer={
@@ -261,8 +262,8 @@ export function SettingsModal() {
         </>
       }
     >
-      <div className="flex h-[480px]">
-        <nav className="w-48 shrink-0 p-2">
+      <div className="flex h-[480px] min-h-0" data-testid="settings-panes">
+        <nav className="w-48 shrink-0 overflow-auto p-2">
           {SECTIONS.map((x) => (
             <button
               key={x.id}
@@ -273,7 +274,7 @@ export function SettingsModal() {
             </button>
           ))}
         </nav>
-        <div className="min-w-0 flex-1 overflow-auto px-6 py-2">
+        <div className="min-w-0 flex-1 overflow-auto px-6 py-2" data-testid="settings-section">
           {section === "general" && (
             <>
               <Row label="Theme">
@@ -468,17 +469,6 @@ export function SettingsModal() {
                   <option value="automatic">Automatic</option>
                   <option value="notify">Tell me, don't download</option>
                   <option value="off">Off</option>
-                </Select>
-              </Row>
-              <Row label="Channel" hint="Nightly: a build of the newest code every day there are changes. Less tested; use it to try what's coming.">
-                <Select
-                  value={s.updates.channel}
-                  onChange={(e) => setS({ ...s, updates: { ...s.updates, channel: e.target.value as Settings["updates"]["channel"] } })}
-                  className="w-60"
-                  aria-label="Update channel"
-                >
-                  <option value="stable">Stable releases</option>
-                  <option value="nightly">Nightly builds</option>
                 </Select>
               </Row>
               <Row label="What is sent" hint="The update check is the only connection Zorvik makes by itself.">

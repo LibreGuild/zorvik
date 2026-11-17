@@ -73,7 +73,7 @@ Using an AI coding agent? `CLAUDE.md`, `AGENTS.md` and `GEMINI.md` point it at P
 - Draft PRs are welcome for early feedback.
 
 ## Releases
-Maintainers cut releases by tagging `main` (see [docs/ci-release.md](docs/ci-release.md)). Every merge to `main` also updates the nightly build.
+Maintainers cut releases by tagging `main` (see [docs/ci-release.md](docs/ci-release.md)).
 
 ## License
 Zorvik is licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option.

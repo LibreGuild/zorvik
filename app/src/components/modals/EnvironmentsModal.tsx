@@ -105,7 +105,8 @@ export function EnvironmentsModal({ focus }: { focus?: string }) {
       title="Environments & variables"
       description="Use {{name}} in URLs, headers, bodies and auth. The active environment overrides workspace variables."
       width={920}
-      bodyClassName="p-0"
+      // A column: the panes shrink with a short window, so only the lists inside scroll.
+      bodyClassName="flex flex-col p-0"
       focusFirstField={false}
       footer={
         <>
@@ -119,7 +120,7 @@ export function EnvironmentsModal({ focus }: { focus?: string }) {
         </>
       }
     >
-      <div className="flex h-[480px]">
+      <div className="flex h-[480px] min-h-0">
         <div className="flex w-56 shrink-0 flex-col p-2">
           <button
             onClick={() => setSelected(WORKSPACE)}

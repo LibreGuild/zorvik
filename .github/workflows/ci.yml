@@ -118,26 +118,22 @@ jobs:
           retention-days: 7
 
   # ---- releases ------------------------------------------------------------------------------------
-  # A `v*` tag publishes that version (it must match the version in the code). A run started by hand
-  # (or by `nightly.yml`, once a day when `main` changed) replaces the "nightly" pre-release; a
-  # plain push to `main` only runs the checks. The builds upload to a draft of this run; `publish`
-  # makes it public only when all of them succeeded, so a failed build never replaces a release. A
-  # run only ever touches its own draft: a tag and a nightly can build at the same time.
+  # A `v*` tag publishes that version (it must match the version in the code); a run started by
+  # hand on such a tag builds it again. Everything else (a push to `main`, a pull request, a run
+  # started by hand on a branch) only runs the checks. The builds upload to a draft of this run;
+  # `publish` makes it public only when all of them succeeded, so a failed build never replaces a
+  # release. A run only ever touches its own draft.
 
   release-draft:
     name: Start the release
     needs: [rust-linux, rust-windows, ui, e2e, code-export]
-    if: >-
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
-      (github.event_name == 'workflow_dispatch' &&
-        (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
+    if: startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     outputs:
-      channel: ${{ steps.channel.outputs.channel }}
-      version: ${{ steps.channel.outputs.version }}
-      built_at: ${{ steps.channel.outputs.built_at }}
+      version: ${{ steps.version.outputs.version }}
+      built_at: ${{ steps.version.outputs.built_at }}
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -145,8 +141,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Channel and version
-        id: channel
+      - name: Version
+        id: version
         run: |
           set -euo pipefail
           version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
@@ -157,18 +153,12 @@ jobs:
               exit 1
             fi
           done
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
-              echo "::error::tag $GITHUB_REF_NAME does not match the version in the code ($version)"
-              exit 1
-            fi
-            echo "channel=stable" >> "$GITHUB_OUTPUT"
-          else
-            echo "channel=nightly" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the version in the code ($version)"
+            exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          # One time for the whole run: the builds carry it and latest.json announces it, so a
-          # nightly never counts as newer than itself.
+          # The release's date in latest.json.
           echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - name: Create the draft
         run: |
@@ -181,10 +171,6 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
-    env:
-      # Shown in Settings next to the version (nightly builds only).
-      ZORVIK_BUILD: ${{ needs.release-draft.outputs.channel == 'nightly' && format('nightly {0} · {1}', github.run_number, github.sha) || '' }}
-      ZORVIK_BUILT_AT: ${{ needs.release-draft.outputs.built_at }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -234,9 +220,6 @@ jobs:
     runs-on: macos-latest
     permissions:
       contents: write
-    env:
-      ZORVIK_BUILD: ${{ needs.release-draft.outputs.channel == 'nightly' && format('nightly {0} · {1}', github.run_number, github.sha) || '' }}
-      ZORVIK_BUILT_AT: ${{ needs.release-draft.outputs.built_at }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -285,9 +268,6 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
-    env:
-      ZORVIK_BUILD: ${{ needs.release-draft.outputs.channel == 'nightly' && format('nightly {0} · {1}', github.run_number, github.sha) || '' }}
-      ZORVIK_BUILT_AT: ${{ needs.release-draft.outputs.built_at }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -342,7 +322,6 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      CHANNEL: ${{ needs.release-draft.outputs.channel }}
       VERSION: ${{ needs.release-draft.outputs.version }}
       BUILT_AT: ${{ needs.release-draft.outputs.built_at }}
       DRAFT: build-${{ github.run_number }}
@@ -375,16 +354,10 @@ jobs:
           fi
           for file in updates/*; do
             # --app-version binds each signature to this version, so an old file can't pass as new.
-            npx --yes @tauri-apps/cli@2.12.0 signer sign --app-version "$VERSION" "$file" > /dev/null
+            npx --yes @tauri-apps/cli@2.12.4 signer sign --app-version "$VERSION" "$file" > /dev/null
           done
-          if [ "$CHANNEL" = stable ]; then
-            base="https://github.com/$GH_REPO/releases/download/$GITHUB_REF_NAME"
-            notes="Zorvik $VERSION"
-          else
-            base="https://github.com/$GH_REPO/releases/download/nightly"
-            notes="Zorvik nightly (build $GITHUB_RUN_NUMBER)"
-          fi
-          node .github/scripts/update-manifest.mjs updates "$base" "$VERSION" "$BUILT_AT" "$notes" > latest.json
+          base="https://github.com/$GH_REPO/releases/download/$GITHUB_REF_NAME"
+          node .github/scripts/update-manifest.mjs updates "$base" "$VERSION" "$BUILT_AT" "Zorvik $VERSION" > latest.json
           cat latest.json
           gh release upload "$DRAFT" latest.json --clobber
 
@@ -396,12 +369,11 @@ jobs:
       contents: write
       actions: write
     concurrency:
-      group: release-${{ needs.release-draft.outputs.channel }}
+      group: release
       cancel-in-progress: false
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      CHANNEL: ${{ needs.release-draft.outputs.channel }}
       VERSION: ${{ needs.release-draft.outputs.version }}
       DRAFT: build-${{ github.run_number }}
     steps:
@@ -409,17 +381,11 @@ jobs:
         run: |
           set -euo pipefail
           : > notes.md
-          if [ "$CHANNEL" = stable ]; then
-            # The tag's message (an annotated tag) opens the notes.
-            ref=$(gh api "repos/$GH_REPO/git/ref/tags/$GITHUB_REF_NAME")
-            if [ "$(jq -r .object.type <<< "$ref")" = tag ]; then
-              gh api "repos/$GH_REPO/git/tags/$(jq -r .object.sha <<< "$ref")" --jq .message >> notes.md
-              printf '\n' >> notes.md
-            fi
-          else
-            # shellcheck disable=SC2016 # the backticks are Markdown
-            printf 'A preview of what is coming next, built from `main` (build %s, commit %s). For everyday work, use the [latest release](https://github.com/%s/releases/latest).\n\n' \
-              "$GITHUB_RUN_NUMBER" "${GITHUB_SHA::7}" "$GH_REPO" >> notes.md
+          # The tag's message (an annotated tag) opens the notes.
+          ref=$(gh api "repos/$GH_REPO/git/ref/tags/$GITHUB_REF_NAME")
+          if [ "$(jq -r .object.type <<< "$ref")" = tag ]; then
+            gh api "repos/$GH_REPO/git/tags/$(jq -r .object.sha <<< "$ref")" --jq .message >> notes.md
+            printf '\n' >> notes.md
           fi
           cat >> notes.md <<'NOTES'
           ## Downloads
@@ -442,28 +408,18 @@ jobs:
 
           The builds are not code-signed yet. **Windows:** if SmartScreen appears, choose **More info → Run anyway**. **macOS:** the first open is blocked; open System Settings → Privacy & Security → **Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/Zorvik.app`.
           NOTES
-          if [ "$CHANNEL" = stable ]; then
-            # What changed: merged pull requests since the previous release (.github/release.yml).
-            # Compared with the previous version explicitly: the nearest tag may be "nightly".
-            prev=$(gh api "repos/$GH_REPO/releases?per_page=100" | jq -r --arg current "$GITHUB_REF_NAME" \
-              '[.[] | select((.draft | not) and (.prerelease | not) and (.tag_name | startswith("v")) and .tag_name != $current) | .tag_name] | first // empty')
-            if [ -n "$prev" ]; then
-              printf '\n' >> notes.md
-              gh api "repos/$GH_REPO/releases/generate-notes" -f tag_name="$GITHUB_REF_NAME" -f previous_tag_name="$prev" --jq .body >> notes.md
-            fi
+          # What changed: merged pull requests since the previous release (.github/release.yml),
+          # named explicitly so that no other tag is taken for it.
+          prev=$(gh api "repos/$GH_REPO/releases?per_page=100" | jq -r --arg current "$GITHUB_REF_NAME" \
+            '[.[] | select((.draft | not) and (.prerelease | not) and (.tag_name | startswith("v")) and .tag_name != $current) | .tag_name] | first // empty')
+          if [ -n "$prev" ]; then
+            printf '\n' >> notes.md
+            gh api "repos/$GH_REPO/releases/generate-notes" -f tag_name="$GITHUB_REF_NAME" -f previous_tag_name="$prev" --jq .body >> notes.md
           fi
       - name: Publish
         run: |
           set -euo pipefail
-          if [ "$CHANNEL" = stable ]; then
-            args=(--tag "$GITHUB_REF_NAME" --latest --title "Zorvik $VERSION")
-          else
-            # Move the "nightly" tag to this commit and replace the previous nightly release.
-            gh release delete nightly --yes --cleanup-tag || true
-            gh api "repos/$GH_REPO/git/refs" -f ref=refs/tags/nightly -f sha="$GITHUB_SHA" > /dev/null \
-              || gh api -X PATCH "repos/$GH_REPO/git/refs/tags/nightly" -f sha="$GITHUB_SHA" -F force=true > /dev/null
-            args=(--tag nightly --prerelease --latest=false --title "Zorvik nightly (build $GITHUB_RUN_NUMBER)")
-          fi
+          args=(--tag "$GITHUB_REF_NAME" --latest --title "Zorvik $VERSION")
           # Retried: a transient API error must not leave the draft unpublished.
           for attempt in 1 2 3 4 5; do
             if gh release edit "$DRAFT" "${args[@]}" --draft=false --notes-file notes.md; then
@@ -473,13 +429,112 @@ jobs:
           done
           exit 1
 
+  # The newest release's files on Cloudflare R2, for networks where GitHub is blocked or slow:
+  # the app's updater looks there when it can't reach GitHub, and the website's mirror links
+  # point there. Only the newest release is kept, in `zorvik/` under the files' own names (no
+  # versions in the addresses): each release replaces the one before, and anything else in the
+  # folder is deleted. Served at libreguild.skatech.org and the bucket's r2.dev address. The
+  # upload token (an R2 API token with Object Read & Write on this bucket only) lives in the
+  # `release` environment as R2_ACCOUNT_ID, R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY; without
+  # them the job warns and mirrors nothing. A failed run leaves the GitHub release as it is: run
+  # the job again.
+  mirror:
+    name: Mirror to R2
+    needs: [release-draft, publish]
+    # The project's own mirror: a copy of the repository elsewhere skips this job.
+    if: github.repository == 'LibreGuild/zorvik'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    concurrency:
+      group: mirror
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BUCKET: s3://libreguild/zorvik
+    steps:
+      # What is mirrored is what GitHub has, downloaded from the published release.
+      - name: Release files
+        id: files
+        run: |
+          set -euo pipefail
+          # The mirror follows GitHub's latest release: building an older tag again must not
+          # put that release there.
+          latest=$(gh release view --json tagName --jq .tagName)
+          if [ "$latest" != "$GITHUB_REF_NAME" ]; then
+            echo "::notice::$GITHUB_REF_NAME is not the latest release ($latest): the mirror stays as it is."
+            echo "mirror=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gh release download "$GITHUB_REF_NAME" --dir dist
+          # The release's website is for pages.yml, not for people.
+          rm -f dist/zorvik-website.tar.gz
+          ls -l dist
+          echo "mirror=true" >> "$GITHUB_OUTPUT"
+      - name: Upload
+        id: upload
+        if: steps.files.outputs.mirror == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          AWS_DEFAULT_REGION: auto
+          # R2 does not take the newer default checksum headers of the AWS CLI.
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+        run: |
+          set -euo pipefail
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ] || [ -z "$R2_ACCOUNT_ID" ]; then
+            echo "::warning::No R2 upload token in the release environment (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY): this release is not mirrored."
+            exit 0
+          fi
+          export AWS_ENDPOINT_URL="https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com"
+          # The files replace the last release's under the same names, so nothing may keep an
+          # old copy (no-cache: asked for again each time). Whatever else is in the folder goes.
+          aws s3 sync dist "$BUCKET/" --delete --no-progress \
+            --exclude latest.json --cache-control no-cache
+          # `latest.json` goes last: the files it names are in place when the updater reads it.
+          if [ -f dist/latest.json ]; then
+            aws s3 cp dist/latest.json "$BUCKET/latest.json" --no-progress \
+              --cache-control no-cache --content-type application/json
+          else
+            # A release without automatic updates: no list of an older one stays behind.
+            aws s3 rm "$BUCKET/latest.json" || true
+          fi
+          echo "done=true" >> "$GITHUB_OUTPUT"
+      - name: Check the mirrors
+        if: steps.upload.outputs.done == 'true'
+        run: |
+          set -euo pipefail
+          # Every file answers at both addresses, and the update list is this release's.
+          for host in https://libreguild.skatech.org https://pub-6c540d377bd4404f87ff33fb14c18c21.r2.dev; do
+            for file in dist/*; do
+              curl -fsSI -o /dev/null --retry 3 "$host/zorvik/$(basename "$file")"
+            done
+            if [ -f dist/latest.json ]; then
+              # The new list may take a moment to show: a few tries before it counts as wrong.
+              for attempt in 1 2 3 4 5 6; do
+                if curl -fsS "$host/zorvik/latest.json" | cmp -s - dist/latest.json; then
+                  break
+                fi
+                if [ "$attempt" = 6 ]; then
+                  echo "::error::$host/zorvik/latest.json is not this release's"
+                  exit 1
+                fi
+                sleep 10
+              done
+            fi
+            echo "$host serves $GITHUB_REF_NAME"
+          done
+
   # The main website shows the latest release's docs. It is built here, from this release's
   # own code, and attached to the release as zorvik-website.tar.gz; pages.yml only downloads
   # and publishes it, so the website workflow never runs a release's code (docs/ci-release.md).
   release-website:
     name: Build this release's website
     needs: [release-draft, publish]
-    if: needs.release-draft.outputs.channel == 'stable'
     runs-on: ubuntu-latest
     # Read-only: the site's build runs npm packages.
     permissions:

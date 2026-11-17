@@ -112,8 +112,18 @@ impl Api {
         let jar = settings.cookie_jar.then(|| self.jar(&ws));
         self.authorize(&ws, &mut resolved, &opts).await?;
         let mut legacy = false;
+        let console = self.console_scope().of(&request.name);
         let (data, size) = loop {
-            let response = self.inner.client.send(resolved.request.clone(), &opts, jar.as_deref()).await?;
+            let started = std::time::Instant::now();
+            let sent = resolved.request.clone();
+            let result = self.inner.client.send(resolved.request.clone(), &opts, jar.as_deref()).await;
+            // The introspection query is a request like any other: in the console.
+            let x = match &result {
+                Ok(response) => crate::console::Exchange::response("GraphQL", &sent, response),
+                Err(e) => crate::console::Exchange::failed("GraphQL", &sent, &e.message, started.elapsed()),
+            };
+            console.exchange(x.origin(crate::console::GRAPHQL_SCHEMA));
+            let response = result?;
             if let Some(jar) = &jar {
                 self.save_jar(&ws, jar);
             }

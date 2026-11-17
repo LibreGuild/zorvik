@@ -30,6 +30,7 @@ use zorvik_workspace::secrets::{env_scope, workspace_scope};
 use zorvik_workspace::settings::Settings;
 use zorvik_workspace::vars::VarContext;
 
+use crate::console::{ConsoleScope, Exchange};
 use crate::message_scripts::MessageScripts;
 use crate::{Api, ApiError, ApiResult, join_err};
 
@@ -165,6 +166,9 @@ pub struct SendContext<'a> {
     /// The MCP session the request's tab has open (its calls go there while it is open to the
     /// same server).
     pub mcp_session: Option<crate::mcp::OpenSession>,
+    /// Where the request, what came back and the scripts' console lines are logged (the app's
+    /// console); `None` = nowhere (a command-line run).
+    pub console: Option<crate::console::ConsoleScope>,
 }
 
 /// A request that was sent.
@@ -229,9 +233,10 @@ pub(crate) async fn send_scripted_with(
     };
     let mut report: Option<ScriptReport> = None;
     let mut next_request = None;
+    let console = cx.console.as_ref().map(|c| c.of(&request.name));
     // The URL with its variables filled in: its site is the one scripts' cookies belong to.
     let url = vars.var_context().render(request.url.trim(), &mut std::collections::BTreeSet::new());
-    let host = match script_host(cx, &url) {
+    let host = match script_host(cx, &url, console.clone()) {
         Ok(host) => host,
         Err(e) => return ScriptedSend { report, result: Err(e), next_request },
     };
@@ -246,11 +251,37 @@ pub(crate) async fn send_scripted_with(
     // Message scripts of WebSocket and Socket.IO requests run on the messages of the send.
     let messages = MessageScripts::new(&request, path, &info, vars, limits, host.clone());
 
-    let sending = send(cx, &request, &folders, vars, messages.as_ref());
+    let started = std::time::Instant::now();
+    // What was about to be sent, for the console when nothing comes back.
+    let mut prepared = None;
+    let sending = send(cx, &request, &folders, vars, messages.as_ref(), console.as_ref(), &mut prepared);
+    // How many of the notes are the on-connect steps' (message scripts' lines follow them, and
+    // went to the console as they ran).
+    let step_notes = |steps: &Option<StepsRun>| steps.as_ref().map_or(0, |s| s.2);
     let (resolved, response, events, steps) = match Box::pin(sending).await {
         Ok(sent) => sent,
-        Err(e) => return ScriptedSend { report, result: Err(e), next_request },
+        Err(e) => {
+            if let Some(console) = &console {
+                let protocol = crate::console::protocol_of(&request);
+                match &prepared {
+                    Some(sent) => console.exchange(Exchange::failed(protocol, sent, &e.message, started.elapsed())),
+                    None => {
+                        let ctx = vars.var_context();
+                        let render = |text: &str| ctx.render(text, &mut std::collections::BTreeSet::new());
+                        console.failure(&request, &render, &e, started.elapsed());
+                    }
+                }
+            }
+            return ScriptedSend { report, result: Err(e), next_request };
+        }
     };
+    if let Some(console) = &console {
+        console.exchange(Exchange::response(crate::console::protocol_of(&request), &resolved.request, &response));
+        // What a connection's on-connect steps sent and waited for.
+        for note in steps.iter().flat_map(|s| s.1.iter().take(step_notes(&steps))) {
+            console.log(ConsoleLevel::Info, note);
+        }
+    }
 
     if let Some(messages) = &messages {
         messages.merge_into(vars);
@@ -291,7 +322,7 @@ pub(crate) async fn send_scripted_with(
         report.get_or_insert_with(Default::default).tests.push(test);
     }
     // A WebSocket request's waits are its tests.
-    if let Some((tests, notes)) = steps {
+    if let Some((tests, notes, _)) = steps {
         let report = report.get_or_insert_with(Default::default);
         report.tests.extend(tests);
         report.console.extend(
@@ -365,8 +396,9 @@ pub(crate) async fn pre_request(p: &Pre<'_>, request: &mut Request, vars: &mut S
 /// Events an event stream was read to, and why reading stopped.
 type StreamRead = (Vec<zorvik_engine::SseEvent>, crate::sse_read::SseEnd);
 
-/// A WebSocket request's on-connect steps as tests, and notes for the console.
-type StepsRun = (Vec<zorvik_script::TestResult>, Vec<String>);
+/// A WebSocket request's on-connect steps as tests, notes for the console, and how many of
+/// the notes are the steps' own (the first ones).
+type StepsRun = (Vec<zorvik_script::TestResult>, Vec<String>, usize);
 
 /// Resolve against the workspace and `vars`, authorize, send. An SSE request is read
 /// until its `settings.stream` says to stop; its response body is the events as text.
@@ -377,17 +409,27 @@ async fn send(
     folders: &[FolderMeta],
     vars: &ScriptVars,
     messages: Option<&Arc<MessageScripts>>,
+    console: Option<&ConsoleScope>,
+    prepared: &mut Option<HttpRequest>,
 ) -> ApiResult<(Resolved, HttpResponse, Option<StreamRead>, Option<StepsRun>)> {
     let outside_files = cx.settings.files_outside_workspace;
     let inherit = Inheritance { workspace: cx.meta, folders, base_dir: cx.ws.root(), outside_files };
     let mut resolved = resolve(request, &inherit, &vars.var_context())?;
+    // The body is shared, not copied.
+    *prepared = Some(resolved.request.clone());
     check_url_variables(&resolved)?;
     let mut opts = cx.settings.request_options(&request.settings)?;
     opts.host_guard = cx.guard.clone();
     opts.challenge_auth = resolved.challenge.as_ref().map(|c| c.engine_auth());
     if let Some(config) = resolved.oauth2.clone() {
-        let token = oauth2::ensure_token(cx.client, &opts, &config, cx.tokens, &cx.ws.local_key()).await?;
+        // The token request shows in the console too.
+        let observed = console.map(|c| c.observing(&opts, crate::console::OAUTH_TOKEN));
+        let token_opts = observed.as_ref().unwrap_or(&opts);
+        let key = cx.ws.local_key();
+        let fetching = oauth2::ensure_token(cx.client, token_opts, &config, cx.tokens, &key);
+        let token = Box::pin(fetching).await?;
         apply_token(&mut resolved, &token.access_token);
+        *prepared = Some(resolved.request.clone());
     }
     if resolved.mcp.is_some() {
         let workspace = cx.ws.local_key();
@@ -409,7 +451,8 @@ async fn send(
         let running = crate::grpc::run_once(cx.client, cx.ws.root(), outside, request, &target, &opts, &render);
         let (response, steps, notes) = Box::pin(running).await?;
         let tests = steps.iter().map(crate::live::StepResult::test).collect();
-        return Ok((resolved, response, None, Some((tests, notes))));
+        let own = notes.len();
+        return Ok((resolved, response, None, Some((tests, notes, own))));
     }
     if request.kind == zorvik_workspace::formats::RequestKind::SocketIo {
         let ctx = vars.var_context();
@@ -424,10 +467,11 @@ async fn send(
             messages,
         );
         let (response, steps, mut notes, scripted) = Box::pin(running).await?;
+        let own = notes.len();
         let mut tests: Vec<_> = steps.iter().map(crate::live::StepResult::test).collect();
         tests.extend(scripted.tests);
         notes.extend(scripted.notes);
-        return Ok((resolved, response, None, Some((tests, notes))));
+        return Ok((resolved, response, None, Some((tests, notes, own))));
     }
     if request.kind == zorvik_workspace::formats::RequestKind::Websocket {
         let ctx = vars.var_context();
@@ -443,10 +487,11 @@ async fn send(
             messages,
         );
         let (response, steps, mut notes, scripted) = Box::pin(running).await?;
+        let own = notes.len();
         let mut tests: Vec<_> = steps.iter().map(crate::live::StepResult::test).collect();
         tests.extend(scripted.tests);
         notes.extend(scripted.notes);
-        return Ok((resolved, response, None, Some((tests, notes))));
+        return Ok((resolved, response, None, Some((tests, notes, own))));
     }
     if let Some(subscription) = resolved.subscription.clone() {
         // Read like an event stream; the body is the results as a JSON array.
@@ -533,6 +578,9 @@ struct AppHost {
     runtime: tokio::runtime::Handle,
     /// The request's host: scripts only touch this site's cookies.
     site: String,
+    /// The app's console: scripts' console lines and `pm.sendRequest` requests go there as
+    /// they happen.
+    console: Option<ConsoleScope>,
 }
 
 fn host_of(url: &str) -> Option<String> {
@@ -603,8 +651,17 @@ impl Host for AppHost {
             headers: request.headers.iter().map(|h| Header::new(&h.key, &h.value)).collect(),
             body: request.body.into_bytes().into(),
         };
-        let response =
-            self.runtime.block_on(self.client.send(outgoing, &options, self.jar.as_deref())).map_err(|e| e.message)?;
+        let sent = self.console.is_some().then(|| outgoing.clone());
+        let started = std::time::Instant::now();
+        let result = self.runtime.block_on(self.client.send(outgoing, &options, self.jar.as_deref()));
+        if let (Some(console), Some(sent)) = (&self.console, &sent) {
+            let x = match &result {
+                Ok(response) => Exchange::response("HTTP", sent, response),
+                Err(e) => Exchange::failed("HTTP", sent, &e.message, started.elapsed()),
+            };
+            console.exchange(x.origin(crate::console::SEND_REQUEST));
+        }
+        let response = result.map_err(|e| e.message)?;
         Ok(HostResponse {
             code: response.meta.status,
             status: response.meta.status_text.clone(),
@@ -641,10 +698,20 @@ impl Host for AppHost {
     fn dynamic(&self, expression: &str) -> Option<String> {
         zorvik_workspace::dynamic::generate(expression)
     }
+
+    fn log(&self, level: ConsoleLevel, message: &str) {
+        if let Some(console) = &self.console {
+            console.log(level, message);
+        }
+    }
 }
 
-/// The app's side of the scripts of one send.
-pub(crate) fn script_host(cx: &SendContext<'_>, url: &str) -> ApiResult<Option<Arc<dyn Host>>> {
+/// The app's side of the scripts of one send. Their console lines go to `console` too.
+pub(crate) fn script_host(
+    cx: &SendContext<'_>,
+    url: &str,
+    console: Option<ConsoleScope>,
+) -> ApiResult<Option<Arc<dyn Host>>> {
     let mut options = cx.settings.request_options(&Default::default())?;
     options.host_guard = cx.guard.clone();
     let host = AppHost {
@@ -653,6 +720,7 @@ pub(crate) fn script_host(cx: &SendContext<'_>, url: &str) -> ApiResult<Option<A
         options,
         runtime: tokio::runtime::Handle::current(),
         site: host_of(url).unwrap_or_default(),
+        console,
     };
     Ok(Some(Arc::new(host)))
 }
@@ -756,10 +824,11 @@ pub(crate) async fn run_chain(
                 if change.scope == Scope::Environment && !has_environment {
                     if !warned {
                         warned = true;
-                        report.console.push(ConsoleEntry {
-                            level: ConsoleLevel::Warn,
-                            message: "No environment is active: values set with pm.environment are not kept.".into(),
-                        });
+                        let message = "No environment is active: values set with pm.environment are not kept.";
+                        if let Some(host) = &host {
+                            host.log(ConsoleLevel::Warn, message);
+                        }
+                        report.console.push(ConsoleEntry { level: ConsoleLevel::Warn, message: message.into() });
                     }
                 } else if change.scope != Scope::Local {
                     changes.push(change);
@@ -770,11 +839,16 @@ pub(crate) async fn run_chain(
             let room = MAX_CONSOLE.saturating_sub(report.console.len());
             report.console.extend(out.console.into_iter().take(room));
             if let Some(error) = out.error {
-                report.errors.push(ScriptFailure {
+                let failure = ScriptFailure {
                     script: format!("{kind} script of {label}"),
                     message: error.message,
                     line: error.line,
-                });
+                };
+                // The script's own lines went to the app's console as it ran; why it stopped too.
+                if let Some(host) = &host {
+                    host.log(ConsoleLevel::Error, &failure.describe());
+                }
+                report.errors.push(failure);
                 if event == Event::PreRequest {
                     break;
                 }

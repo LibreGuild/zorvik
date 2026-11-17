@@ -1233,6 +1233,41 @@ h3 {
   flex: none;
   color: var(--accent-2);
 }
+.mirrors {
+  margin: 18px 0 0;
+  padding: 14px 18px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgb(255 255 255 / 0.02);
+  color: var(--faint);
+  font-size: 0.9rem;
+}
+.mirrors p {
+  margin: 0 0 8px;
+}
+.mirrors b {
+  color: var(--text);
+}
+.mirrors ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mirrors li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+}
+.mirrors li span {
+  width: 58px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.mirrors a.mine {
+  font-weight: 700;
+}
 .dl-foot {
   max-width: 760px;
   margin: 28px auto 0;

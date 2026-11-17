@@ -333,6 +333,7 @@ impl Api {
         {
             previous.cancel();
         }
+        let sent_message = Arc::new(std::sync::Mutex::new(None::<String>));
         let outcome = tokio::select! {
             r = async {
                 let opts = crate::request_options(&settings, &p.request.settings)?;
@@ -341,7 +342,16 @@ impl Api {
                 // Variables the message uses that aren't defined.
                 self.grpc_message(&ws, &p.request.body.text, &mut unresolved);
                 let ctx = self.var_context(&ws);
-                let render = move |t: &str| ctx.render(t, &mut BTreeSet::new());
+                // The message as it goes out (dynamic variables give a new value each time),
+                // for the console.
+                let (body, seen) = (p.request.body.text.clone(), sent_message.clone());
+                let render = move |t: &str| {
+                    let text = ctx.render(t, &mut BTreeSet::new());
+                    if t == body {
+                        *lock(&seen) = Some(text.clone());
+                    }
+                    text
+                };
                 let call = Box::pin(run_call(&self.inner.client, &target, &method, &p.request, &opts, &render)).await?;
                 Ok::<_, ApiError>((target.url, call, unresolved))
             } => r,
@@ -350,6 +360,13 @@ impl Api {
         remove_if_current(&self.inner.inflight, &p.request_id, |(g, _)| *g == generation);
 
         let workspace = ws.root().to_string_lossy().into_owned();
+        let message = lock(&sent_message).take();
+        self.console_call(
+            &p.request,
+            message,
+            started,
+            outcome.as_ref().map(|(url, call, _)| (url.as_str(), &call.response)),
+        );
         match &outcome {
             Ok((url, CallRun { response, .. }, _)) => {
                 let (status, error) = if response.status.is_ok() {
@@ -376,6 +393,36 @@ impl Api {
             steps: call.steps.iter().map(StepResult::test).collect(),
             notes: call.notes,
         })
+    }
+
+    /// A call in the console: what was sent, the status and the messages that came back.
+    fn console_call(
+        &self,
+        request: &Request,
+        message: Option<String>,
+        started: Instant,
+        outcome: Result<(&str, &GrpcResponse), &ApiError>,
+    ) {
+        let (url, response) = match outcome {
+            Ok(done) => done,
+            Err(e) => {
+                self.console_connect(request, None, started, Err(e));
+                return;
+            }
+        };
+        // Like a run's result: an HTTP-shaped answer, with the gRPC status as the error.
+        let streaming = response.messages.len() != 1;
+        let as_http = as_response(url, response, streaming);
+        let sent = zorvik_engine::HttpRequest {
+            method: request.method.clone(),
+            url: url.to_string(),
+            headers: response.request_headers.clone(),
+            body: message.unwrap_or_default().into_bytes().into(),
+        };
+        let error =
+            (!response.status.is_ok()).then(|| format!("{}: {}", response.status.name, response.status.message));
+        let scope = self.console_scope().of(&request.name);
+        scope.exchange(crate::console::Exchange::response("gRPC", &sent, &as_http).error(error));
     }
 
     /// History of a unary call: HTTP 200 when it succeeded (status OK); any
@@ -422,6 +469,7 @@ impl Api {
         if let Some((_, old)) = lock(&self.inner.inflight).insert(request_id.clone(), (generation, cancel.clone())) {
             old.cancel();
         }
+        let opening = Instant::now();
         let started = tokio::select! {
             r = async {
                 let opts = crate::request_options(&settings, &p.request.settings)?;
@@ -442,6 +490,16 @@ impl Api {
             } => r,
             _ = cancel.cancelled() => Err(EngineError::cancelled().into()),
         };
+        let outcome = started.as_ref().map(|(stream, ..)| {
+            crate::console::Opened::Done(format!(
+                "Stream opened{}",
+                match &stream.opened.remote_addr {
+                    Some(addr) => format!(" · {addr}"),
+                    None => String::new(),
+                }
+            ))
+        });
+        self.console_connect(&p.request, None, opening, outcome);
         let (stream, method, unresolved) = match started {
             Ok(s) => s,
             Err(e) => {

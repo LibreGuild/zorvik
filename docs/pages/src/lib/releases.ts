@@ -85,4 +85,20 @@ export const CLI_FILES = [
   { os: "linux" as Os, file: "zorvik-cli-linux-x86_64.tar.gz", label: "Linux", note: "x86-64 · glibc 2.35+" },
 ].map((f) => ({ ...f, url: `https://github.com/${REPO}/releases/latest/download/${f.file}` }));
 
+/**
+ * The latest release's files on the project's own storage, where the release workflow copies
+ * them (the newest release only, under the files' own names): for networks that can't reach
+ * GitHub. The second address is a backup of the first.
+ */
+export const MIRRORS = [
+  { label: "Mirror", base: "https://libreguild.skatech.org/zorvik/" },
+  { label: "Backup", base: "https://pub-6c540d377bd4404f87ff33fb14c18c21.r2.dev/zorvik/" },
+];
+
+/** What a mirror link is called: the system, and which of its files when it has several. */
+export const MIRROR_FILES: { os: Os; file: string; label: string }[] = [
+  ...FILES.map((f) => ({ os: f.os, file: f.file, label: f.os === "macos" ? "macOS" : `${f.os === "windows" ? "Windows" : "Linux"} ${f.label}` })),
+  ...CLI_FILES.map((f) => ({ os: f.os, file: f.file, label: `${f.label} command line` })),
+];
+
 export const formatSize = (bytes: number | null) => (bytes == null ? "" : `${(bytes / 1_048_576).toFixed(bytes > 104_857_600 ? 0 : 1)} MB`);

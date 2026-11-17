@@ -75,6 +75,12 @@ impl Redactor {
         self.rules.is_empty()
     }
 
+    /// Bytes of the longest value hidden: the end of a text that was cut may hold the start
+    /// of one, which nothing would recognize.
+    pub fn longest(&self) -> usize {
+        self.rules.first().map_or(0, |(value, _)| value.len())
+    }
+
     fn add(&mut self, value: &str, replacement: &str, min_len: usize) {
         let value = value.trim();
         if value.chars().count() < min_len || self.rules.iter().any(|(v, _)| v == value) {
@@ -138,6 +144,14 @@ impl Redactor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_longest_value_is_known() {
+        assert_eq!(Redactor::default().longest(), 0);
+        let headers = [Header::new("Authorization", "Bearer abcdefghijkl"), Header::new("X-Api-Key", "k3y-value")];
+        let r = Redactor::default().with_headers(&headers);
+        assert_eq!(r.longest(), "Bearer abcdefghijkl".len());
+    }
 
     fn var(key: &str, value: &str, secret: bool) -> Variable {
         Variable { key: key.into(), value: value.into(), enabled: true, secret }

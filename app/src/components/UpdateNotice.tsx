@@ -12,7 +12,6 @@ import { Button } from "./ui";
 export function UpdateNotice() {
   const info = useUpdates((s) => s.info);
   const dismissed = useUpdates((s) => s.dismissed);
-  const channel = useSettings((s) => s.settings?.updates.channel ?? "stable");
   const mode = useSettings((s) => s.settings?.updates.mode ?? "automatic");
   const [busy, setBusy] = useState(false);
   const status = info?.status;
@@ -64,11 +63,11 @@ export function UpdateNotice() {
               </Button>
             )}
             {out && byHand && (
-              <Button size="sm" variant="primary" onClick={() => void openExternal(releaseNotesUrl(info, version, channel))}>
+              <Button size="sm" variant="primary" onClick={() => void openExternal(releaseNotesUrl(info, version))}>
                 Open downloads
               </Button>
             )}
-            <Button size="sm" variant="ghost" onClick={() => void openExternal(releaseNotesUrl(info, version, channel))}>
+            <Button size="sm" variant="ghost" onClick={() => void openExternal(releaseNotesUrl(info, version))}>
               What's new
             </Button>
           </div>

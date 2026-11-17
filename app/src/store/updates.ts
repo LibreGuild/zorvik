@@ -72,9 +72,8 @@ export function newVersion(info: UpdateInfo | null): string | null {
  *  or installing it automatically didn't work. */
 export const installsByHand = (info: UpdateInfo) => !info.canInstall || (info.status.state === "available" && info.status.byHand);
 
-/** The release page of a version (the nightly channel has one page, replaced each day). */
-export const releaseNotesUrl = (info: UpdateInfo, version: string, channel: "stable" | "nightly") =>
-  `${info.downloadPage}/tag/${channel === "nightly" ? "nightly" : `v${version}`}`;
+/** The release page of a version. */
+export const releaseNotesUrl = (info: UpdateInfo, version: string) => `${info.downloadPage}/tag/v${version}`;
 
 export function dismissNotice(version: string) {
   useUpdates.setState({ dismissed: version });

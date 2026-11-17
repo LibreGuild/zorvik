@@ -1,7 +1,8 @@
 //! Updates from GitHub Releases (docs/architecture.md, "Updates").
 //!
 //! The app reads the release's `latest.json` on GitHub a little after it starts and then every
-//! few hours. That request is the only thing sent: nothing about the user, the computer or
+//! few hours; when GitHub can't be reached, from the project's mirrors of the releases
+//! ([`SOURCES`]). That request is the only thing sent: nothing about the user, the computer or
 //! their work. A newer version is downloaded in the background (Settings → Updates →
 //! Automatic), checked against the project's signing key, and installed when the user restarts
 //! or quits. Installs the app can't update itself (the portable zip, .deb and .rpm, a copy
@@ -14,11 +15,36 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_updater::{RemoteRelease, Update, UpdaterExt};
+use tauri_plugin_updater::{Update, UpdaterExt};
 use zorvik_api::Api;
 
-const STABLE_URL: &str = "https://github.com/LibreGuild/zorvik/releases/latest/download/latest.json";
-const NIGHTLY_URL: &str = "https://github.com/LibreGuild/zorvik/releases/download/nightly/latest.json";
+/// Where a release's files are, on GitHub: `<tag>/<file>` follows.
+const GITHUB_FILES: &str = "https://github.com/LibreGuild/zorvik/releases/download/";
+
+/// A place the newest release can be read from.
+struct Source {
+    /// Its `latest.json`.
+    list: &'static str,
+    /// Where its files are. GitHub: `<tag>/<file>` follows, as `latest.json` names them. A
+    /// mirror keeps the newest release only: `<file>` follows.
+    files: &'static str,
+}
+
+/// GitHub, then the project's mirrors, where the release workflow copies the newest release
+/// (the same files), for networks that can't reach GitHub. Asked in this order, for the list
+/// and for the download: when one fails, the next one is asked. An update is trusted for its
+/// signature, not for where it came from: a mirror can withhold an update, but not change one.
+const SOURCES: [Source; 3] = [
+    Source { list: "https://github.com/LibreGuild/zorvik/releases/latest/download/latest.json", files: GITHUB_FILES },
+    Source {
+        list: "https://libreguild.skatech.org/zorvik/latest.json",
+        files: "https://libreguild.skatech.org/zorvik/",
+    },
+    Source {
+        list: "https://pub-6c540d377bd4404f87ff33fb14c18c21.r2.dev/zorvik/latest.json",
+        files: "https://pub-6c540d377bd4404f87ff33fb14c18c21.r2.dev/zorvik/",
+    },
+];
 /// Where people download Zorvik by hand.
 const RELEASES_PAGE: &str = "https://github.com/LibreGuild/zorvik/releases";
 /// The first check waits until the app has settled.
@@ -41,12 +67,6 @@ enum Mode {
     Automatic,
     Notify,
     Off,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Channel {
-    Stable,
-    Nightly,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -98,8 +118,9 @@ pub struct UpdateInfo {
 #[derive(Default)]
 pub struct Updates {
     status: Mutex<Option<Status>>,
-    /// The newer version found by the last check.
-    found: Mutex<Option<Update>>,
+    /// The newer version found by the last check, and the source (of [`SOURCES`]) that had it;
+    /// `None` for the address a test gave (`ZORVIK_UPDATE_URL`).
+    found: Mutex<Option<(Update, Option<usize>)>>,
     /// Its downloaded, verified package.
     ready: Mutex<Option<(Update, Vec<u8>)>>,
     /// A version that couldn't be downloaded or installed: not tried again until the next start.
@@ -171,34 +192,6 @@ fn install_support() -> Result<(), &'static str> {
     Ok(())
 }
 
-/// When a nightly was built (the release tool sets it; local builds have none).
-fn built_at() -> Option<time::OffsetDateTime> {
-    let raw = option_env!("ZORVIK_BUILT_AT")?;
-    time::OffsetDateTime::parse(raw, &time::format_description::well_known::Rfc3339).ok()
-}
-
-/// Whether `remote` is newer than this build. Nightlies carry the version of the code they
-/// were built from, so a newer version always wins and, for the same version, a nightly built
-/// later does (only on the nightly channel: a stable user never gets a nightly of their version).
-fn is_newer(
-    channel: Channel,
-    current: &semver::Version,
-    built: Option<time::OffsetDateTime>,
-    remote_version: &semver::Version,
-    remote_date: Option<time::OffsetDateTime>,
-) -> bool {
-    if remote_version != current {
-        return remote_version > current;
-    }
-    channel == Channel::Nightly
-        && match (remote_date, built) {
-            (Some(remote), Some(built)) => remote > built,
-            // A stable build of this version, and a nightly of it: the nightly is newer.
-            (Some(_), None) => true,
-            _ => false,
-        }
-}
-
 impl Updates {
     fn status(&self) -> Status {
         lock(&self.status).clone().unwrap_or(Status::Idle)
@@ -237,8 +230,8 @@ pub fn info(app: &AppHandle) -> UpdateInfo {
     }
 }
 
-/// The update settings (and the proxy) the user chose.
-async fn preferences(app: &AppHandle) -> (Mode, Channel, Option<url::Url>) {
+/// The update settings the user chose, and all settings (for the proxy).
+async fn preferences(app: &AppHandle) -> (Mode, serde_json::Value) {
     let api = app.state::<Api>().inner().clone();
     let settings = api.call("settings.get", serde_json::Value::Null).await.unwrap_or_default();
     let mode = match settings.pointer("/updates/mode").and_then(|v| v.as_str()) {
@@ -246,18 +239,14 @@ async fn preferences(app: &AppHandle) -> (Mode, Channel, Option<url::Url>) {
         Some("off") => Mode::Off,
         _ => Mode::Automatic,
     };
-    let channel = match settings.pointer("/updates/channel").and_then(|v| v.as_str()) {
-        Some("nightly") => Channel::Nightly,
-        _ => Channel::Stable,
-    };
-    (mode, channel, proxy_url(&settings))
+    (mode, settings)
 }
 
-/// The proxy the app's own requests use for github.com, if any.
-fn proxy_url(settings: &serde_json::Value) -> Option<url::Url> {
+/// The proxy the app's own requests use for `target`'s host, if any.
+fn proxy_url(settings: &serde_json::Value, target: &url::Url) -> Option<url::Url> {
     let mode: zorvik_engine::ProxyMode = serde_json::from_value(settings.get("proxy")?.clone()).ok()?;
     let proxy = zorvik_engine::ProxySettings::from_mode(&mode).ok()?;
-    let endpoint = proxy.for_target("github.com", true)?;
+    let endpoint = proxy.for_target(target.host_str()?, target.scheme() == "https")?;
     let mut url = url::Url::parse(&format!("http://{}:{}", endpoint.host, endpoint.port)).ok()?;
     if let Some(user) = &endpoint.username {
         let _ = url.set_username(user);
@@ -282,7 +271,7 @@ pub async fn check(app: AppHandle, manual: bool) {
         }
         return;
     }
-    let (mode, channel, proxy) = preferences(&app).await;
+    let (mode, settings) = preferences(&app).await;
     if mode == Mode::Off && !manual {
         return;
     }
@@ -293,7 +282,7 @@ pub async fn check(app: AppHandle, manual: bool) {
     if manual {
         updates.set(&app, Status::Checking);
     }
-    let found = match find(&app, channel, proxy).await {
+    let found = match find(&app, &settings).await {
         Ok(found) => found,
         Err(e) => {
             tracing::info!("update check failed: {}", causes(&e));
@@ -303,14 +292,14 @@ pub async fn check(app: AppHandle, manual: bool) {
             return;
         }
     };
-    let Some(update) = found else {
+    let Some((update, source)) = found else {
         updates.set(&app, Status::UpToDate { checked_at: now_ms() });
         return;
     };
     tracing::info!("Zorvik {} is available", update.version);
     let by_hand = lock(&updates.by_hand).as_deref() == Some(update.version.as_str());
     updates.set(&app, available(&update, by_hand));
-    *lock(&updates.found) = Some(update);
+    *lock(&updates.found) = Some((update, source));
     if mode == Mode::Automatic && !by_hand && install_support().is_ok() {
         download_found(&app).await;
     }
@@ -323,59 +312,119 @@ pub async fn download(app: AppHandle) {
     download_found(&app).await;
 }
 
+/// Where the update's file can be downloaded, in the order to try: at the source that had the
+/// list, then at the ones after it (GitHub, the mirror, the backup mirror). `latest.json`
+/// names the file by its GitHub address; a mirror has it under its name alone. A file that
+/// isn't one of the project's releases on GitHub is only where it is when GitHub (or a test)
+/// named it, and nowhere when a mirror did: a mirror never sends the app to an address of its
+/// choice.
+fn download_urls(named: &url::Url, source: Option<usize>) -> Vec<url::Url> {
+    let Some(first) = source else { return vec![named.clone()] };
+    // `<tag>/<file>`, e.g. `v1.2.3/Zorvik-Linux-x86_64.AppImage`.
+    let Some((_, file)) = named
+        .as_str()
+        .strip_prefix(GITHUB_FILES)
+        .and_then(|f| f.split_once('/'))
+        .filter(|(tag, file)| !tag.is_empty() && !file.is_empty() && !file.contains(['/', '?', '#']))
+    else {
+        return if first == 0 { vec![named.clone()] } else { Vec::new() };
+    };
+    (first..SOURCES.len())
+        .filter_map(|i| match i {
+            0 => Some(named.clone()),
+            _ => url::Url::parse(&format!("{}{file}", SOURCES[i].files)).ok(),
+        })
+        .collect()
+}
+
 async fn download_found(app: &AppHandle) {
     let updates = app.state::<Updates>();
-    let Some(update) = lock(&updates.found).clone() else { return };
+    let Some((update, source)) = lock(&updates.found).clone() else { return };
     if install_support().is_err() {
         return;
     }
     let version = update.version.clone();
     updates.set(app, Status::Downloading { version: version.clone(), percent: Some(0) });
-    let mut received = 0usize;
-    let mut shown = 0u8;
-    let progress = |chunk: usize, total: Option<u64>| {
-        received += chunk;
-        let percent = total.filter(|t| *t > 0).map(|t| ((received as u64 * 100) / t).min(100) as u8);
-        // A few events, not one per chunk.
-        if let Some(p) = percent
-            && p >= shown.saturating_add(5)
-        {
-            shown = p;
-            updates.set(app, Status::Downloading { version: version.clone(), percent: Some(p) });
-        }
-    };
-    match update.download(progress, || {}).await {
-        Ok(bytes) => {
-            let notes = update.body.clone();
-            *lock(&updates.ready) = Some((update, bytes));
-            updates.set(app, Status::Ready { version, notes });
-        }
-        Err(e) => {
-            // Offline, a network filter, or a signature that doesn't match: never installed.
-            tracing::warn!("update download failed: {e}");
-            updates.by_hand(app, &update);
+    let (.., settings) = preferences(app).await;
+    for url in download_urls(&update.download_url, source) {
+        let mut from = update.clone();
+        from.proxy = proxy_url(&settings, &url);
+        from.download_url = url;
+        let mut received = 0usize;
+        let mut shown = 0u8;
+        let progress = |chunk: usize, total: Option<u64>| {
+            received += chunk;
+            let percent = total.filter(|t| *t > 0).map(|t| ((received as u64 * 100) / t).min(100) as u8);
+            // A few events, not one per chunk.
+            if let Some(p) = percent
+                && p >= shown.saturating_add(5)
+            {
+                shown = p;
+                updates.set(app, Status::Downloading { version: version.clone(), percent: Some(p) });
+            }
+        };
+        match from.download(progress, || {}).await {
+            Ok(bytes) => {
+                let notes = update.body.clone();
+                *lock(&updates.ready) = Some((from, bytes));
+                updates.set(app, Status::Ready { version, notes });
+                return;
+            }
+            // Offline, a network filter, or a signature that doesn't match (never installed):
+            // the next place may have it.
+            Err(e) => {
+                tracing::warn!("update download from {} failed: {e}", from.download_url.host_str().unwrap_or("?"));
+                updates.set(app, Status::Downloading { version: version.clone(), percent: Some(0) });
+            }
         }
     }
+    updates.by_hand(app, &update);
 }
 
+/// The newer version, if there is one, and the source that had it. Sources are asked in order
+/// (GitHub, the mirror, the backup mirror); one that can't be reached, or has no release,
+/// hands over to the next.
 async fn find(
     app: &AppHandle,
-    channel: Channel,
-    proxy: Option<url::Url>,
+    settings: &serde_json::Value,
+) -> Result<Option<(Update, Option<usize>)>, tauri_plugin_updater::Error> {
+    if let Some(url) = std::env::var("ZORVIK_UPDATE_URL").ok().filter(|u| !u.is_empty()) {
+        return Ok(find_at(app, settings, &url).await?.map(|update| (update, None)));
+    }
+    let mut failed = None;
+    for (i, source) in SOURCES.iter().enumerate() {
+        let url = source.list;
+        match find_at(app, settings, url).await {
+            Ok(found) => {
+                return Ok(found.map(|mut update| {
+                    // Only the files are signed: a mirror's words about them aren't shown.
+                    if i > 0 {
+                        update.body = None;
+                    }
+                    (update, Some(i))
+                }));
+            }
+            Err(e) => {
+                tracing::info!("no update list at {url}: {}", causes(&e));
+                // What GitHub said is what the user is told.
+                failed.get_or_insert(e);
+            }
+        }
+    }
+    Err(failed.unwrap_or(tauri_plugin_updater::Error::ReleaseNotFound))
+}
+
+async fn find_at(
+    app: &AppHandle,
+    settings: &serde_json::Value,
+    url: &str,
 ) -> Result<Option<Update>, tauri_plugin_updater::Error> {
-    let url = std::env::var("ZORVIK_UPDATE_URL")
-        .ok()
-        .filter(|u| !u.is_empty())
-        .unwrap_or_else(|| (if channel == Channel::Nightly { NIGHTLY_URL } else { STABLE_URL }).to_string());
-    let endpoint = url::Url::parse(&url).map_err(|e| tauri_plugin_updater::Error::Io(std::io::Error::other(e)))?;
-    let built = built_at();
+    let endpoint = url::Url::parse(url).map_err(|e| tauri_plugin_updater::Error::Io(std::io::Error::other(e)))?;
+    let proxy = proxy_url(settings, &endpoint);
     let mut builder = app
         .updater_builder()
         .endpoints(vec![endpoint])?
-        .configure_client(|client| client.connect_timeout(CONNECT_TIMEOUT).read_timeout(READ_TIMEOUT))
-        .version_comparator(move |current, remote: RemoteRelease| {
-            is_newer(channel, &current, built, &remote.version, remote.pub_date)
-        });
+        .configure_client(|client| client.connect_timeout(CONNECT_TIMEOUT).read_timeout(READ_TIMEOUT));
     if let Some(proxy) = proxy {
         builder = builder.proxy(proxy);
     }
@@ -507,30 +556,50 @@ pub fn update_install(app: AppHandle) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use time::macros::datetime;
-
     use super::*;
 
-    fn v(s: &str) -> semver::Version {
-        semver::Version::parse(s).unwrap()
-    }
-
     #[test]
-    fn newer_versions_and_nightlies() {
-        let (a, b) = (datetime!(2026-09-01 03:17 UTC), datetime!(2026-09-02 03:17 UTC));
-        // A newer version always wins; an older never does.
-        assert!(is_newer(Channel::Stable, &v("0.1.2"), None, &v("0.1.3"), None));
-        assert!(!is_newer(Channel::Nightly, &v("0.1.3"), Some(b), &v("0.1.2"), Some(b)));
-        // Same version on stable: nothing to do, even from a nightly.
-        assert!(!is_newer(Channel::Stable, &v("0.1.2"), None, &v("0.1.2"), Some(b)));
-        assert!(!is_newer(Channel::Stable, &v("0.1.2"), Some(a), &v("0.1.2"), Some(b)));
-        // Nightly channel: a later build of the same version.
-        assert!(is_newer(Channel::Nightly, &v("0.1.2"), Some(a), &v("0.1.2"), Some(b)));
-        assert!(!is_newer(Channel::Nightly, &v("0.1.2"), Some(b), &v("0.1.2"), Some(b)), "the same build");
-        assert!(!is_newer(Channel::Nightly, &v("0.1.2"), Some(b), &v("0.1.2"), Some(a)));
-        // A stable build moving to nightly gets the nightly of its version.
-        assert!(is_newer(Channel::Nightly, &v("0.1.2"), None, &v("0.1.2"), Some(a)));
-        assert!(!is_newer(Channel::Nightly, &v("0.1.2"), None, &v("0.1.2"), None));
+    fn a_release_file_is_looked_for_at_github_then_the_mirrors() {
+        let named = url::Url::parse(&format!("{GITHUB_FILES}v1.2.3/Zorvik-Linux-x86_64.AppImage")).unwrap();
+        let from = |source| download_urls(&named, source).iter().map(url::Url::to_string).collect::<Vec<_>>();
+        // The list came from GitHub: GitHub, then the mirror, then the backup mirror.
+        assert_eq!(
+            from(Some(0)),
+            [
+                "https://github.com/LibreGuild/zorvik/releases/download/v1.2.3/Zorvik-Linux-x86_64.AppImage",
+                "https://libreguild.skatech.org/zorvik/Zorvik-Linux-x86_64.AppImage",
+                "https://pub-6c540d377bd4404f87ff33fb14c18c21.r2.dev/zorvik/Zorvik-Linux-x86_64.AppImage",
+            ]
+        );
+        // GitHub didn't answer and the mirror had the list: the mirror, then the backup.
+        assert_eq!(
+            from(Some(1)),
+            [
+                "https://libreguild.skatech.org/zorvik/Zorvik-Linux-x86_64.AppImage",
+                "https://pub-6c540d377bd4404f87ff33fb14c18c21.r2.dev/zorvik/Zorvik-Linux-x86_64.AppImage",
+            ]
+        );
+        assert_eq!(
+            from(Some(2)),
+            ["https://pub-6c540d377bd4404f87ff33fb14c18c21.r2.dev/zorvik/Zorvik-Linux-x86_64.AppImage"]
+        );
+        // A test's own address, and a file that isn't a release's, are used as they are.
+        assert_eq!(from(None), [named.to_string()]);
+        let other = url::Url::parse("http://127.0.0.1:8000/Zorvik-macOS-universal.app.tar.gz").unwrap();
+        assert_eq!(download_urls(&other, None), std::slice::from_ref(&other));
+        assert_eq!(download_urls(&other, Some(0)), std::slice::from_ref(&other));
+        let deeper = url::Url::parse(&format!("{GITHUB_FILES}v1/a/b")).unwrap();
+        assert_eq!(download_urls(&deeper, Some(0)), std::slice::from_ref(&deeper));
+        // A mirror can't send the app anywhere else: such an update is offered by hand.
+        assert!(download_urls(&other, Some(1)).is_empty());
+        assert!(download_urls(&deeper, Some(2)).is_empty());
+        // The order is GitHub, the mirror's own address, its backup; all https, one layout.
+        let hosts: Vec<&str> = SOURCES.iter().map(|s| s.list.split('/').nth(2).unwrap()).collect();
+        assert_eq!(hosts, ["github.com", "libreguild.skatech.org", "pub-6c540d377bd4404f87ff33fb14c18c21.r2.dev"]);
+        for source in &SOURCES {
+            assert!(source.list.starts_with("https://") && source.list.ends_with("/latest.json"), "{}", source.list);
+            assert!(source.files.starts_with("https://") && source.files.ends_with('/'), "{}", source.files);
+        }
     }
 
     #[test]

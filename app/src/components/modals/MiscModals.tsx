@@ -399,6 +399,8 @@ export function ExportModal({ tabId }: { tabId: string }) {
       onClose={closeModal}
       title="Copy as cURL or code"
       width={880}
+      // A column: the panes shrink with a short window, so only the lists inside scroll.
+      bodyClassName="flex flex-col"
       footer={
         <>
           <Button variant="ghost" onClick={closeModal}>
@@ -1172,6 +1174,7 @@ export function ShortcutsModal({ mod }: { mod: string }) {
     ["Focus URL", [mod, "L"]],
     ["Next / previous tab", ["Ctrl", "Tab"]],
     ["Environments", [mod, "E"]],
+    ["Show or hide the console", [mod, "J"]],
     ["Settings", [mod, ","]],
     ["Search in editor / response", [mod, "F"]],
     ["Zoom in / out", [mod, "+", "−"]],

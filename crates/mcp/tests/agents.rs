@@ -158,6 +158,37 @@ async fn agent_edits_sends_runs_and_is_asked() {
     assert_eq!(res["status"], 200);
     assert!(!text.contains("s3cret-token-value"), "{text}");
     assert!(text.contains("••••••"), "{text}");
+    // The console has the send with what went out and came back, the secret hidden there too
+    // (the echoed header in the response body included).
+    let (err, console, text) = agent.call("read_console", json!({ "kind": "requests" })).await;
+    assert!(!err, "{text}");
+    let line = console["lines"].as_array().unwrap().last().expect("the send");
+    assert_eq!(
+        (line["request"].as_str(), line["source"].as_str(), line["status"].as_u64()),
+        (Some("Echo"), Some("agent"), Some(200))
+    );
+    assert!(line["requestHeaders"].as_array().unwrap().iter().any(|h| h == "Authorization: ••••••"), "{line}");
+    assert!(line["responseBody"]["text"].as_str().is_some_and(|b| b.contains("authorization")), "{line}");
+    assert!(!text.contains("s3cret-token-value"), "{text}");
+    let (_, none, _) = agent.call("read_console", json!({ "errorsOnly": true })).await;
+    assert_eq!(none["lines"], json!([]));
+    // Searching sees what the agent sees: a guess at the secret finds nothing.
+    let (_, found, _) = agent.call("read_console", json!({ "search": "ECHO?q=1" })).await;
+    assert_eq!(found["lines"].as_array().map(Vec::len), Some(1), "{found}");
+    for guess in ["s3cret-token-value", "s3cret"] {
+        let (_, guessed, _) = agent.call("read_console", json!({ "search": guess })).await;
+        assert_eq!(guessed["lines"], json!([]), "{guess}");
+    }
+    // A secret that changes later stays hidden in what was sent with the old value.
+    let (err, _, text) = agent
+        .call("save_environment", json!({ "name": "Local", "variables": [{ "key": "token", "value": "an0ther-token-value", "secret": true }] }))
+        .await;
+    assert!(!err, "{text}");
+    let (_, _, text) = agent.call("read_console", json!({})).await;
+    assert!(!text.contains("s3cret-token-value"), "{text}");
+    agent
+        .call("save_environment", json!({ "name": "Local", "variables": [{ "key": "token", "value": "s3cret-token-value", "secret": true }] }))
+        .await;
 
     // A redirect to a host nobody approved is stopped before it connects…
     let redirect = json!({ "request": { "url": "{{base}}/redirect-to?url=http://blocked.example/x" } });

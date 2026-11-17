@@ -25,7 +25,6 @@ tauri-plugin-opener = "2.5"
 tauri-plugin-single-instance = "2"
 # Updates from GitHub Releases, signed with the project's updater key (docs/ci-release.md).
 tauri-plugin-updater = "2.13"
-semver = "1"
 serde.workspace = true
 time.workspace = true
 url.workspace = true

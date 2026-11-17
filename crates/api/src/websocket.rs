@@ -16,6 +16,7 @@ use zorvik_engine::{EngineError, HttpResponse, WsEvent, WsOutgoing, WsSession};
 use zorvik_workspace::formats::{MessageFormat, Request, SavedMessage, WebSocketOptions};
 
 use crate::agents::redact::Redactor;
+use crate::console::Opened;
 use crate::file_stream::Settled;
 use crate::live::{self, Connected, MIN_REPEAT, MessageLog, StepResult, Steps, every_text, run_steps};
 use crate::message_scripts::{self, MessageScripts, Scripted};
@@ -193,6 +194,9 @@ impl Api {
             note_api.inner.sink.emit(StreamEvent::Ws { conn_id: note_id.clone(), event });
         };
         let mut request = request.clone();
+        let started = std::time::Instant::now();
+        // The handshake as resolved, for the console when it fails.
+        let mut prepared = None;
         let connected = tokio::select! {
             r = async {
                 // Pre-request scripts first: they may change the request and set variables.
@@ -203,6 +207,7 @@ impl Api {
                 // An agent's connection: credentials of the handshake stay out of what it reads.
                 log.redact_also(&Redactor::default().with_headers(&resolved.request.headers));
                 let jar = settings.cookie_jar.then(|| self.jar(&ws));
+                prepared = Some(resolved.request.clone());
                 let conn = self.inner.client.websocket(resolved.request, &opts, jar.as_deref()).await?;
                 if let Some(jar) = &jar {
                     self.save_jar(&ws, jar);
@@ -211,6 +216,8 @@ impl Api {
             } => r,
             _ = cancel.cancelled() => Err(EngineError::cancelled().into()),
         };
+        let outcome = connected.as_ref().map(|(conn, ..)| Opened::Handshake(&conn.meta, &conn.timing));
+        let console = self.console_connect(&request, prepared.as_ref(), started, outcome);
         let (conn, unresolved, scripts) = match connected {
             Ok(c) => c,
             Err(e) => {
@@ -240,6 +247,12 @@ impl Api {
                     feed.ws(&event);
                 }
                 let closed = matches!(event, WsEvent::Closed { .. });
+                if let WsEvent::Closed { code, reason, by_client, .. } = &event {
+                    let code = code.map(|c| format!(" ({c})")).unwrap_or_default();
+                    let reason = if reason.is_empty() { String::new() } else { format!(": {reason}") };
+                    let who = if *by_client { "Closed" } else { "Closed by the server" };
+                    console.log(zorvik_script::ConsoleLevel::Info, &format!("WebSocket: {who}{code}{reason}"));
+                }
                 settled.ws(&event);
                 forward_log.record_ws(&event);
                 inner.sink.emit(StreamEvent::Ws { conn_id: id.clone(), event });

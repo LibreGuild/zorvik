@@ -64,9 +64,21 @@ impl Api {
         path: Option<&str>,
     ) -> ApiResult<(StreamingResponse, Vec<String>)> {
         let settings = self.settings();
-        let mut resolved = self.prepare(ws, request, path)?;
-        let opts = request_options(&settings, &request.settings)?;
-        self.authorize(ws, &mut resolved, &opts).await?;
+        let started = std::time::Instant::now();
+        let prepared = async {
+            let mut resolved = self.prepare(ws, request, path)?;
+            let opts = request_options(&settings, &request.settings)?;
+            self.authorize(ws, &mut resolved, &opts).await?;
+            Ok::<_, crate::ApiError>((resolved, opts))
+        }
+        .await;
+        let (mut resolved, opts) = match prepared {
+            Ok(p) => p,
+            Err(e) => {
+                self.console_connect(request, None, started, Err(&e));
+                return Err(e);
+            }
+        };
         let has = |name: &str| resolved.request.headers.iter().any(|h| h.name.eq_ignore_ascii_case(name));
         if !has("accept") {
             resolved.request.headers.push(zorvik_engine::Header::new("Accept", "text/event-stream"));
@@ -75,7 +87,13 @@ impl Api {
             resolved.request.headers.push(zorvik_engine::Header::new("Cache-Control", "no-cache"));
         }
         let jar = settings.cookie_jar.then(|| self.jar(ws));
-        let stream = self.inner.client.open_stream(resolved.request, &opts, jar.as_deref()).await?;
+        let sent = resolved.request.clone();
+        let stream =
+            self.inner.client.open_stream(resolved.request, &opts, jar.as_deref()).await.map_err(crate::ApiError::from);
+        // The stream's head in the console; its events are in the tab's log.
+        let outcome = stream.as_ref().map(|s| crate::console::Opened::Handshake(&s.meta, &s.timing));
+        self.console_connect(request, Some(&sent), started, outcome);
+        let stream = stream?;
         if let Some(jar) = &jar {
             self.save_jar(ws, jar);
         }

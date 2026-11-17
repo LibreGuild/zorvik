@@ -14,6 +14,8 @@ import type { AutoStartResult } from "../bindings/AutoStartResult";
 import type { CatalogEntry } from "../bindings/CatalogEntry";
 import type { CatalogImport } from "../bindings/CatalogImport";
 import type { CatalogPreview } from "../bindings/CatalogPreview";
+import type { ConsoleDetails } from "../bindings/ConsoleDetails";
+import type { ConsoleLine } from "../bindings/ConsoleLine";
 import type { Auth } from "../bindings/Auth";
 import type { CookieInfo } from "../bindings/CookieInfo";
 import type { CurlFlavor } from "../bindings/CurlFlavor";
@@ -275,6 +277,12 @@ export const api = {
   exportRun: (runId: string, path: string, format: "json" | "junit") => call<null>("runner.export", { runId, path, format }),
   /** What a result sent and got (null once the app no longer keeps it). */
   runDetails: (runId: string, seq: number) => call<RunDetails | null>("runner.details", { runId, seq }),
+
+  /** The console's lines, oldest first (new ones come as `console` events). */
+  consoleList: () => call<ConsoleLine[]>("console.list"),
+  /** What a console request sent and got (null once the app no longer keeps it). */
+  consoleDetails: (id: number) => call<ConsoleDetails | null>("console.details", { id }),
+  consoleClear: () => call<null>("console.clear"),
 
   /** Generic call for feature modules (DNS, tools) that own their method names. */
   call: <T>(method: string, params: unknown = {}) => call<T>(method, params),

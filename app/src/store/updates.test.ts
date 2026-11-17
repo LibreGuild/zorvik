@@ -45,10 +45,9 @@ describe("updates", () => {
     expect(installsByHand(info(out(false), false))).toBe(true);
   });
 
-  it("links to the release notes of the channel", () => {
+  it("links to the release notes of the version", () => {
     const i = info({ state: "idle" });
-    expect(releaseNotesUrl(i, "0.1.3", "stable")).toBe("https://github.com/LibreGuild/zorvik/releases/tag/v0.1.3");
-    expect(releaseNotesUrl(i, "0.1.3", "nightly")).toBe("https://github.com/LibreGuild/zorvik/releases/tag/nightly");
+    expect(releaseNotesUrl(i, "0.1.3")).toBe("https://github.com/LibreGuild/zorvik/releases/tag/v0.1.3");
   });
 
   it("remembers a closed notice per version", () => {

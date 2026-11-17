@@ -35,20 +35,14 @@ As with any download, GitHub counts how many times a release file was downloaded
 | **Updates** | **Automatic** (default) | Checks, downloads in the background, installs when you restart or quit. |
 | | **Tell me, don't download** | Checks, and shows a notice with **Download** when a new version is out. |
 | | **Off** | Never checks. **Check for updates** still works when you click it. |
-| **Channel** | **Stable releases** (default) | Versioned releases. |
-| | **Nightly builds** | A build of the newest code, once a day when there are changes. Less tested. |
 
-The section also shows this version, where the update stands, and **Check for updates**. In `settings.json` these are `updates.mode` (`automatic`, `notify`, `off`) and `updates.channel` (`stable`, `nightly`).
-
-:::tip[Switching back from nightly]
-Moving from the nightly channel back to stable doesn't downgrade you: you stay on your nightly until the next stable release, which then updates you.
-:::
+The section also shows this version, where the update stands, and **Check for updates**. In `settings.json` this is `updates.mode` (`automatic`, `notify`, `off`).
 
 ## Which downloads update themselves
 
 | Download | Updates |
 |---|---|
-| Windows installer | Itself. The installer runs with a small progress window and needs no administrator rights. |
+| Windows installer | Itself. The installer runs with a small progress window and needs no administrator rights. A `zorvik` command that is still running (an AI agent's `zorvik mcp`, a `zorvik serve` in a terminal) carries on with the version it started with; start it again to use the new one. |
 | macOS app | Itself, when it is in a folder you can write to (for example `/Applications`). A copy running from the disk image, or in a folder you can't write to, tells you when a new version is out. |
 | Linux AppImage | Itself. |
 | Windows portable zip, `.deb`, `.rpm` | They tell you when a new version is out, with a link to the download. `.deb` and `.rpm` belong to your package manager; install the new package the same way as the first one. |

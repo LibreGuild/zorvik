@@ -46,7 +46,7 @@ const SETTINGS: Settings = {
   filesOutsideWorkspace: false,
   scriptTimeoutMs: 5000,
   agents: { enabled: false, changes: "ask", traffic: "askOutside", follow: true, headless: false },
-  updates: { mode: "off", channel: "stable" },
+  updates: { mode: "off" },
 };
 
 describe("the Settings dialog", () => {

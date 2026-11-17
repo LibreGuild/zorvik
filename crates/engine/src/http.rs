@@ -109,6 +109,21 @@ pub trait ChallengeAuth: Send + Sync {
     }
 }
 
+/// Told about each request [`Client::send`] made and how it ended, after it ended: the request
+/// as it was given, the response or the error, and the time it took. For a log of the requests
+/// made on a caller's behalf by code that doesn't return them (an OAuth 2.0 token request).
+#[derive(Clone)]
+pub struct Observer(pub std::sync::Arc<Observed>);
+
+/// What an [`Observer`] is called with.
+pub type Observed = dyn Fn(&HttpRequest, std::result::Result<&HttpResponse, &EngineError>, Duration) + Send + Sync;
+
+impl std::fmt::Debug for Observer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Observer")
+    }
+}
+
 #[derive(Clone)]
 pub struct ChallengeAuthRef(pub std::sync::Arc<dyn ChallengeAuth>);
 
@@ -138,6 +153,8 @@ pub struct RequestOptions {
     pub host_guard: Option<HostGuard>,
     /// Digest or NTLM: answer the server's 401 challenge.
     pub challenge_auth: Option<ChallengeAuthRef>,
+    /// Told about each request `Client::send` makes with these options; `None` = nobody.
+    pub observer: Option<Observer>,
 }
 
 impl Default for RequestOptions {
@@ -155,6 +172,7 @@ impl Default for RequestOptions {
             default_headers: true,
             host_guard: None,
             challenge_auth: None,
+            observer: None,
         }
     }
 }
@@ -353,6 +371,21 @@ impl Client {
 
     /// Send a request and read the whole response body.
     pub async fn send(&self, req: HttpRequest, opts: &RequestOptions, jar: Option<&CookieJar>) -> Result<HttpResponse> {
+        let Some(observer) = &opts.observer else { return self.send_unobserved(req, opts, jar).await };
+        let started = Instant::now();
+        // The body is shared, not copied.
+        let seen = req.clone();
+        let result = self.send_unobserved(req, opts, jar).await;
+        (observer.0)(&seen, result.as_ref(), started.elapsed());
+        result
+    }
+
+    async fn send_unobserved(
+        &self,
+        req: HttpRequest,
+        opts: &RequestOptions,
+        jar: Option<&CookieJar>,
+    ) -> Result<HttpResponse> {
         let started = Instant::now();
         let work = async {
             let (hop, redirects, redirect_time) = self.send_following(req, opts, jar, true).await?;

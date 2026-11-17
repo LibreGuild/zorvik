@@ -771,7 +771,7 @@ fn stream_note(events: usize, end: crate::sse_read::SseEnd) -> String {
     format!("Read {} (stopped: {why})", plural(events, "event"))
 }
 
-fn plural(n: usize, what: &str) -> String {
+pub(crate) fn plural(n: usize, what: &str) -> String {
     format!("{n} {what}{}", if n == 1 { "" } else { "s" })
 }
 
@@ -1127,6 +1127,11 @@ impl Api {
                 false => crate::mcp::Programs::Trusted(&self.inner.programs),
             },
             mcp_session: None,
+            console: Some(crate::console::ConsoleScope::new(
+                self.inner.console.clone(),
+                if by_agent { crate::ConsoleSource::Agent } else { crate::ConsoleSource::Runner },
+                Some(self.redactor(&ws)),
+            )),
         };
         let sink = self.inner.sink.clone();
         let report = Box::pin(run(&cx, &plan, &mut vars, &cancel, |result, vars| {

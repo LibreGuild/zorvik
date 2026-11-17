@@ -197,6 +197,9 @@ pub enum StreamEvent {
     /// AI agents: connections, activity, questions for the user, what to show.
     #[serde(rename_all = "camelCase")]
     Agent { event: crate::agents::AgentEvent },
+    /// The console: a request that was sent, a line a script wrote, or everything cleared.
+    #[serde(rename_all = "camelCase")]
+    Console { event: crate::console::ConsoleEvent },
     /// Scripts of a live connection changed variables (the UI reads them again).
     #[serde(rename_all = "camelCase")]
     VariablesChanged {},

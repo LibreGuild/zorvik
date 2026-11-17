@@ -43,10 +43,6 @@ zorvik --version
 
 On macOS, a `zorvik` downloaded with a browser is blocked the first time; `xattr -d com.apple.quarantine zorvik` allows it (`curl` downloads aren't blocked). See [Command line](../../cli/overview/) for pipelines.
 
-:::note[Nightly builds]
-Want the newest changes before a release? The [nightly build](https://github.com/LibreGuild/zorvik/releases/tag/nightly) is built from `main` once a day when it has changed, and replaced each time. Settings shows it as "nightly N · commit" next to the version; **Settings → Updates → Channel → Nightly builds** keeps you on it.
-:::
-
 ## Windows
 
 1. Download `Zorvik-Windows-Setup-x64.exe` and run it.

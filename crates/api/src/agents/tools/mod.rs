@@ -994,6 +994,7 @@ impl Api {
             "get_server_traffic" => run!(async move { self.tool_server_traffic(c) }),
             "get_variables" => run!(async move { self.tool_get_variables() }),
             "read_history" => run!(async move { self.tool_read_history(c) }),
+            "read_console" => run!(async move { self.tool_read_console(c) }),
             "write_file" => run!(self.tool_write_file(c)),
             "export_request" => run!(async move { self.tool_export_request(c) }),
             "open_workspace" => run!(self.tool_open_workspace(c)),
@@ -2294,7 +2295,7 @@ impl Api {
         e.into()
     }
 
-    fn redactor(&self, ws: &Workspace) -> Redactor {
+    pub(crate) fn redactor(&self, ws: &Workspace) -> Redactor {
         let mut vars = self.active_env_vars(ws);
         vars.extend(self.workspace_vars(ws));
         Redactor::new(&vars)

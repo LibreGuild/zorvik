@@ -5,7 +5,7 @@ import { readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import "../styles/site.css";
 import NextBanner from "../components/NextBanner.astro";
-import { CLI_FILES, formatSize, latestRelease, REPO, type Os } from "../lib/releases";
+import { CLI_FILES, formatSize, latestRelease, MIRROR_FILES, MIRRORS, REPO, type Os } from "../lib/releases";
 import { NEXT } from "../lib/site.mjs";
 
 const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
@@ -79,7 +79,7 @@ const TERMINAL = [
   '<span class="prompt">$</span> echo $?',
   '1',
 ];
-const AGENT_TOOLS = 38;
+const AGENT_TOOLS = 46;
 const AGENT_SESSION = [
   '<span class="prompt">$</span> claude mcp add --scope user zorvik -- zorvik mcp',
   '<span class="d">Added stdio MCP server zorvik</span>',
@@ -503,7 +503,7 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
             <p class="sub">
               {version ? <>Version <b data-version>{version}</b>{released && <> · released {released}</>} · <a href={release.notesUrl}>what's new</a></> : <>The newest version from <a href={`${github}/releases/latest`}>GitHub Releases</a>.</>}
               <br />Every download includes the app <em>and</em> the <code>zorvik</code> command line.
-              {NEXT && <><br />These are the latest release. Nightly builds of the next version are on the <a href={`${github}/releases/tag/nightly`}>releases page</a>.</>}
+              {NEXT && <><br />These are the latest release.</>}
             </p>
           </div>
           <div class="os-grid">
@@ -555,6 +555,19 @@ const FEATURED_BADGES = ["dns-detective", "token-tamer", "stream-surfer", "load-
 curl -fsSL {github}/releases/latest/download/zorvik-cli-linux-x86_64.tar.gz \
   | sudo tar -xz -C /usr/local/bin zorvik</code></pre>
           </div>
+          <div class="mirrors">
+            <p><b>Mirrors</b> · the same files, for when GitHub is slow or out of reach</p>
+            <ul>
+              {MIRRORS.map((m) => (
+                <li>
+                  <span>{m.label}</span>
+                  {MIRROR_FILES.map((f) => (
+                    <a href={`${m.base}${f.file}`} data-os={f.os} data-goatcounter-click={`mirror-${f.file}`} data-goatcounter-title={`Mirror ${f.file}`}>{f.label}</a>
+                  ))}
+                </li>
+              ))}
+            </ul>
+          </div>
           <div class="dl-foot">
             {/* The download count, hidden for now (the numbers are still small). To show it again, put
                 back this line; the build and the script below already fill it in:
@@ -565,7 +578,7 @@ curl -fsSL {github}/releases/latest/download/zorvik-cli-linux-x86_64.tar.gz \
             <p>
               The app keeps itself up to date: it reads the newest version from this project's releases on GitHub, and sends nothing about you.
               Builds aren't code-signed yet: on Windows choose <b>More info → Run anyway</b>; on macOS allow it in <b>System Settings → Privacy &amp; Security</b>.
-              Want the newest changes? Try the <a href={`${github}/releases/tag/nightly`}>nightly build</a>, or <a href={`${github}#build-from-source`}>build from source</a>.
+              Want the newest changes? <a href={`${github}#build-from-source`}>Build from source</a>.
             </p>
           </div>
         </div>
@@ -608,6 +621,7 @@ curl -fsSL {github}/releases/latest/download/zorvik-cli-linux-x86_64.tar.gz \
         const card = document.querySelector(`.os-card[data-os="${os}"]`);
         if (!card) return;
         card.classList.add("is-yours");
+        document.querySelectorAll(`.mirrors a[data-os="${os}"]`).forEach((link) => link.classList.add("mine"));
         card.parentElement.prepend(card);
         const primary = card.querySelector("a.dl.primary");
         const button = document.getElementById("hero-download");

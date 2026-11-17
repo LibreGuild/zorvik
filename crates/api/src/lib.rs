@@ -6,6 +6,7 @@ pub mod academy;
 pub mod agents;
 mod batch;
 mod catalog;
+mod console;
 mod dns;
 mod dto;
 mod file_stream;
@@ -56,6 +57,9 @@ use zorvik_workspace::vars::{DYNAMIC_VARIABLES, VarContext};
 
 pub use agents::AgentSessionHandle;
 pub use batch::BatchingSink;
+pub use console::{
+    ConsoleBody, ConsoleDetails, ConsoleEvent, ConsoleItem, ConsoleLine, ConsoleResponse, ConsoleScope, ConsoleSource,
+};
 pub use dns::DnsQueryResult;
 pub use dto::*;
 pub use file_stream::{FileStreamEvent, FileStreamInfo, FileStreamProgress, FileStreamStarted, WavInfo};
@@ -187,6 +191,8 @@ struct Inner {
     academy: academy::AcademyState,
     /// The last API catalog download (`catalog.*`).
     catalog: catalog::Downloads,
+    /// Requests sent and scripts' console lines, in memory (`console.*`).
+    console: Arc<console::Console>,
 }
 
 /// Responses kept in memory for `read_history`, and body characters kept of each.
@@ -371,6 +377,7 @@ impl Api {
             tokens: TokenCache::persistent(data_dir.join("oauth-tokens.json")),
             history,
             data_dir,
+            console: Arc::new(console::Console::new(sink.clone())),
             sink,
             client: Arc::new(Client::new()),
             workspace: RwLock::new(None),
@@ -488,6 +495,7 @@ impl Api {
             },
             "workspace.close" => {
                 *self.inner.workspace.write().unwrap_or_else(|e| e.into_inner()) = None;
+                self.inner.console.clear();
                 *lock(&self.inner.watcher) = None;
                 let mut local = lock(&self.inner.local);
                 local.last_workspace = None;
@@ -809,6 +817,20 @@ impl Api {
                 ok(result)
             }
 
+            "console.list" => ok(self.inner.console.list()),
+            "console.details" => {
+                #[derive(Deserialize)]
+                struct P {
+                    id: u64,
+                }
+                let P { id } = params(p)?;
+                ok(self.inner.console.details(id).map(|d| (*d).clone()))
+            }
+            "console.clear" => {
+                self.inner.console.clear();
+                ok(())
+            }
+
             "sse.connect" => ok(self.sse_connect(params(p)?).await?),
             "sse.close" => {
                 #[derive(Deserialize)]
@@ -941,6 +963,12 @@ impl Api {
         settings
     }
 
+    /// The console, for what is being sent now: by an AI agent when one's call is running.
+    pub(crate) fn console_scope(&self) -> ConsoleScope {
+        let source = if agents::in_agent_call() { ConsoleSource::Agent } else { ConsoleSource::User };
+        ConsoleScope::new(self.inner.console.clone(), source, self.try_ws().map(|ws| self.redactor(&ws)))
+    }
+
     fn try_ws(&self) -> Option<Workspace> {
         self.inner.workspace.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
@@ -986,6 +1014,10 @@ impl Api {
     fn activate(&self, ws: Workspace) -> ApiResult<WorkspaceInfo> {
         self.adopt_local_data(&ws);
         let info = self.workspace_info(&ws)?;
+        // Another workspace: what the console shows of the last one (its secrets too) goes.
+        if self.try_ws().is_some_and(|open| open.root() != ws.root()) {
+            self.inner.console.clear();
+        }
         *self.inner.workspace.write().unwrap_or_else(|e| e.into_inner()) = Some(ws.clone());
         *lock(&self.inner.watcher) = watcher::Watcher::start(ws.root(), self.inner.sink.clone())
             .map_err(|e| tracing::warn!("file watching disabled: {e}"))
@@ -1169,8 +1201,11 @@ impl Api {
         opts: &zorvik_engine::RequestOptions,
     ) -> ApiResult<()> {
         if let Some(config) = resolved.oauth2.clone() {
+            // The token request shows in the console too.
+            let opts = self.console_scope().observing(opts, console::OAUTH_TOKEN);
+            let key = ws.local_key();
             let token =
-                oauth2::ensure_token(&self.inner.client, opts, &config, &self.inner.tokens, &ws.local_key()).await?;
+                Box::pin(oauth2::ensure_token(&self.inner.client, &opts, &config, &self.inner.tokens, &key)).await?;
             apply_token(resolved, &token.access_token);
         }
         Ok(())
@@ -1190,6 +1225,7 @@ impl Api {
             previous.cancel();
         }
 
+        let console = self.console_scope().of(&p.request.name);
         // Tool requests (standalone) run no scripts.
         let mut vars = (!p.standalone).then(|| self.script_vars(&ws));
         let mut report = None;
@@ -1202,8 +1238,13 @@ impl Api {
                     r = async {
                         self.authorize(&ws, &mut resolved, &opts).await?;
                         let url = resolved.request.url.clone();
-                        let response = self.inner.client.send(resolved.request.clone(), &opts, jar.as_deref()).await?;
-                        Ok::<_, ApiError>((url, response))
+                        let sent = resolved.request.clone();
+                        let result = self.inner.client.send(resolved.request.clone(), &opts, jar.as_deref()).await;
+                        console.exchange(match &result {
+                            Ok(response) => console::Exchange::response("HTTP", &sent, response),
+                            Err(e) => console::Exchange::failed("HTTP", &sent, &e.message, started.elapsed()),
+                        });
+                        Ok::<_, ApiError>((url, result?))
                     } => r.map(|(url, response)| (url, response, resolved.unresolved, jar)),
                     _ = cancel.cancelled() => Err(EngineError::cancelled().into()),
                 };
@@ -1223,6 +1264,7 @@ impl Api {
                     false => mcp::Programs::Trusted(&self.inner.programs),
                 },
                 mcp_session: self.mcp_session(&p.request_id),
+                console: Some(console.clone()),
             };
             let scripted = tokio::select! {
                 // Boxed: the whole pipeline is a big future (debug builds would overflow the stack).
@@ -1248,11 +1290,20 @@ impl Api {
         };
         if let Some(vars) = &vars
             && let Some(warning) = self.keep_local_values(&ws, vars)
-            && let Some(report) = &mut report
         {
-            report
-                .console
-                .push(zorvik_script::ConsoleEntry { level: zorvik_script::ConsoleLevel::Warn, message: warning });
+            console.log(zorvik_script::ConsoleLevel::Warn, &warning);
+            if let Some(report) = &mut report {
+                report
+                    .console
+                    .push(zorvik_script::ConsoleEntry { level: zorvik_script::ConsoleLevel::Warn, message: warning });
+            }
+        }
+        // A send the user stopped ends without a response: say so where the request would be.
+        if let Err(err) = &outcome
+            && err.network_kind == Some(ErrorKind::Cancelled)
+        {
+            let url = self.var_context(&ws).render(p.request.url.trim(), &mut std::collections::BTreeSet::new());
+            console.log(zorvik_script::ConsoleLevel::Warn, &format!("Cancelled: {} {url}", p.request.method));
         }
 
         let workspace_key = ws.root().to_string_lossy().into_owned();
@@ -1496,6 +1547,8 @@ impl Api {
     async fn oauth2_get_token(&self, p: AuthParams) -> ApiResult<TokenStatus> {
         let config = self.oauth2_config(&p.auth, p.path.as_deref())?;
         let opts = request_options(&self.settings(), &Default::default())?;
+        // The token request shows in the console.
+        let opts = self.console_scope().observing(&opts, console::OAUTH_TOKEN);
         let sink = self.inner.sink.clone();
         let token = oauth2::authorization_code_flow(
             &self.inner.client,

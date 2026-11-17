@@ -1,8 +1,7 @@
 # CI and releases
 
-Four workflows:
-- [`ci.yml`](../.github/workflows/ci.yml): the checks on every pull request and push, and the builds of releases and nightlies.
-- [`nightly.yml`](../.github/workflows/nightly.yml): once a day, starts a nightly build when `main` changed.
+Three workflows:
+- [`ci.yml`](../.github/workflows/ci.yml): the checks on every pull request and push, and the builds of releases.
 - [`pages.yml`](../.github/workflows/pages.yml): the website on GitHub Pages.
 - [`catalog.yml`](../.github/workflows/catalog.yml): once a week (Mondays 04:41 UTC) and by hand, downloads every API in the [API catalog](architecture.md#api-catalog) from its publisher and imports it (`cargo test -p zorvik-api --test catalog_live -- --ignored`). It needs the internet, so it isn't one of the checks and blocks nothing: a failure means a publisher moved or changed a file, and the entry in `crates/api/catalog/catalog.yaml` needs a new URL (or becomes a link).
 
@@ -17,18 +16,13 @@ Four workflows:
 
 A pull request can merge only when the Rust, UI and E2E checks pass; a release also waits for Code export. Pull requests from first-time contributors wait for a maintainer to approve the workflow run.
 
-## Release channels
-| Channel | Made by | Where | Version |
-|---|---|---|---|
-| **Release** | pushing a tag `vX.Y.Z` | [Releases → Latest](https://github.com/LibreGuild/zorvik/releases/latest) | `X.Y.Z` |
-| **Nightly** | once a day (03:17 UTC), when `main` has new commits since the last nightly | the `nightly` pre-release, replaced each time | the version in the code, plus "nightly N · commit" in Settings |
+## Releases
+A release is made by pushing a tag `vX.Y.Z`; it appears under [Releases → Latest](https://github.com/LibreGuild/zorvik/releases/latest) as version `X.Y.Z`. A push to `main` only runs the checks, and so does **Actions → CI → Run workflow** on a branch; started on a `v*` tag, it builds that release again.
 
-A push to `main` only runs the checks. The nightly workflow compares `main` with the `nightly` tag and, when they differ, starts CI on `main` by hand (`workflow_dispatch`), which builds and publishes. A maintainer can do the same at any time: **Actions → CI → Run workflow** on `main`.
-
-After the checks pass, `release-draft` creates a draft release for the run and checks that the tag matches the version in `Cargo.toml`, `app/package.json` and `tauri.conf.json`. Then three jobs build in parallel with `npm run package` (the app with the `zorvik` command line inside), pack the command line on its own, and upload to the draft. Then `sign-updates` signs the files the app's updater installs and adds `latest.json` (see [Updates](#updates)). Finally `publish` makes the draft public: as the tagged release with notes, or as the new nightly. If any build fails, nothing is published and the previous release stays. For a tagged release, `release-website` then builds the [website](#website) from the release's code and `release-website-publish` attaches it and starts `pages.yml`.
+After the checks pass, `release-draft` creates a draft release for the run and checks that the tag matches the version in `Cargo.toml`, `app/package.json` and `tauri.conf.json`. Then three jobs build in parallel with `npm run package` (the app with the `zorvik` command line inside), pack the command line on its own, and upload to the draft. Then `sign-updates` signs the files the app's updater installs and adds `latest.json` (see [Updates](#updates)). Finally `publish` makes the draft public as the tagged release with its notes. If any build fails, nothing is published and the previous release stays. Then `release-website` builds the [website](#website) from the release's code and `release-website-publish` attaches it and starts `pages.yml`.
 
 ## Cutting a release
-1. Make sure `main` is green and the nightly build works.
+1. Make sure `main` is green.
 2. Set the version and commit it in a pull request:
    ```bash
    cd app && npm run set-version -- 0.2.0
@@ -69,11 +63,9 @@ Linux packages are built on Ubuntu 22.04, the oldest supported system, so they r
 Two more files are for the updater, not for people: `latest.json` and `Zorvik-macOS-universal.app.tar.gz` (the macOS app the updater installs). Tagged releases also carry `zorvik-website.tar.gz`, the release's website (see [Website](#website)).
 
 ## Updates
-The app updates itself from GitHub Releases (`app/src-tauri/src/updates.rs`, the Tauri updater). It reads one file:
-- stable: `releases/latest/download/latest.json`, which GitHub serves from the newest release;
-- nightly: `releases/download/nightly/latest.json`.
+The app updates itself from GitHub Releases (`app/src-tauri/src/updates.rs`, the Tauri updater). It reads one file, `releases/latest/download/latest.json`, which GitHub serves from the newest release.
 
-`latest.json` lists, per platform, the file to install and its signature: the Windows installer, `Zorvik-macOS-universal.app.tar.gz` (packed by the macOS build, with `Zorvik.app` at its root) and the AppImage. For a nightly, `pub_date` is the build time, which the app also has built in (`ZORVIK_BUILT_AT`), so a nightly with the same version number is still recognised as newer.
+`latest.json` lists, per platform, the file to install and its signature: the Windows installer, `Zorvik-macOS-universal.app.tar.gz` (packed by the macOS build, with `Zorvik.app` at its root) and the AppImage.
 
 The app accepts an update only when its signature matches the public key built into `tauri.conf.json` (`plugins.updater.pubkey`), and only for the version the signature names. When an update can't be downloaded, verified or installed, the app doesn't show an error: it says the new version is out and links to its release page.
 
@@ -109,7 +101,7 @@ The website lives in [`docs/pages`](pages/README.md): an Astro site with the hom
 | **Main site** | <https://libreguild.github.io/zorvik/> | the latest release's code | the docs of the version people download |
 | **Preview** | <https://libreguild.github.io/zorvik/next/> | `main` | the docs of the next version, with a banner on every page that links to the same page on the main site (or its docs home when the page is new). Search engines are asked not to list it, and it has no sitemap |
 
-The latest release is GitHub's "latest" release (`releases/latest`): the newest published release that isn't a pre-release, the same one the download buttons and the app's update check use. A `v*` tag whose release is still a draft doesn't count. The main site is built when the release is made, not by `pages.yml`: after `publish`, the `release-website` job in `ci.yml` builds `docs/pages` from the tag (read-only permissions, no secrets) and `release-website-publish` attaches the result to the release as `zorvik-website.tar.gz`. `pages.yml` downloads that file from the latest release and never runs a release's code, so its own permissions (and the npm cache it shares with `main`) stay out of reach of code that isn't `main`'s. When the latest release has no `zorvik-website.tar.gz` (no release yet, or one made before releases carried their website), the main site is built from `main`, with a warning in the run. Both parts' download buttons point at the latest release; the preview's home page adds that nightly builds are on the releases page.
+The latest release is GitHub's "latest" release (`releases/latest`): the newest published release that isn't a pre-release, the same one the download buttons and the app's update check use. A `v*` tag whose release is still a draft doesn't count. The main site is built when the release is made, not by `pages.yml`: after `publish`, the `release-website` job in `ci.yml` builds `docs/pages` from the tag (read-only permissions, no secrets) and `release-website-publish` attaches the result to the release as `zorvik-website.tar.gz`. `pages.yml` downloads that file from the latest release and never runs a release's code, so its own permissions (and the npm cache it shares with `main`) stay out of reach of code that isn't `main`'s. When the latest release has no `zorvik-website.tar.gz` (no release yet, or one made before releases carried their website), the main site is built from `main`, with a warning in the run. Both parts' download buttons point at the latest release.
 
 The workflow runs:
 - on pushes to `main` that change the site, its pictures or the course (the preview changes; the main site is rebuilt as it was);

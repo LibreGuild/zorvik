@@ -145,11 +145,12 @@ The `test` object uses the [load test file format](../../reference/workspace-for
 
 WebSocket servers in `save_server` take everything the app has: `websocket.rules` with `match: json` (a [JSON condition](../../servers/websocket-and-sse-servers/#json-where)), `{{message.id}}` in replies and `close` (a close code), and `websocket.schedule` for [scheduled messages](../../servers/websocket-and-sse-servers/#scheduled-messages). Socket.IO rules take `match: json` too, and `socketio.schedule` [scheduled events](../../servers/socketio-server/#scheduled-events). Mock API routes take `matchJson`, `sequence` and `sequenceRepeat` ([answer sequences](../../servers/mock-api/#answer-sequences)), relays their faults (`delayMs`, `bytesPerSecond`, `dropAfterMs`, `dropAfterBytes`), and event streams `retryMs` and `closeAfterLast`. In `get_server_traffic`, a route's answer from its sequence has a note such as `answer 2 of 3`.
 
-## History and files
+## History, console and files
 
 | Tool | What it does | Main inputs | Asks |
 |---|---|---|---|
 | `read_history` | Requests sent from Zorvik (by you or by agents), newest first: method, URL, status, time, size, and for the last 50 sends the response headers and body. | `limit` (default 20, at most 100), `path`, `search`, `maxBodyChars` (default 4,000, at most 20,000; 0 for none) | no |
+| `read_console` | The app's [console](../../requests/console/), oldest first: every request Zorvik sent since it started or the console was cleared (yours, collection runs', agents', scripts' `pm.sendRequest` and OAuth 2.0 token requests) with the headers and body that went out and came back, connections opening and closing, and what scripts logged. The way to see why a request failed. Token requests come without their headers and bodies. | `limit` (the newest lines; default 50, at most 200), `search`, `errorsOnly`, `kind` (`all`, `requests` or `logs`), `details` (default true), `maxBodyChars` (default 4,000, at most 20,000; 0 for none) | no |
 | `write_file` | Put a file of up to 10 MB into the workspace folder: a sample upload, a CSV or JSON data file, a `.proto` file. An existing file is replaced only with `overwrite: true`. It can't write outside the workspace, through a symbolic link, or into `zorvik.yaml`, `requests/`, `environments/`, `servers/`, `loadtests/` or `.git`. | `path` (relative, `/` between folders), `text` or `base64`, `overwrite` | edit |
 
 ## What agents can't do

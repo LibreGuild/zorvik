@@ -49,7 +49,8 @@ If `secrets.json` can't be read (for example, after a disk error), Zorvik moves 
 
 ### Other things kept per computer
 
-- The window layout (sidebar width, split positions, **Response position**) is kept by the app window itself, not in these files.
+- The window layout (sidebar width, split positions, **Response position**, the console's height) is kept by the app window itself, not in these files.
+- The [console](../../requests/console/) is kept in memory only, never in a file: it is empty again when the app starts.
 - Deleted requests, folders, environments, servers and load tests go to the **system trash** (Recycle Bin on Windows), where you can restore them.
 
 ## Logs

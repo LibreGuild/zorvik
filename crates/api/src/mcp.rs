@@ -568,6 +568,7 @@ impl Api {
         if let Some(old) = lock(&self.inner.mcp_sessions).insert(p.conn_id.clone(), entry) {
             old.cancel.cancel();
         }
+        let started = std::time::Instant::now();
         let connected = tokio::select! {
             r = async {
                 let mut resolved = self.prepare(&ws, &p.request, p.path.as_deref())?;
@@ -586,6 +587,11 @@ impl Api {
             } => r,
             _ = cancel.cancelled() => Err(EngineError::cancelled().into()),
         };
+        let outcome = connected.as_ref().map(|(conn, ..)| {
+            let info = &conn.info;
+            crate::console::Opened::Done(format!("Connected · {} {} · {}", info.name, info.version, info.transport))
+        });
+        self.console_connect(&p.request, None, started, outcome);
         let (conn, key, unresolved) = match connected {
             Ok(c) => c,
             Err(e) => {
