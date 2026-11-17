@@ -19,7 +19,7 @@ Agents are off until you allow them (**Settings → AI agents → Allow AI agent
 
 | Action | Tools | Default | Setting |
 |---|---|---|---|
-| **Reading** the workspace, variables, history, server traffic, run and load test status, the messages of the agent's connections | `get_workspace`, `list_*`, `read_*`, `get_variables`, `read_history`, `get_server_traffic`, `get_run_status`, `get_load_test_status`, `export_request`, `open_in_app`, `wait_for_message` | Allowed | none |
+| **Reading** the workspace, variables, history, the console, server traffic, run and load test status, the messages of the agent's connections | `get_workspace`, `list_*`, `read_*`, `get_variables`, `read_history`, `read_console`, `get_server_traffic`, `get_run_status`, `get_load_test_status`, `export_request`, `open_in_app`, `wait_for_message` | Allowed | none |
 | **Edits**: requests, folders, environments (and switching the active one), imports, load tests, servers, mocks, files added with `write_file` | `save_requests`, `save_folder_settings`, `move_item`, `save_environment`, `set_active_environment`, `import`, `update_from_openapi`, `import_from_catalog`, `save_load_test`, `save_server`, `create_mock`, `write_file` | Allowed | **Edits by agents**: *Allow* or *Ask me* |
 | **Requests** to other systems: sends, live connections (WebSocket, Socket.IO, TCP, UDP, MQTT), collection runs, GraphQL and gRPC schema lookups, MCP catalogs, downloads for imports and mocks | `send_request`, `open_connection`, `run_collection`, `graphql_schema`, `grpc_describe`, `mcp_catalog`, `import` / `update_from_openapi` / `create_mock` with a URL, and `import_from_catalog` for APIs it downloads | Asks for outside hosts | **Requests sent by agents**: *Ask for outside hosts*, *Ask every time* or *Allow* |
 | **Deleting** (to the trash) | `delete_items` | Always asks | none |
@@ -103,6 +103,7 @@ What goes back to the agent never contains your credentials:
 - **Credential headers**: `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-Api-Key`, `Api-Key`, `Apikey`, `X-Auth-Token`, `X-Access-Token`, `X-Csrf-Token`, `X-Xsrf-Token` and `X-Amz-Security-Token` are shown as `••••••`. Their values (and the parts of them 8 characters or longer, such as the token of `Bearer <token>` or a cookie's value) are also hidden anywhere else in the result, URL-encoded forms included.
 - **Variables**: `list_environments` and `get_variables` show secret values as `••••••`. `export_request` returns secret values as `••••••`; you can copy the full command in Zorvik (**Copy as cURL or code…**).
 - **History** returned by `read_history`, and the messages of the agent's connections, are redacted the same way.
+- **The console** returned by `read_console` is redacted the same way, each request also by its own credential headers. OAuth 2.0 token requests are listed without their headers and bodies. (In the app, the console shows you everything as it was sent.)
 
 The redaction runs last, on the finished result and on errors, as a safety net over each tool's own care.
 

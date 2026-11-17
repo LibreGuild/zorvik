@@ -20,6 +20,7 @@ In this table, **Mod** is <kbd>⌘</kbd> (Command) on macOS and <kbd>Ctrl</kbd> 
 | <kbd>Ctrl</kbd> <kbd>Tab</kbd> | Next tab (<kbd>Ctrl</kbd> on every system, also on macOS). |
 | <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>Tab</kbd> | Previous tab. |
 | <kbd>Mod</kbd> <kbd>E</kbd> | Environments. |
+| <kbd>Mod</kbd> <kbd>J</kbd> | Show or hide the [console](../../requests/console/). |
 | <kbd>Mod</kbd> <kbd>,</kbd> | Settings. |
 | <kbd>Mod</kbd> <kbd>+</kbd> (or <kbd>Mod</kbd> <kbd>=</kbd>) | Zoom in. |
 | <kbd>Mod</kbd> <kbd>−</kbd> | Zoom out. |

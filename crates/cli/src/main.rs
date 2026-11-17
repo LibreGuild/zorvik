@@ -325,6 +325,7 @@ async fn run(args: RunArgs) -> ExitCode {
         specs: Some(&specs),
         programs: if args.allow_programs { zorvik_api::mcp::Programs::Any } else { zorvik_api::mcp::Programs::None },
         mcp_session: None,
+        console: None,
     };
 
     // Ctrl+C stops the run; the summary so far is still printed (and saved).

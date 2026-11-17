@@ -194,6 +194,22 @@ async fn unary_calls_carry_metadata_auth_and_variables_and_land_in_history() {
     assert_eq!(history[1]["method"], "zorvik.test.v1.Echo/Unary");
     assert_eq!(history[1]["request"]["kind"], "grpc");
 
+    // The console has each call: the message as it was sent, and what came back.
+    let console = h.ok("console.list", json!({})).await;
+    let calls: Vec<&Value> = console.as_array().unwrap().iter().filter(|l| l["item"]["type"] == "exchange").collect();
+    assert_eq!(calls.len(), 3, "{console}");
+    let unary = &calls[1]["item"];
+    assert_eq!(
+        (unary["protocol"].as_str(), unary["method"].as_str()),
+        (Some("gRPC"), Some("zorvik.test.v1.Echo/Unary"))
+    );
+    assert!(unary["error"].is_null(), "{unary}");
+    let details = h.ok("console.details", json!({ "id": calls[1]["id"] })).await;
+    assert_eq!(details["requestBody"]["text"], r#"{"message": "hello world {{missing}}"}"#);
+    assert!(details["response"]["body"]["text"].as_str().unwrap().contains("hello world"), "{details}");
+    assert!(details["requestHeaders"].as_array().unwrap().iter().any(|h| h["name"] == "authorization"), "{details}");
+    assert_eq!(calls[2]["item"]["error"], "NOT_FOUND: gone");
+
     // Streaming methods run to their end in one go (the message is sent, then the stream ends);
     // unknown methods are named.
     let request = grpc_request(&url, "zorvik.test.v1.Echo/Bidi", r#"{"message": "solo"}"#);

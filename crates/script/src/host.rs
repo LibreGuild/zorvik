@@ -74,10 +74,13 @@ pub trait Host: Send + Sync {
     fn remove_cookies(&self, url: &str, name: Option<&str>) -> Result<(), String>;
     /// A dynamic variable's value (`$randomEmail`, `$randomInt(1, 5)`); `None` when unknown.
     fn dynamic(&self, expression: &str) -> Option<String>;
+    /// A console line, as the script writes it (they also come back with the script's output):
+    /// for an app-wide console that shows lines while the script still runs.
+    fn log(&self, _level: crate::ConsoleLevel, _message: &str) {}
 }
 
 /// Adds the host functions to the prelude's `host` object: `send(json)`, `cookies(url)`,
-/// `cookie(op, url, name, value)`, `dynamic(expression)`, `now()` and `sleep(ms)`. JSON goes in
+/// `cookie(op, url, name, value)`, `dynamic(expression)`, `log(level, message)`, `now()` and `sleep(ms)`. JSON goes in
 /// and out, so the prelude sees plain objects. `deadline` is when the script must stop.
 pub(crate) fn install<'js>(
     ctx: &Ctx<'js>,
@@ -158,6 +161,18 @@ pub(crate) fn install<'js>(
                 }
             },
         )?,
+    )?;
+
+    let host = app.clone();
+    object.set(
+        "log",
+        Function::new(ctx.clone(), move |level: String, message: String| {
+            if let Some(host) = host.as_ref()
+                && let Ok(level) = serde_json::from_value(serde_json::Value::String(level))
+            {
+                host.log(level, &message);
+            }
+        })?,
     )?;
 
     let host = app;

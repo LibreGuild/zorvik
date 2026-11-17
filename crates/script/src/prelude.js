@@ -105,6 +105,8 @@
 
   var logs = [];
   var dropped = 0;
+  /** The app's console (`host.log`), told about each line as it is written; set by `setup`. */
+  var hostLog = null;
 
   /** `console.log('%s is %d', a, b)` placeholders, then the other arguments. */
   function format(args) {
@@ -133,7 +135,9 @@
         dropped++;
         return;
       }
-      logs.push({ level: level, message: clip(format(arguments)) });
+      var message = clip(format(arguments));
+      logs.push({ level: level, message: message });
+      if (hostLog) hostLog(level, message);
     };
   }
 
@@ -2423,6 +2427,7 @@
     var skip = false;
     var visualization = null;
     hostDynamic = host && typeof host.dynamic === 'function' ? host.dynamic : null;
+    hostLog = host && typeof host.log === 'function' ? host.log : null;
 
     // Timers: run after the script, in time order, waiting for the ones in the future.
     var timers = [];

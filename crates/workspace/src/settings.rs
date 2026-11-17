@@ -256,6 +256,7 @@ impl Settings {
             default_headers: d.send_default_headers,
             host_guard: None,
             challenge_auth: None,
+            observer: None,
         })
     }
 }

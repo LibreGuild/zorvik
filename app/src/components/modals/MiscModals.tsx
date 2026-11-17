@@ -1172,6 +1172,7 @@ export function ShortcutsModal({ mod }: { mod: string }) {
     ["Focus URL", [mod, "L"]],
     ["Next / previous tab", ["Ctrl", "Tab"]],
     ["Environments", [mod, "E"]],
+    ["Show or hide the console", [mod, "J"]],
     ["Settings", [mod, ","]],
     ["Search in editor / response", [mod, "F"]],
     ["Zoom in / out", [mod, "+", "−"]],

@@ -137,7 +137,7 @@ Values are kept as text: numbers and booleans become their text form, objects an
 
 `console.log`, `console.info`, `console.warn`, `console.error` and `console.debug` write to the script console.
 
-- **In the app**, a **Console** tab appears next to the response when there is output. It shows the level of each line and any script errors.
+- **In the app**, a **Console** tab appears next to the response when there is output. It shows the level of each line and any script errors. The same lines go to the app's [console](../../requests/console/) (<kbd>Mod</kbd>+<kbd>J</kbd>) as the script writes them, in order with the requests it sends.
 - **In the Runner tab**, expand a result to see its console lines.
 - **In `zorvik run`**, the text output doesn't include the console. Use `--json` and read `results[].console`.
 

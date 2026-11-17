@@ -557,6 +557,7 @@ impl crate::Api {
             // Scripts never start programs.
             programs: crate::mcp::Programs::Approved(None),
             mcp_session: None,
+            console: None,
         };
         let folders = path.map(|p| ws.ancestors(p)).unwrap_or_default();
         let info = Info {
@@ -570,7 +571,8 @@ impl crate::Api {
         let limits = Limits { timeout: settings.script_timeout(), ..Default::default() };
         let mut vars = self.script_vars(ws);
         let url = vars.var_context().render(request.url.trim(), &mut std::collections::BTreeSet::new());
-        let host = script_host(&cx, &url)?;
+        // The scripts' console lines show in the app's console as well as in the connection's log.
+        let host = script_host(&cx, &url, Some(self.console_scope().of(&request.name)))?;
         let pre = Pre { cx: &cx, folders: &folders, info: &info, host: host.clone(), url: &url, limits };
         let ran = pre_request(&pre, request, &mut vars).await;
         if let Some(report) = &ran.report {

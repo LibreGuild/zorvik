@@ -35,7 +35,7 @@
 </picture>
 
 ## Why Zorvik
-- **Your coding agent can drive it.** Claude Code, Codex, Gemini CLI, Cursor and any MCP client use Zorvik's 38 built-in tools to turn the APIs in your code into requests, test them, mock them and load test them, while you watch every step and approve anything risky. [More below](#ai-agents).
+- **Your coding agent can drive it.** Claude Code, Codex, Gemini CLI, Cursor and any MCP client use Zorvik's 46 built-in tools to turn the APIs in your code into requests, test them, mock them and load test them, while you watch every step and approve anything risky. [More below](#ai-agents).
 - **Test the tools your AI agents use.** Connect to any MCP server (over HTTP or as a local program), see its tools, resources and prompts, call them, and test the answers in CI. Build MCP servers in minutes to try tools with a real AI app or to test your own agent. [More below](#mcp-test-the-tools-ai-agents-use).
 - **Every feature is free, for good.** No paid plans, no "team" tier, no feature behind a login, and none planned. Open source under MIT or Apache-2.0.
 - **Everything in one place.** HTTP, GraphQL (with subscriptions), gRPC, MCP, WebSocket, Socket.IO, SSE, TCP, UDP, MQTT and DNS clients; mock servers, MCP servers included; load tests; network tools. One app instead of five.
@@ -64,7 +64,7 @@ AI apps and agents reach tools and data through the **Model Context Protocol**. 
 ## AI agents
 **Zorvik is built to be driven by coding agents.** Its MCP server ships in every install, so Claude Code, Codex, Gemini CLI, Cursor or any MCP client can work with your APIs the way you do in the app:
 - **Map your code to a collection:** the agent reads your routes and saves them as requests, with path and query parameters, bodies and auth.
-- **Send and test:** it sends requests (HTTP, GraphQL, gRPC, DNS, event streams, MCP calls), talks over live connections (WebSocket, Socket.IO, TCP, UDP, MQTT), writes tests, runs folders and collections, and reads the results and history.
+- **Send and test:** it sends requests (HTTP, GraphQL, gRPC, DNS, event streams, MCP calls), talks over live connections (WebSocket, Socket.IO, TCP, UDP, MQTT), writes tests, runs folders and collections, and reads the results, the history and the console.
 - **Mock and serve:** it builds mock APIs and servers (MCP servers too), starts them and reads the traffic they received.
 - **Load test:** it plans and runs load tests and reads the latency and errors.
 - **Hand you code:** it exports requests as cURL or code in 16 languages, from JavaScript and Python to Go, Java, C# and Rust.
@@ -97,6 +97,7 @@ Then ask things like *"map the API routes in this repo to a Zorvik collection"* 
 - **Auth:** Basic, Bearer, API keys, OAuth 2.0 (client credentials, password, authorization code with PKCE, implicit, refresh) and OAuth 1.0; JWT, AWS Signature v4, Hawk, Akamai EdgeGrid and Atlassian ASAP signed fresh for every send; Digest and NTLM.
 - **Corporate networks:** system or manual proxy, the OS certificate store, custom CAs and client certificates (mTLS).
 - **History** of everything you sent, searchable, with secrets hidden.
+- **Console:** every request Zorvik sends (yours, collection runs', agents', scripts' `pm.sendRequest`, OAuth token requests) with the headers and body that went out and came back, why a failed one failed, and what scripts log, in the order it happened. Kept in memory only.
 
 ### Test and automate
 - **Scripts:** pre-request and post-response JavaScript with a Postman-compatible `pm` API, so imported collections run as they are: `pm.sendRequest`, cookies, timers, the visualizer, and Postman's libraries built in (lodash, crypto-js, moment, ajv, chai and more), all offline.

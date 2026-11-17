@@ -19,6 +19,7 @@ import {
   WorkspaceSettingsModal,
 } from "./components/modals/MiscModals";
 import { ActivityRail } from "./components/layout/ActivityRail";
+import { ConsolePanel } from "./components/console/ConsolePanel";
 import { Celebrations } from "./components/academy/Celebrations";
 import { LabGuide } from "./components/academy/LabGuide";
 import { AgentConfirmDialog } from "./components/agents/AgentConfirmDialog";
@@ -31,6 +32,7 @@ import { initAcademy, useAcademy, useInBootcamp } from "./store/academy";
 import { initUpdates } from "./store/updates";
 import { UpdateNotice } from "./components/UpdateNotice";
 import { loadAgents } from "./store/agents";
+import { initConsole, toggleConsole } from "./store/console";
 import { useDialogs } from "./store/dialogs";
 import { refreshLoadTests, resetLoadTestResults, restoreActiveRun, toggleLoadRun } from "./store/loadtests";
 import { toggleRun } from "./store/runner";
@@ -153,6 +155,10 @@ export function useShortcuts(enabled: boolean) {
           e.preventDefault();
           openModal({ type: "settings" });
           break;
+        case "j":
+          e.preventDefault();
+          toggleConsole();
+          break;
         case "l": {
           e.preventDefault();
           (document.querySelector('input[aria-label="URL"]') as HTMLInputElement | null)?.focus();
@@ -201,6 +207,8 @@ export default function App() {
   const ready = useWorkspace((s) => s.ready);
   const info = useWorkspace((s) => s.info);
   const sidebarWidth = useUi((s) => s.sidebarWidth);
+  const consoleOpen = useUi((s) => s.consoleOpen);
+  const consoleHeight = useUi((s) => s.consoleHeight);
   const academyMode = useAcademy((s) => s.mode === "academy");
   const labRunning = useAcademy((s) => !!s.lab);
   const inBootcamp = useInBootcamp();
@@ -215,6 +223,7 @@ export default function App() {
     (async () => {
       try {
         await Promise.all([loadSettings(), initWorkspace(), loadAgents(), initAcademy()]);
+        void initConsole().catch((e) => console.error("console unavailable", e));
         void initUpdates().catch((e) => console.error("updates unavailable", e));
         const ws = useWorkspace.getState().info;
         if (ws) await restoreTabs(ws.path);
@@ -294,6 +303,19 @@ export default function App() {
               <div className="min-h-0 flex-1">
                 <Workbench />
               </div>
+              {consoleOpen && (
+                <>
+                  <Splitter
+                    direction="vertical"
+                    onResize={(d) =>
+                      useUi.setState((s) => ({ consoleHeight: Math.min(Math.round(window.innerHeight * 0.7), Math.max(120, s.consoleHeight - d)) }))
+                    }
+                  />
+                  <div style={{ height: consoleHeight }} className="min-h-0 shrink-0">
+                    <ConsolePanel />
+                  </div>
+                </>
+              )}
             </main>
             {labGuide && <LabGuide />}
           </div>

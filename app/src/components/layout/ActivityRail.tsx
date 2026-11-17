@@ -1,5 +1,9 @@
-// Left rail: switches the sidebar between collection, load tests, servers, tools and history.
+// Left rail: switches the sidebar between collection, load tests, servers, tools and history;
+// at its foot, the console.
+import { Terminal } from "lucide-react";
 import { useAgents } from "../../store/agents";
+import { toggleConsole, useConsole } from "../../store/console";
+import { modKey } from "../../lib/platform";
 import { useLoadTests } from "../../store/loadtests";
 import { useServers } from "../../store/servers";
 import { useUi } from "../../store/ui";
@@ -11,6 +15,8 @@ export function ActivityRail() {
   const running = useServers((s) => s.running.length);
   const loadRunning = useLoadTests((s) => !!s.active);
   const agents = useAgents((s) => s.sessions.length);
+  const consoleOpen = useUi((s) => s.consoleOpen);
+  const unseen = useConsole((s) => s.unseen);
   return (
     <nav aria-label="Sidebar sections" className="flex w-11 shrink-0 flex-col items-center gap-1 pt-1">
       {SIDEBAR_SECTIONS.map((s) => (
@@ -43,6 +49,31 @@ export function ActivityRail() {
           </button>
         </Tooltip>
       ))}
+      <div className="mt-auto pb-1">
+        <Tooltip content={`Console (${modKey}+J)`} side="right">
+          <button
+            aria-label="Console"
+            aria-pressed={consoleOpen}
+            onClick={toggleConsole}
+            data-testid="rail-console"
+            className={cx(
+              "relative flex h-9 w-9 items-center justify-center rounded-xl transition-colors",
+              consoleOpen ? "bg-elev text-fg shadow-sm" : "text-muted hover:bg-hover hover:text-fg",
+            )}
+          >
+            <Terminal size={17} />
+            {unseen > 0 && (
+              <span
+                className="absolute right-1 top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-danger px-0.5 text-[9px] font-bold leading-none text-white"
+                data-testid="rail-console-errors"
+                aria-label={`${unseen} failed since the console was open`}
+              >
+                {unseen > 99 ? "99+" : unseen}
+              </span>
+            )}
+          </button>
+        </Tooltip>
+      </div>
     </nav>
   );
 }

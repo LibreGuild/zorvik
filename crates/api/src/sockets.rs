@@ -204,6 +204,9 @@ impl Api {
             note_api.inner.sink.emit(StreamEvent::Socket { conn_id: note_id.clone(), event });
         };
         let mut request = request.clone();
+        let started = std::time::Instant::now();
+        // The request as resolved, for the console.
+        let mut prepared = None;
         let connected = tokio::select! {
             r = async {
                 // Pre-request scripts first: they may change the request and set variables.
@@ -215,6 +218,7 @@ impl Api {
                 log.redact_also(&Redactor::default().with_headers(&resolved.request.headers));
                 let jar = settings.cookie_jar.then(|| self.jar(&ws));
                 let unresolved = resolved.unresolved.clone();
+                prepared = Some(resolved.request.clone());
                 let conn = self.connect_socket(&request, resolved, &opts, jar.as_ref()).await?;
                 if let Some(jar) = &jar {
                     self.save_jar(&ws, jar);
@@ -223,6 +227,8 @@ impl Api {
             } => r,
             _ = cancel.cancelled() => Err(EngineError::cancelled().into()),
         };
+        let outcome = connected.as_ref().map(|(conn, ..)| crate::console::Opened::Socket(&conn.opened));
+        let console = self.console_connect(&request, prepared.as_ref(), started, outcome);
         let (conn, unresolved, scripts) = match connected {
             Ok(c) => c,
             Err(e) => {
@@ -252,6 +258,9 @@ impl Api {
                     feed.socket(&event);
                 }
                 let closed = matches!(event, SocketEvent::Closed { .. });
+                if let SocketEvent::Closed { reason, .. } = &event {
+                    console.log(zorvik_script::ConsoleLevel::Info, &format!("Connection closed: {reason}"));
+                }
                 settled.socket(&event);
                 forward_log.record_socket(&event);
                 inner.sink.emit(StreamEvent::Socket { conn_id: id.clone(), event });

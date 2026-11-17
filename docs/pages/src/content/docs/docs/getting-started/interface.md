@@ -7,13 +7,14 @@ sidebar:
 
 ![The Zorvik window: the left rail and the collection, a request with its tabs, and the JSON response beside it](/zorvik/shots/request-dark.webp)
 
-With a workspace open, the window has five parts:
+With a workspace open, the window has these parts:
 
 1. **The title bar** at the top: the workspace, the active environment and app-wide controls.
 2. **The left rail**: icons that switch what the sidebar shows.
 3. **The sidebar**: the collection, load tests, servers, tools, history, AI agents or docs.
 4. **The tab bar**: everything you have open.
 5. **The work area**: for a request, the request editor and its response.
+6. **The console**, when you open it, under the work area: every request Zorvik sends and what scripts log.
 
 In this documentation, <kbd>Mod</kbd> means <kbd>⌘</kbd> on macOS and <kbd>Ctrl</kbd> on Windows and Linux.
 
@@ -55,6 +56,8 @@ The rail on the far left switches the sidebar between seven sections. Hover an i
 
 Drag the border between the sidebar and the work area to resize the sidebar (200 to 560 pixels). The section you chose and the sidebar width are remembered.
 
+At the foot of the rail, the **Console** button (<kbd>Mod</kbd>+<kbd>J</kbd>) shows or hides the [console](../../requests/console/) under the work area. A red number on it counts what failed while the console was closed.
+
 ## Tabs
 
 Every request, server, load test, collection run and tool opens in a tab.
@@ -89,6 +92,7 @@ While another dialog is open, <kbd>Mod</kbd>+<kbd>K</kbd> does nothing, so unsav
 | <kbd>Mod</kbd>+<kbd>K</kbd> or <kbd>Mod</kbd>+<kbd>P</kbd> | Command palette |
 | <kbd>Mod</kbd>+<kbd>L</kbd> | Jump to the URL field |
 | <kbd>Mod</kbd>+<kbd>E</kbd> | Environments & variables |
+| <kbd>Mod</kbd>+<kbd>J</kbd> | Show or hide the console |
 | <kbd>Mod</kbd>+<kbd>,</kbd> | Settings |
 | <kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> | Next / previous tab |
 | <kbd>Mod</kbd>+<kbd>F</kbd> | Search in an editor or a response body |

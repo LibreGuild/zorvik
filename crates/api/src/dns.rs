@@ -55,6 +55,7 @@ impl Api {
         {
             previous.cancel();
         }
+        let started = std::time::Instant::now();
         let outcome = async {
             let vars = self.try_ws().map(|ws| self.var_context(&ws)).unwrap_or_default();
             let (query, unresolved) = dns_query_for(&p.request, &vars)?;
@@ -68,6 +69,17 @@ impl Api {
         if let Some(id) = &p.request_id {
             remove_if_current(&self.inner.inflight, id, |(g, _)| *g == generation);
         }
+        let shown = outcome.as_ref().map(|answer| {
+            let r = &answer.result;
+            let text = format!("{} · {} · {}", r.rcode, crate::runner::plural(r.answers.len(), "answer"), r.server);
+            // An answer that says the name doesn't exist is the lookup's result, shown as its error.
+            if r.rcode == "NOERROR" {
+                crate::console::Opened::Done(text)
+            } else {
+                crate::console::Opened::Refused(text)
+            }
+        });
+        self.console_connect(&p.request, None, started, shown);
         outcome
     }
 }

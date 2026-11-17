@@ -375,7 +375,7 @@ jobs:
           fi
           for file in updates/*; do
             # --app-version binds each signature to this version, so an old file can't pass as new.
-            npx --yes @tauri-apps/cli@2.12.0 signer sign --app-version "$VERSION" "$file" > /dev/null
+            npx --yes @tauri-apps/cli@2.12.4 signer sign --app-version "$VERSION" "$file" > /dev/null
           done
           if [ "$CHANNEL" = stable ]; then
             base="https://github.com/$GH_REPO/releases/download/$GITHUB_REF_NAME"
@@ -472,6 +472,121 @@ jobs:
             sleep $((attempt * 5))
           done
           exit 1
+
+  # The same files on Cloudflare R2, for networks where GitHub is blocked or slow:
+  # `zorvik/releases/<tag>/` keeps every release (and `releases/nightly/` the nightly), which
+  # is where the app's updater looks when it can't reach GitHub, and `zorvik/latest/` the
+  # newest release, which the website's mirror links point at. Served at libreguild.skatech.org
+  # and the bucket's r2.dev address. The upload token (an R2 API token with Object Read & Write
+  # on this bucket only) lives in the `release` environment as R2_ACCOUNT_ID, R2_ACCESS_KEY_ID
+  # and R2_SECRET_ACCESS_KEY; without them the job warns and mirrors nothing. A failed run
+  # leaves the GitHub release as it is: run the job again.
+  mirror:
+    name: Mirror to R2
+    needs: [release-draft, publish]
+    # The project's own mirror: a copy of the repository elsewhere skips this job.
+    if: github.repository == 'LibreGuild/zorvik'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    concurrency:
+      group: mirror-${{ needs.release-draft.outputs.channel }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      CHANNEL: ${{ needs.release-draft.outputs.channel }}
+      BUILT_AT: ${{ needs.release-draft.outputs.built_at }}
+      BUCKET: s3://libreguild/zorvik
+      TAG: ${{ needs.release-draft.outputs.channel == 'stable' && github.ref_name || 'nightly' }}
+    steps:
+      # What is mirrored is what GitHub has, downloaded from the published release.
+      - name: Release files
+        id: files
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --dir dist
+          # The release's website is for pages.yml, not for people.
+          rm -f dist/zorvik-website.tar.gz
+          ls -l dist
+          # A newer nightly may have replaced this run's: that run mirrors its own files.
+          if [ -f dist/latest.json ] && [ "$(jq -r .pub_date dist/latest.json)" != "$BUILT_AT" ]; then
+            echo "::notice::The $TAG release is no longer this run's build: nothing to mirror."
+            echo "mirror=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "mirror=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload
+        id: upload
+        if: steps.files.outputs.mirror == 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          AWS_DEFAULT_REGION: auto
+          # R2 does not take the newer default checksum headers of the AWS CLI.
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+        run: |
+          set -euo pipefail
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ] || [ -z "$R2_ACCOUNT_ID" ]; then
+            echo "::warning::No R2 upload token in the release environment (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY): this release is not mirrored."
+            exit 0
+          fi
+          export AWS_ENDPOINT_URL="https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com"
+          # `latest.json` goes last everywhere: the files it names are in place when the updater reads it.
+          upload() { # <folder> <cache-control of the files>
+            aws s3 cp dist "$BUCKET/$1/" --recursive --no-progress --exclude latest.json --cache-control "$2"
+            if [ -f dist/latest.json ]; then
+              aws s3 cp dist/latest.json "$BUCKET/$1/latest.json" --no-progress \
+                --cache-control no-cache --content-type application/json
+            fi
+          }
+          if [ "$CHANNEL" = stable ]; then
+            # A release's own files never change.
+            upload "releases/$TAG" "public, max-age=31536000, immutable"
+            # `latest/` follows GitHub's latest release: running this job again for an older
+            # tag must not put that release back there.
+            if [ "$(gh release view --json tagName --jq .tagName)" = "$TAG" ]; then
+              upload latest "public, max-age=300"
+              echo "latest=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "::notice::$TAG is not the latest release: zorvik/latest/ stays as it is."
+            fi
+          else
+            # The nightly's files are replaced by the next one under the same names.
+            upload releases/nightly no-cache
+          fi
+          echo "done=true" >> "$GITHUB_OUTPUT"
+      - name: Check the mirrors
+        if: steps.upload.outputs.done == 'true'
+        run: |
+          set -euo pipefail
+          # Every file answers at both addresses, and the update list is this release's.
+          folders=("releases/$TAG")
+          if [ "${{ steps.upload.outputs.latest }}" = true ]; then folders+=(latest); fi
+          for host in https://libreguild.skatech.org https://pub-6c540d377bd4404f87ff33fb14c18c21.r2.dev; do
+            for folder in "${folders[@]}"; do
+              for file in dist/*; do
+                curl -fsSI -o /dev/null --retry 3 "$host/zorvik/$folder/$(basename "$file")"
+              done
+              if [ -f dist/latest.json ]; then
+                # The new list may take a moment to show: a few tries before it counts as wrong.
+                for attempt in 1 2 3 4 5 6; do
+                  if curl -fsS "$host/zorvik/$folder/latest.json" | cmp -s - dist/latest.json; then
+                    break
+                  fi
+                  if [ "$attempt" = 6 ]; then
+                    echo "::error::$host/zorvik/$folder/latest.json is not this release's"
+                    exit 1
+                  fi
+                  sleep 10
+                done
+              fi
+              echo "$host serves zorvik/$folder"
+            done
+          done
 
   # The main website shows the latest release's docs. It is built here, from this release's
   # own code, and attached to the release as zorvik-website.tar.gz; pages.yml only downloads
