@@ -47,11 +47,11 @@ lab:
       solution:
         - send: { method: POST, url: "{{api}}/keys" }
     - text: |
-        Copy the `apiKey` value. Press **⌘/Ctrl + E**, select the **Lab** environment and add a variable `apiKey` with the key as its value. Click the **lock** at the end of the row to make it a secret, then press **Save changes**.
+        Copy the `apiKey` value. Press **⌘/Ctrl + E**: the sidebar shows the environments and the **Lab** environment opens in a tab. Add a variable `apiKey` with the key as its value. Click the **lock** at the end of the row to make it a secret, then save with **⌘/Ctrl + S**.
       hints:
         - Copy only the key itself, without the quotes around it.
         - The lock icon sits at the right end of the value field. Open means plain, closed means secret.
-        - "Variable apiKey, value sk_test_… (your key), lock closed, then Save changes. The value now shows as dots."
+        - "Variable apiKey, value sk_test_… (your key), lock closed, then ⌘/Ctrl + S. The value now shows as dots."
       check:
         saved:
           environment: { name: Lab, variables: [{ key: apiKey, secret: true, value: "" }] }
@@ -125,7 +125,7 @@ Zorvik workspaces are made to be shared through Git, so a normal variable is wri
 
 ## Plain or secret
 
-Every variable row in **Environments & variables** (**⌘/Ctrl + E**) has a **lock** at its right end:
+Every variable row of an environment (**⌘/Ctrl + E**, or **Environments** in the left rail) has a **lock** at its right end:
 
 - **Open lock: plain.** The value is saved in the workspace file. Use it for addresses, ids and settings.
 - **Closed lock: secret.** The file keeps only the name, with an empty value. The real value lives on your computer, in Zorvik's own data folder, and shows as dots.

@@ -9,10 +9,10 @@ A workspace is meant to be committed to Git, so it must not contain your passwor
 
 ## Make a variable secret
 
-1. Press <kbd>Mod</kbd>+<kbd>E</kbd> to open **Environments & variables**.
-2. Select an environment, or **Workspace variables**.
+1. Press <kbd>Mod</kbd>+<kbd>E</kbd> (or choose **Environments** in the left rail) to show the environments in the sidebar.
+2. Open an environment, or **Workspace variables**.
 3. In the variable's row, choose the open **lock icon** (*Plain: saved in the workspace file*). It turns into a closed lock: *Secret: kept on this computer only, never written to workspace files*.
-4. Enter the value and choose **Save changes**.
+4. Enter the value and save with <kbd>Mod</kbd>+<kbd>S</kbd>.
 
 The value is now shown as dots. Choose the **eye icon** to show or hide it while editing.
 
@@ -55,7 +55,7 @@ If you move or rename the workspace folder, Zorvik sees a different workspace: e
 
 ## Sharing a workspace with secrets
 
-When a teammate clones the workspace, secret variables arrive with no value. Each person enters their own values once, in **Environments & variables**, and saves.
+When a teammate clones the workspace, secret variables arrive with no value. Each person enters their own values once, in the environment's tab (**Environments** in the left rail), and saves.
 
 Until then, the variable is defined but **empty**: requests that use it are sent with an empty value (an empty token, for example), and the variable doesn't show up as undefined. If a request fails with `401 Unauthorized` right after cloning, check the secret values first.
 
@@ -67,7 +67,7 @@ Put a note in the workspace's docs or README that says which secret variables ea
 
 | Place | Behaviour |
 |---|---|
-| The environment editor | Shown as dots until you choose the eye icon |
+| An environment's tab | Shown as dots until you choose the eye icon. Unsaved changes aren't kept when Zorvik restarts. |
 | Hovering `{{token}}` in a request | Shows `••••••` |
 | **Set by scripts** list | Values of secret variables stay hidden until you choose the eye icon |
 | History | Secret values found in the sent URL (such as an API key in the query) are replaced by `{{name}}`. Request headers and bodies are stored with their `{{variables}}`, not the values. |

@@ -14,7 +14,7 @@ use crate::Api;
 /// Largest file an agent may add.
 const MAX_FILE_BYTES: usize = 10 * 1024 * 1024;
 /// Folders and files the workspace's own tools own (a request file is saved with save_requests).
-const OWNED: [&str; 6] = ["zorvik.yaml", "requests", "environments", "servers", "loadtests", ".git"];
+const OWNED: [&str; 7] = ["zorvik.yaml", "requests", "environments", "servers", "loadtests", "scenarios", ".git"];
 
 pub(super) fn defs() -> Vec<Def> {
     vec![
@@ -80,7 +80,7 @@ fn target_path(root: &Path, path: &str) -> Result<PathBuf, String> {
     let Some(first) = parts.first() else { return Err("path names no file".into()) };
     if OWNED.iter().any(|o| first.eq_ignore_ascii_case(o)) {
         return Err(format!(
-            "{first} belongs to Zorvik: save requests, environments, servers and load tests with their own tools"
+            "{first} belongs to Zorvik: save requests, environments, servers, load tests and scenarios with their own tools"
         ));
     }
     // Links could lead out of the workspace: none on the way, and not the file itself.

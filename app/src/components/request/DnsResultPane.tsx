@@ -10,6 +10,7 @@ import { copyText, modKey } from "../../lib/platform";
 import { api } from "../../lib/rpc";
 import { cancel, registerOneShot, type Tab, updateDraft } from "../../store/tabs";
 import { toast } from "../../store/toasts";
+import { showEnvironments } from "../../store/environments";
 import { openModal } from "../../store/ui";
 import { Badge, Banner, Button, cx, EmptyState, IconButton, Kbd, Spinner, Tooltip } from "../ui";
 import { bareName, formatTtl, isIpAddress, RCODE_MEANING, rcodeTone, reverseName, zoneText } from "./dnsModel";
@@ -104,7 +105,7 @@ export function DnsError({ kind, code, message, durationMs }: { kind: ErrorKind 
       <div className="flex items-center gap-2">
         {!undefinedVar && durationMs !== undefined && <span className="text-[11.5px] text-faint">after {formatMs(durationMs)}</span>}
         {undefinedVar && (
-          <Button size="sm" onClick={() => openModal({ type: "environments" })}>
+          <Button size="sm" onClick={() => showEnvironments()}>
             Open environments
           </Button>
         )}

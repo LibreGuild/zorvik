@@ -1,4 +1,4 @@
-//! `zorvik` — run requests from a Zorvik workspace in a terminal or CI,
+//! `zorvik` — run requests or a scenario from a Zorvik workspace in a terminal or CI,
 //! run one of its load tests, serve one of its saved servers (mock API,
 //! WebSocket, TCP, …), or let an AI agent control the app (`zorvik mcp`).
 
@@ -11,11 +11,14 @@ use std::time::{Duration, Instant};
 use clap::{Parser, Subcommand};
 use tokio_util::sync::CancellationToken;
 use zorvik_api::runner::{self, RunPlan, RunResult, RunSummary};
+use zorvik_api::scenario::{self, ScenarioPlan};
 use zorvik_api::{ScriptVars, SendContext, values_of};
 use zorvik_engine::Client;
 use zorvik_load::{DataRow, LoadEvent, PhaseSummary, Plan, PlanTarget, Render, RequestSource, Summary, UserVars};
 use zorvik_servers::{Reporter, ServerEvent, StartOptions, TrafficDirection, TrafficEntry, TrafficKind};
-use zorvik_workspace::formats::{LoadModel, LoadTest, RequestKind, RequestSettings, Server, ServerKind, Variable};
+use zorvik_workspace::formats::{
+    LoadModel, LoadTest, RequestKind, RequestSettings, Scenario, Server, ServerKind, StepKind, Variable,
+};
 use zorvik_workspace::oauth2::{TokenCache, ensure_token};
 use zorvik_workspace::resolve::{Inheritance, apply_token, check_url_variables, resolve};
 use zorvik_workspace::settings::Settings;
@@ -33,6 +36,7 @@ struct Cli {
 enum Command {
     /// Run the HTTP requests of a workspace or folder (in sidebar order) with their
     /// scripts and tests, once per iteration or data row, and report the results.
+    /// With --scenario: the steps of a saved scenario instead.
     Run(RunArgs),
     /// Run a saved load test and check its thresholds (exit code 1 when one fails).
     Load(LoadArgs),
@@ -126,6 +130,11 @@ struct RunArgs {
     /// Only run requests under this folder (path relative to requests/).
     #[arg(short, long)]
     folder: Option<String>,
+    /// Run a saved scenario (its name, or its file name under scenarios/) instead of a
+    /// folder's requests. --var values win over the scenario's own and answer its ask steps;
+    /// --data and --iterations replace the scenario's.
+    #[arg(short, long, value_name = "NAME", conflicts_with_all = ["folder", "delay", "bail"])]
+    scenario: Option<String>,
     /// Set a variable (highest precedence), e.g. --var token=abc. Repeatable.
     #[arg(long = "var", value_name = "KEY=VALUE")]
     vars: Vec<String>,
@@ -276,30 +285,43 @@ async fn run(args: RunArgs) -> ExitCode {
         Ok(ws) => ws,
         Err(e) => return fail(e.message),
     };
-    let (name, items) = match runner::collect(&ws, args.folder.as_deref().unwrap_or_default(), None) {
-        Ok(found) => found,
-        Err(e) => return fail(e),
-    };
     let (mut vars, secrets) = match run_variables(&ws, args.env.as_deref(), &args.vars) {
         Ok(found) => found,
         Err(e) => return fail(e),
     };
     let data = match &args.data {
         Some(path) => match read_data(path) {
-            Ok(data) => data.rows,
+            Ok(data) => Some(data.rows),
             Err(e) => return fail(format!("data file {}: {e}", path.display())),
         },
-        None => Vec::new(),
+        None => None,
     };
-    let plan = RunPlan {
-        name,
-        items,
-        iterations: runner::iteration_count(args.iterations, data.len()),
-        delay: Duration::from_millis(args.delay),
-        data,
-        stop_on_failure: args.bail,
-        allow_http_errors: args.allow_http_errors,
-        secrets,
+    let what = match &args.scenario {
+        Some(wanted) => match scenario_plan(&ws, wanted, &args, data, secrets) {
+            Ok(plan) => What::Scenario(Box::new(plan)),
+            Err(e) => return fail(e),
+        },
+        None => {
+            let (name, items) = match runner::collect(&ws, args.folder.as_deref().unwrap_or_default(), None) {
+                Ok(found) => found,
+                Err(e) => return fail(e),
+            };
+            let data = data.unwrap_or_default();
+            What::Folder(RunPlan {
+                name,
+                items,
+                iterations: runner::iteration_count(args.iterations, data.len()),
+                delay: Duration::from_millis(args.delay),
+                data,
+                stop_on_failure: args.bail,
+                allow_http_errors: args.allow_http_errors,
+                secrets,
+            })
+        }
+    };
+    let iterations = match &what {
+        What::Folder(plan) => plan.iterations,
+        What::Scenario(plan) => plan.iterations,
     };
 
     let mut settings = Settings::default();
@@ -337,28 +359,36 @@ async fn run(args: RunArgs) -> ExitCode {
         }
     });
     let mut printed_iteration = None;
-    let report = Box::pin(runner::run(&cx, &plan, &mut vars, &cancel, |result, vars| {
-        // Values scripts set apply for the rest of the run; nothing is kept after it.
-        vars.changes.clear();
+    let mut print = |result: &RunResult| {
         if args.json {
             return;
         }
-        if plan.iterations > 1 && printed_iteration != Some(result.iteration) {
+        if iterations > 1 && printed_iteration != Some(result.iteration) {
             if printed_iteration.is_some() {
                 out("");
             }
             printed_iteration = Some(result.iteration);
-            out(&paint("1", &format!("Iteration {} of {}", result.iteration + 1, plan.iterations)));
+            out(&paint("1", &format!("Iteration {} of {}", result.iteration + 1, iterations)));
         }
         print_result(result, &paint);
-    }))
-    .await;
+    };
+    let report = match &what {
+        What::Folder(plan) => {
+            Box::pin(runner::run(&cx, plan, &mut vars, &cancel, |result, vars| {
+                // Values scripts set apply for the rest of the run; nothing is kept after it.
+                vars.changes.clear();
+                print(result);
+            }))
+            .await
+        }
+        What::Scenario(plan) => Box::pin(scenario::run(&cx, plan, &vars, &cancel, print)).await.report,
+    };
 
     let mut code = run_exit_code(&report.summary);
     if args.json {
         out(&serde_json::to_string_pretty(&report).unwrap_or_default());
     } else {
-        print_run_summary(&report.summary, &paint);
+        print_run_summary(&report.summary, matches!(what, What::Scenario(_)), &paint);
     }
     if let Some(path) = &args.junit
         && let Err(e) = std::fs::write(path, runner::junit_xml(&report))
@@ -367,6 +397,66 @@ async fn run(args: RunArgs) -> ExitCode {
         code = 2;
     }
     ExitCode::from(code)
+}
+
+/// What `zorvik run` runs.
+enum What {
+    Folder(RunPlan),
+    Scenario(Box<ScenarioPlan>),
+}
+
+/// A saved scenario by id (file name) or name, ignoring case.
+fn find_scenario(ws: &Workspace, wanted: &str) -> Result<Scenario, String> {
+    let nodes = ws.list_scenarios().map_err(|e| e.message)?;
+    let node = nodes
+        .iter()
+        .find(|n| n.id.eq_ignore_ascii_case(wanted) || n.name.eq_ignore_ascii_case(wanted))
+        .ok_or_else(|| {
+            let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
+            match names.is_empty() {
+                true => format!("scenario '{wanted}' not found: this workspace has no scenarios"),
+                false => format!("scenario '{wanted}' not found (there are: {})", names.join(", ")),
+            }
+        })?;
+    if let Some(error) = &node.error {
+        return Err(format!("scenario '{}' can't be read: {error}", node.id));
+    }
+    ws.read_scenario(&node.id).map_err(|e| e.message)
+}
+
+/// The plan for `--scenario`: its steps, the requests and scenarios they need, and its data
+/// (`--data` rows, else the scenario's own data file, read like the app reads it).
+fn scenario_plan(
+    ws: &Workspace,
+    wanted: &str,
+    args: &RunArgs,
+    data: Option<Vec<runner::DataRow>>,
+    secrets: Vec<(String, String)>,
+) -> Result<ScenarioPlan, String> {
+    let scenario = find_scenario(ws, wanted)?;
+    if scenario.steps.iter().chain(&scenario.always).all(|step| !step.enabled) {
+        return Err(format!("scenario '{}' has no steps to run", scenario.name));
+    }
+    let data = match (data, scenario.data_file.as_deref().map(str::trim).filter(|f| !f.is_empty())) {
+        (Some(rows), _) => rows,
+        (None, Some(file)) => runner::read_data_file(file, ws.root(), args.allow_outside_files)?.0.rows,
+        (None, None) => Vec::new(),
+    };
+    let iterations = runner::iteration_count(args.iterations.or(scenario.iterations), data.len());
+    if !(1..=runner::MAX_ITERATIONS).contains(&iterations) {
+        return Err(format!("iterations must be between 1 and {}", runner::MAX_ITERATIONS));
+    }
+    let (requests, scenarios) = scenario::collect(ws, &scenario);
+    Ok(ScenarioPlan {
+        scenario,
+        requests,
+        scenarios,
+        iterations,
+        data,
+        allow_http_errors: args.allow_http_errors,
+        secrets,
+        ..Default::default()
+    })
 }
 
 /// A data file given on the command line (relative to the current folder).
@@ -409,50 +499,73 @@ fn kind_name(kind: RequestKind) -> &'static str {
     }
 }
 
-/// One line per request, then its tests and problems (indented).
+/// One line per request, then its tests and problems (indented). A scenario's steps are
+/// indented as they are nested; the ones that send nothing say what they did.
 fn print_result(r: &RunResult, paint: &dyn Fn(&str, &str) -> String) {
     let name = printable(&r.name);
+    let indent = "  ".repeat(r.step.as_ref().map_or(0, |step| step.depth as usize));
     if r.skipped {
         let reason = r.skip_reason.as_deref().unwrap_or("not a kind the runner sends");
         let note = paint("2", &format!("(skipped: {reason})"));
-        out(&format!("{} {:<7} {name}  {note}", paint("33", "–"), kind_name(r.kind)));
+        out(&format!("{indent}{} {:<7} {name}  {note}", paint("33", "–"), kind_name(r.kind)));
         return;
     }
     let mark = if r.passed { paint("32", "✓") } else { paint("31", "✗") };
-    let detail = match (&r.status, &r.error) {
-        (_, Some(e)) => paint("31", &printable(e)),
-        (Some(s), None) => {
-            let code = if *s < 400 { "32" } else { "31" };
-            let timing = format!("{:.0} ms, {} B", r.duration_ms.unwrap_or_default(), r.size.unwrap_or_default());
-            format!("{} {}", paint(code, &s.to_string()), paint("2", &timing))
+    match r.step.as_ref().filter(|step| step.kind != StepKind::Request) {
+        Some(step) => {
+            // A loop's round, or a step that directs the others: no mark while all is well.
+            let mark = if step.kind.is_flow() && r.passed { paint("2", "·") } else { mark };
+            let note =
+                step.note.as_deref().map(|note| format!("  {}", paint("2", &printable(note)))).unwrap_or_default();
+            let error = r.error.as_deref().map(|e| format!("  {}", paint("31", &printable(e)))).unwrap_or_default();
+            out(&format!("{indent}{mark} {name}{note}{error}"));
         }
-        _ => String::new(),
-    };
-    out(&format!("{mark} {:<7} {name}  {}  {detail}", printable(&r.method), paint("2", &printable(&r.url))));
+        None => {
+            let detail = match (&r.status, &r.error) {
+                (_, Some(e)) => paint("31", &printable(e)),
+                (Some(s), None) => {
+                    let code = if *s < 400 { "32" } else { "31" };
+                    let timing =
+                        format!("{:.0} ms, {} B", r.duration_ms.unwrap_or_default(), r.size.unwrap_or_default());
+                    format!("{} {}", paint(code, &s.to_string()), paint("2", &timing))
+                }
+                _ => String::new(),
+            };
+            let url = paint("2", &printable(&r.url));
+            out(&format!("{indent}{mark} {:<7} {name}  {url}  {detail}", printable(&r.method)));
+        }
+    }
     for t in &r.tests {
         let test = printable(&t.name);
         if t.skipped {
-            out(&format!("    {} {test} {}", paint("33", "–"), paint("2", "(skipped)")));
+            out(&format!("{indent}    {} {test} {}", paint("33", "–"), paint("2", "(skipped)")));
         } else if t.passed {
-            out(&format!("    {} {test}", paint("32", "✓")));
+            out(&format!("{indent}    {} {test}", paint("32", "✓")));
         } else {
             let error = t.error.as_deref().map(|e| format!(" — {}", printable(e))).unwrap_or_default();
-            out(&format!("    {} {test}{}", paint("31", "✗"), paint("31", &error)));
+            out(&format!("{indent}    {} {test}{}", paint("31", "✗"), paint("31", &error)));
         }
     }
     for e in &r.script_errors {
-        out(&format!("    {} {}", paint("31", "!"), paint("31", &printable(e))));
+        out(&format!("{indent}    {} {}", paint("31", "!"), paint("31", &printable(e))));
     }
     if !r.unresolved.is_empty() {
-        out(&format!("    {} undefined variables: {}", paint("33", "!"), printable(&r.unresolved.join(", "))));
+        let names = printable(&r.unresolved.join(", "));
+        out(&format!("{indent}    {} undefined variables: {names}", paint("33", "!")));
+    }
+    for saved in r.step.iter().flat_map(|step| &step.saved) {
+        let value = paint("2", &printable(&saved.value));
+        out(&format!("{indent}    {} {} = {value}", paint("2", "→"), printable(&saved.key)));
     }
 }
 
-fn print_run_summary(s: &RunSummary, paint: &dyn Fn(&str, &str) -> String) {
+fn print_run_summary(s: &RunSummary, scenario: bool, paint: &dyn Fn(&str, &str) -> String) {
     let passed = s.requests - s.failed;
     out("");
     if s.stopped {
         out(&paint("33", "Stopped (Ctrl+C)."));
+    } else if s.bailed && scenario {
+        out(&paint("31", "Ended at the first failed step."));
     } else if s.bailed {
         out(&paint("31", "Stopped at the first failure (--bail)."));
     }
@@ -460,7 +573,8 @@ fn print_run_summary(s: &RunSummary, paint: &dyn Fn(&str, &str) -> String) {
         out(&paint("31", &printable(e)));
     }
     out(&format!(
-        "Requests  {} passed, {} failed, {} skipped ({} total)",
+        "{}  {} passed, {} failed, {} skipped ({} total)",
+        if scenario { "Steps   " } else { "Requests" },
         paint("32", &passed.to_string()),
         paint(if s.failed > 0 { "31" } else { "32" }, &s.failed.to_string()),
         s.skipped,

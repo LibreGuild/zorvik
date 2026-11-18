@@ -1,5 +1,6 @@
 // A load test's data file: CSV or JSON rows, one per virtual user (or per
 // request in the request-rate model). Same file rules and preview as the runner.
+// A scenario's data file uses it too, with its own words (`rows`).
 import { useEffect, useState } from "react";
 import { FileSpreadsheet, TriangleAlert, X } from "lucide-react";
 import type { DataPreview } from "../../bindings/DataPreview";
@@ -12,7 +13,18 @@ import { Button, IconButton } from "../ui";
 
 type Preview = { status: "loading" } | { status: "ready"; preview: DataPreview } | { status: "error"; message: string };
 
-export function DataFileField({ file, model, onChange }: { file: string | undefined; model: LoadModel; onChange: (file: string | undefined) => void }) {
+export function DataFileField({
+  file,
+  model = "virtualUsers",
+  rows,
+  onChange,
+}: {
+  file: string | undefined;
+  model?: LoadModel;
+  /** What a row is used for, instead of the load test's words: why to have one, and who gets which row. */
+  rows?: { why: string; each: string };
+  onChange: (file: string | undefined) => void;
+}) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const path = file?.trim() || null;
 
@@ -38,15 +50,16 @@ export function DataFileField({ file, model, onChange }: { file: string | undefi
   };
 
   const perUser =
-    model === "virtualUsers"
+    rows?.each ??
+    (model === "virtualUsers"
       ? "Each virtual user takes the next row and keeps it (user 1 row 1, user 2 row 2 …; with more users than rows, they start over)."
-      : "Each request takes the next row, starting over at the end.";
+      : "Each request takes the next row, starting over at the end.");
 
   if (!path) {
     return (
       <div className="flex flex-col gap-2" data-testid="load-data">
         <p className="text-[12px] leading-relaxed text-muted">
-          Optional: a CSV file with a header row, or a JSON array of objects, so users don't all send the same values. Columns are variables (
+          Optional: a CSV file with a header row, or a JSON array of objects, {rows?.why ?? "so users don't all send the same values"}. Columns are variables (
           <code className="font-mono">{"{{name}}"}</code>) that override environment variables. {perUser}
         </p>
         <div>

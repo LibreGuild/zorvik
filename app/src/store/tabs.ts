@@ -1,18 +1,21 @@
 // Open tabs: requests (drafts, responses, live WebSocket/SSE/TCP/UDP/MQTT streams),
 // servers (their saved configuration; running state lives in store/servers.ts), load tests
-// (configuration; runs live in store/loadtests.ts), collection runs (settings and results
-// live in store/runner.ts) and tools.
+// (configuration; runs live in store/loadtests.ts), scenarios (their steps; runs live in
+// store/runner.ts), collection runs (settings and results live in store/runner.ts), variables
+// (an environment, the workspace's variables or globals) and tools.
 import { create } from "zustand";
 import type { ChunkMessage } from "../bindings/ChunkMessage";
 import type { ErrorKind } from "../bindings/ErrorKind";
 import type { LoadTest } from "../bindings/LoadTest";
 import type { Request } from "../bindings/Request";
 import type { RequestKind } from "../bindings/RequestKind";
+import type { Scenario } from "../bindings/Scenario";
 import type { SendResult } from "../bindings/SendResult";
 import type { Server } from "../bindings/Server";
 import type { SocketOpened } from "../bindings/SocketOpened";
 import type { StreamEvent } from "../bindings/StreamEvent";
 import type { StreamOpened } from "../bindings/StreamOpened";
+import type { Variable } from "../bindings/Variable";
 import { onEvent } from "../lib/events";
 import { SOCKET_KINDS, STREAM_KINDS } from "../lib/http";
 import { newId } from "../lib/ids";
@@ -21,7 +24,7 @@ import { confirm } from "./dialogs";
 import { isSubscription } from "./graphql";
 import { toast } from "./toasts";
 import { openModal } from "./ui";
-import { refreshEnvironments, refreshTree, refreshVariables, reloadWorkspace } from "./workspace";
+import { refreshEnvironments, refreshTree, refreshVariables, reloadWorkspace, useWorkspace } from "./workspace";
 
 export type ResponseState =
   | { status: "idle" }
@@ -124,13 +127,54 @@ export interface RunnerTab {
   pane?: "settings" | "results";
 }
 
-export type AnyTab = Tab | ServerTab | ToolTab | LoadTestTab | RunnerTab;
+/** A saved scenario's steps and settings (its runs and results: store/runner.ts). */
+export interface ScenarioTab {
+  type: "scenario";
+  id: string;
+  /** File stem under `scenarios/`. */
+  scenarioId: string;
+  draft: Scenario;
+  saved: Scenario;
+  /** The file disappeared or could not be reloaded. */
+  orphaned?: boolean;
+  /** Narrow windows show one pane at a time. */
+  pane?: "settings" | "results";
+  /** What the left side shows. */
+  section?: "steps" | "variables" | "settings" | "docs";
+  /** Steps shown with their fields (or closed), by step path; steps that hold others are open unless closed. */
+  open?: Record<string, boolean>;
+  /** Steps were added, removed or moved since the run `runId` started: where each one was then (path now → path then). */
+  ranAt?: { runId: string; paths: Record<string, string> };
+}
+
+/** What a variables tab edits: a name (an environment's) and its variables. */
+export interface VariableSet {
+  name: string;
+  variables: Variable[];
+}
+
+/** An environment, the workspace's variables, or globals (values scripts set; nothing to edit). */
+export interface VariablesTab {
+  type: "variables";
+  id: string;
+  scope: "environment" | "workspace" | "globals";
+  /** The environment's id (its file stem under `environments/`), for scope `environment`. */
+  envId?: string;
+  draft: VariableSet;
+  saved: VariableSet;
+  /** The environment's file disappeared. */
+  orphaned?: boolean;
+}
+
+export type AnyTab = Tab | ServerTab | ToolTab | LoadTestTab | RunnerTab | ScenarioTab | VariablesTab;
 
 export const isRequestTab = (t: AnyTab | undefined | null): t is Tab => !!t && (t.type === undefined || t.type === "request");
 export const isServerTab = (t: AnyTab | undefined | null): t is ServerTab => t?.type === "server";
 export const isToolTab = (t: AnyTab | undefined | null): t is ToolTab => t?.type === "tool";
 export const isLoadTestTab = (t: AnyTab | undefined | null): t is LoadTestTab => t?.type === "loadTest";
 export const isRunnerTab = (t: AnyTab | undefined | null): t is RunnerTab => t?.type === "runner";
+export const isScenarioTab = (t: AnyTab | undefined | null): t is ScenarioTab => t?.type === "scenario";
+export const isVariablesTab = (t: AnyTab | undefined | null): t is VariablesTab => t?.type === "variables";
 
 interface TabsState {
   tabs: AnyTab[];
@@ -264,9 +308,35 @@ export function sameLoadTest(a: LoadTest, b: LoadTest): boolean {
   return JSON.stringify(canonical(loadTestDefaults(a))) === JSON.stringify(canonical(loadTestDefaults(b)));
 }
 
+/** A scenario without what the file format leaves out: switches that are off and default choices. */
+function scenarioDefaults(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(scenarioDefaults);
+  if (!value || typeof value !== "object") return value;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (v === false && k !== "enabled") continue;
+    if ((k === "from" && v === "json") || (k === "op" && v === "equals") || (k === "as" && v === "item") || (k === "delayMs" && v === 0)) continue;
+    out[k] = scenarioDefaults(v);
+  }
+  return out;
+}
+
+/** Whether two scenarios are the same file (defaults written out or left out count as the same). */
+export function sameScenario(a: Scenario, b: Scenario): boolean {
+  return JSON.stringify(canonical(scenarioDefaults(a))) === JSON.stringify(canonical(scenarioDefaults(b)));
+}
+
+/** Whether two sets of variables are the same (rows not filled in don't count). */
+export function sameVariables(a: VariableSet, b: VariableSet): boolean {
+  const filled = (s: VariableSet) => ({ name: s.name, variables: s.variables.filter((v) => v.key.trim()).map((v) => ({ ...v, secret: v.secret || undefined })) });
+  return JSON.stringify(canonical(filled(a))) === JSON.stringify(canonical(filled(b)));
+}
+
 export function isDirty(tab: AnyTab): boolean {
+  if (isVariablesTab(tab)) return tab.scope !== "globals" && !sameVariables(tab.draft, tab.saved);
   if (isServerTab(tab)) return JSON.stringify(canonical(tab.draft)) !== JSON.stringify(canonical(tab.saved));
   if (isLoadTestTab(tab)) return !sameLoadTest(tab.draft, tab.saved);
+  if (isScenarioTab(tab)) return !sameScenario(tab.draft, tab.saved);
   if (isToolTab(tab) || isRunnerTab(tab)) return false;
   if (!tab.saved) return tab.draft.url.trim() !== "" || tab.path === null;
   return !sameRequest(tab.draft, tab.saved);
@@ -305,6 +375,18 @@ export function updateLoadTestTab(id: string, fn: (t: LoadTestTab) => Partial<Lo
 
 export function updateLoadTestDraft(id: string, fn: (t: LoadTest) => LoadTest) {
   updateLoadTestTab(id, (t) => ({ draft: fn(t.draft) }));
+}
+
+export function updateScenarioTab(id: string, fn: (t: ScenarioTab) => Partial<ScenarioTab>) {
+  set((s) => ({ tabs: s.tabs.map((t) => (t.id === id && isScenarioTab(t) ? { ...t, ...fn(t) } : t)) }));
+}
+
+export function updateScenarioDraft(id: string, fn: (s: Scenario) => Scenario) {
+  updateScenarioTab(id, (t) => ({ draft: fn(t.draft) }));
+}
+
+export function updateVariablesTab(id: string, fn: (t: VariablesTab) => Partial<VariablesTab>) {
+  set((s) => ({ tabs: s.tabs.map((t) => (t.id === id && isVariablesTab(t) ? { ...t, ...fn(t) } : t)) }));
 }
 
 export function updateRunnerTab(id: string, fn: (t: RunnerTab) => Partial<RunnerTab>) {
@@ -403,6 +485,56 @@ export async function openLoadTest(testId: string) {
   }
 }
 
+/** Open a saved scenario in a tab (or switch to it); returns the tab's id. */
+export async function openScenario(scenarioId: string, { activate = true } = {}): Promise<string | null> {
+  const show = (tabId: string) => {
+    if (activate) set({ activeId: tabId });
+    return tabId;
+  };
+  const existing = get().tabs.find((t) => isScenarioTab(t) && t.scenarioId === scenarioId);
+  if (existing) return show(existing.id);
+  const started = epoch;
+  try {
+    const scenario = await api.readScenario(scenarioId);
+    if (epoch !== started) return null;
+    const opened = get().tabs.find((t) => isScenarioTab(t) && t.scenarioId === scenarioId);
+    if (opened) return show(opened.id);
+    const tab: ScenarioTab = { type: "scenario", id: newId(), scenarioId, draft: structuredClone(scenario), saved: scenario };
+    set((s) => ({ tabs: [...s.tabs, tab], activeId: activate || !s.activeId ? tab.id : s.activeId }));
+    return tab.id;
+  } catch (e) {
+    toast("error", "Could not open scenario", errorMessage(e));
+    return null;
+  }
+}
+
+export const WORKSPACE_VARIABLES = "Workspace variables";
+export const GLOBALS = "Globals";
+
+/** What a variables tab shows, as the open workspace has it now (null: an environment that isn't there). */
+export function variableSet(scope: VariablesTab["scope"], envId?: string): VariableSet | null {
+  const info = useWorkspace.getState().info;
+  if (!info) return null;
+  if (scope === "globals") return { name: GLOBALS, variables: [] };
+  if (scope === "workspace") return { name: WORKSPACE_VARIABLES, variables: info.meta.variables ?? [] };
+  const env = info.environments.find((e) => e.id === envId);
+  return env ? { name: env.environment.name, variables: env.environment.variables } : null;
+}
+
+/** Open an environment, the workspace's variables or globals in a tab (or switch to it). */
+export function openVariables(scope: VariablesTab["scope"], envId?: string): string | null {
+  const existing = get().tabs.find((t) => isVariablesTab(t) && t.scope === scope && t.envId === envId);
+  if (existing) {
+    set({ activeId: existing.id });
+    return existing.id;
+  }
+  const saved = variableSet(scope, envId);
+  if (!saved) return null;
+  const tab: VariablesTab = { type: "variables", id: newId(), scope, envId, draft: structuredClone(saved), saved };
+  set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id }));
+  return tab.id;
+}
+
 /** Open a tool in a tab (one tab per tool). */
 export function openTool(tool: string) {
   const existing = get().tabs.find((t) => isToolTab(t) && t.tool === tool);
@@ -459,14 +591,27 @@ export function onLoadTestDeleted(testId: string) {
   set((s) => ({ tabs: s.tabs.map((t) => (isLoadTestTab(t) && t.testId === testId ? { ...t, orphaned: true } : t)) }));
 }
 
+/** Keep scenario tabs in step with a rename from the sidebar (new file id) or a delete. */
+export function onScenarioRenamed(oldId: string, newId: string, saved: Scenario) {
+  set((s) => ({
+    tabs: s.tabs.map((t) =>
+      isScenarioTab(t) && t.scenarioId === oldId ? { ...t, scenarioId: newId, saved, draft: { ...t.draft, name: saved.name } } : t,
+    ),
+  }));
+}
+
+export function onScenarioDeleted(scenarioId: string) {
+  set((s) => ({ tabs: s.tabs.map((t) => (isScenarioTab(t) && t.scenarioId === scenarioId ? { ...t, orphaned: true } : t)) }));
+}
+
 export async function closeTab(id: string, force = false): Promise<boolean> {
   const any = get().tabs.find((t) => t.id === id);
   if (!any) return true;
   if (!isRequestTab(any)) {
-    if (!force && isDirty(any) && (isServerTab(any) || isLoadTestTab(any))) {
+    if (!force && isDirty(any) && (isServerTab(any) || isLoadTestTab(any) || isScenarioTab(any) || isVariablesTab(any))) {
       const ok = await confirm({
         title: "Discard unsaved changes?",
-        message: `"${any.draft.name}" has changes that are not saved. ${isServerTab(any) ? "A running server keeps its current setup." : "A running load test keeps running."}`,
+        message: `"${any.draft.name}" has changes that are not saved.${isServerTab(any) ? " A running server keeps its current setup." : isLoadTestTab(any) ? " A running load test keeps running." : ""}`,
         confirmLabel: "Discard",
         danger: true,
       });
@@ -544,6 +689,8 @@ export async function saveTab(id: string): Promise<boolean> {
   const any = get().tabs.find((t) => t.id === id);
   if (isServerTab(any)) return saveServerTab(any);
   if (isLoadTestTab(any)) return saveLoadTestTab(any);
+  if (isScenarioTab(any)) return saveScenarioTab(any);
+  if (isVariablesTab(any)) return saveVariablesTab(any);
   const tab = reqTab(id);
   if (!tab) return false;
   if (!tab.path) {
@@ -599,6 +746,60 @@ async function saveLoadTestTab(tab: LoadTestTab): Promise<boolean> {
     }
     updateLoadTestTab(tab.id, () => ({ testId: newId, saved: structuredClone(draft), orphaned: false }));
     for (const h of loadTestSavedHandlers) h(tab.testId, newId);
+    return true;
+  } catch (e) {
+    toast("error", "Could not save", errorMessage(e));
+    return false;
+  }
+}
+
+async function saveVariablesTab(tab: VariablesTab): Promise<boolean> {
+  if (tab.scope === "globals") return true;
+  // Rows without a name are not variables.
+  const cleaned: VariableSet = { name: tab.draft.name.trim() || "Untitled", variables: tab.draft.variables.filter((v) => v.key.trim()) };
+  try {
+    let envId = tab.envId;
+    if (tab.scope === "workspace") {
+      const info = useWorkspace.getState().info;
+      if (!info) return false;
+      await api.saveWorkspaceMeta({ ...info.meta, variables: cleaned.variables });
+    } else {
+      try {
+        envId = await api.saveEnvironment(tab.envId!, cleaned);
+      } catch (e) {
+        // Its file was deleted: "Save to write it again" creates it anew.
+        if (!(tab.orphaned && e instanceof RpcError && e.code === "notFound")) throw e;
+        envId = await api.createEnvironment(cleaned);
+      }
+    }
+    // The id first (it follows the name): the reload below finds the tab's environment by it.
+    updateVariablesTab(tab.id, (t) => ({ envId, saved: cleaned, draft: sameVariables(t.draft, tab.draft) ? structuredClone(cleaned) : t.draft, orphaned: false }));
+    if (tab.scope === "workspace") await reloadWorkspace().catch(() => {});
+    else await refreshEnvironments().catch(() => {});
+    return true;
+  } catch (e) {
+    toast("error", "Could not save", errorMessage(e));
+    return false;
+  }
+}
+
+async function saveScenarioTab(tab: ScenarioTab): Promise<boolean> {
+  const draft = tab.draft;
+  if (!draft.name.trim()) {
+    toast("info", "Give the scenario a name first");
+    return false;
+  }
+  try {
+    let newId: string;
+    try {
+      newId = await api.saveScenario(tab.scenarioId, draft);
+    } catch (e) {
+      // Its file was deleted: "Save to write it again" creates it anew.
+      if (!(tab.orphaned && e instanceof RpcError && e.code === "notFound")) throw e;
+      newId = await api.createScenario(draft);
+    }
+    updateScenarioTab(tab.id, () => ({ scenarioId: newId, saved: structuredClone(draft), orphaned: false }));
+    for (const h of scenarioSavedHandlers) h(tab.scenarioId, newId);
     return true;
   } catch (e) {
     toast("error", "Could not save", errorMessage(e));
@@ -1078,6 +1279,28 @@ async function handleFileChanges(paths: string[]) {
       }
     }
   }
+  const scenarioIds = paths.filter((p) => p.startsWith("scenarios/")).map((p) => p.slice("scenarios/".length).replace(/\.yaml$/i, ""));
+  if (scenarioIds.length) {
+    for (const h of scenarioFileHandlers) h();
+    for (const tab of get().tabs) {
+      if (!isScenarioTab(tab) || !scenarioIds.includes(tab.scenarioId)) continue;
+      try {
+        const fresh = await api.readScenario(tab.scenarioId);
+        // Like load tests: keep the draft's sidebar order current so saving does not undo a reorder.
+        if (sameScenario(fresh, tab.saved)) {
+          if (tab.orphaned || tab.draft.seq !== fresh.seq) {
+            updateScenarioTab(tab.id, (t) => ({ saved: fresh, draft: t.draft.seq === fresh.seq ? t.draft : { ...t.draft, seq: fresh.seq }, orphaned: false }));
+          }
+          continue;
+        }
+        updateScenarioTab(tab.id, (t) =>
+          isDirty(t) ? { saved: fresh, draft: { ...t.draft, seq: fresh.seq }, orphaned: false } : { saved: fresh, draft: structuredClone(fresh), orphaned: false },
+        );
+      } catch {
+        updateScenarioTab(tab.id, () => ({ orphaned: true }));
+      }
+    }
+  }
   const serverIds = paths.filter((p) => p.startsWith("servers/")).map((p) => p.slice("servers/".length).replace(/\.yaml$/i, ""));
   if (serverIds.length) {
     for (const h of serverFileHandlers) h();
@@ -1147,6 +1370,18 @@ export function onLoadTestSaved(handler: (oldId: string, newId: string) => void)
   loadTestSavedHandlers.add(handler);
 }
 
+/** Called when files under scenarios/ change on disk (the scenarios store refreshes its list). */
+const scenarioFileHandlers = new Set<() => void>();
+export function onScenarioFilesChanged(handler: () => void) {
+  scenarioFileHandlers.add(handler);
+}
+
+/** Called after a scenario tab is saved (the id changes when the name does). */
+const scenarioSavedHandlers = new Set<(oldId: string, newId: string) => void>();
+export function onScenarioSaved(handler: (oldId: string, newId: string) => void) {
+  scenarioSavedHandlers.add(handler);
+}
+
 // ---- keep tabs in sync with sidebar operations -------------------------------
 
 /** Called after a request or folder was moved or renamed (the runner's request lists follow). */
@@ -1194,6 +1429,8 @@ type PersistedTab =
   | { type?: "request"; id: string; path: string | null; draft?: Request }
   | { type: "server"; id: string; serverId: string; draft?: Server }
   | { type: "loadTest"; id: string; testId: string; draft?: LoadTest }
+  | { type: "scenario"; id: string; scenarioId: string; draft?: Scenario }
+  | { type: "variables"; id: string; scope: VariablesTab["scope"]; envId?: string }
   | { type: "runner"; id: string; folder: string; name: string }
   | { type: "tool"; id: string; tool: string };
 
@@ -1234,6 +1471,16 @@ export async function restoreTabs(wsPath: string) {
       if (saved) tabs.push({ type: "loadTest", id: p.id, testId: p.testId, draft: p.draft ? { ...p.draft, seq: saved.seq } : structuredClone(saved), saved });
       continue;
     }
+    if (p.type === "variables") {
+      const saved = variableSet(p.scope, p.envId);
+      if (saved) tabs.push({ type: "variables", id: p.id, scope: p.scope, envId: p.envId, draft: structuredClone(saved), saved });
+      continue;
+    }
+    if (p.type === "scenario") {
+      const saved = await api.readScenario(p.scenarioId).catch(() => null);
+      if (saved) tabs.push({ type: "scenario", id: p.id, scenarioId: p.scenarioId, draft: p.draft ? { ...p.draft, seq: saved.seq } : structuredClone(saved), saved });
+      continue;
+    }
     if (p.path) {
       const saved = await api.readRequest(p.path).catch(() => null);
       if (saved) {
@@ -1258,8 +1505,10 @@ export async function restoreTabs(wsPath: string) {
   });
 }
 
-/** Two tabs showing the same saved request, server, load test, tool or runner folder. */
+/** Two tabs showing the same saved request, server, load test, scenario, tool or runner folder. */
 function sameTarget(a: AnyTab, b: AnyTab): boolean {
+  if (isScenarioTab(a) && isScenarioTab(b)) return a.scenarioId === b.scenarioId;
+  if (isVariablesTab(a) && isVariablesTab(b)) return a.scope === b.scope && a.envId === b.envId;
   if (isRequestTab(a) && isRequestTab(b)) return !!a.path && a.path === b.path;
   if (isServerTab(a) && isServerTab(b)) return a.serverId === b.serverId;
   if (isLoadTestTab(a) && isLoadTestTab(b)) return a.testId === b.testId;
@@ -1280,6 +1529,9 @@ function persistTabs() {
     if (isRunnerTab(t)) return { type: "runner", id: t.id, folder: t.folder, name: t.name };
     if (isServerTab(t)) return { type: "server", id: t.id, serverId: t.serverId, ...(isDirty(t) ? { draft: t.draft } : {}) };
     if (isLoadTestTab(t)) return { type: "loadTest", id: t.id, testId: t.testId, ...(isDirty(t) ? { draft: t.draft } : {}) };
+    if (isScenarioTab(t)) return { type: "scenario", id: t.id, scenarioId: t.scenarioId, ...(isDirty(t) ? { draft: t.draft } : {}) };
+    // Without unsaved edits: they can hold secret values, which stay out of the window's storage.
+    if (isVariablesTab(t)) return { type: "variables", id: t.id, scope: t.scope, envId: t.envId };
     return { id: t.id, path: t.path, ...(isDirty(t) ? { draft: t.draft } : {}) };
   });
   try {
@@ -1299,11 +1551,13 @@ useTabs.subscribe((s, prev) => {
       if (t.id !== p.id || t.type !== p.type) return true;
       if (isToolTab(t)) return false;
       if (isRunnerTab(t)) return t.folder !== (p as RunnerTab).folder;
-      const q = p as Tab | ServerTab | LoadTestTab;
+      const q = p as Tab | ServerTab | LoadTestTab | ScenarioTab | VariablesTab;
       return (
+        ("envId" in t && t.envId !== (q as VariablesTab).envId) ||
         ("path" in t && t.path !== (q as Tab).path) ||
         ("serverId" in t && t.serverId !== (q as ServerTab).serverId) ||
         ("testId" in t && t.testId !== (q as LoadTestTab).testId) ||
+        ("scenarioId" in t && t.scenarioId !== (q as ScenarioTab).scenarioId) ||
         t.draft !== q.draft ||
         t.saved !== q.saved
       );
@@ -1312,6 +1566,23 @@ useTabs.subscribe((s, prev) => {
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(persistTabs, 300);
 });
+
+/**
+ * Before the tabs go for another workspace (see `resetTabs`): unsaved edits to variables are
+ * not kept with them like other drafts are (they can hold secret values), so the user says
+ * whether they may go. False: stay.
+ */
+export async function leaveTabs(): Promise<boolean> {
+  const unsaved = get().tabs.filter((t) => isVariablesTab(t) && isDirty(t)) as VariablesTab[];
+  if (!unsaved.length) return true;
+  const names = unsaved.map((t) => `"${t.draft.name}"`).join(", ");
+  return confirm({
+    title: "Discard unsaved changes?",
+    message: `${names} ${unsaved.length === 1 ? "has" : "have"} changes that are not saved. Unsaved variables are not kept when the workspace closes.`,
+    confirmLabel: "Discard",
+    danger: true,
+  });
+}
 
 /** Drop all tabs (workspace switch/close). Their list and unsaved drafts stay saved for that workspace. */
 export function resetTabs() {

@@ -194,9 +194,7 @@ impl Api {
         // (they may have changed since), and what its own credential headers carried.
         let redactor_of = |read: &crate::console::Read| {
             let mut redactor = secrets.clone();
-            if let Some(then) = &read.redact {
-                redactor.absorb(then);
-            }
+            redactor.absorb(&crate::lock(&read.redact));
             if let Some(d) = &read.details {
                 redactor.absorb(&Redactor::default().with_headers(&d.request_headers));
                 if let Some(r) = &d.response {

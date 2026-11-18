@@ -2,7 +2,7 @@
 title: Run reports
 description: The text output, JSON report and JUnit XML report of collection runs, how skipped requests and tests are reported, and the exit codes of zorvik run.
 sidebar:
-  order: 5
+  order: 6
 ---
 
 A finished collection run can be saved in two formats:

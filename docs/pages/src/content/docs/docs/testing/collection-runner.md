@@ -7,6 +7,8 @@ sidebar:
 
 The collection runner sends the requests of a folder (or of the whole collection) one after the other, with all their [scripts and tests](../../scripting/overview/), and reports which ones passed. It can repeat the list several times, feed each pass with a row of a [data file](../data-files/), poll a request until a condition holds, and test [Server-Sent Events](../repeat-and-streams/#event-streams-in-runs), [WebSocket conversations](../../protocols/websocket/#in-collection-runs) and [Socket.IO conversations](../../protocols/socketio/#in-collection-runs).
 
+To pass a value from one response to the next request without writing a script, to check responses, branch or loop, make a [scenario](../scenarios/): the same requests as steps.
+
 The same runner is used in three places, so a folder behaves the same everywhere:
 
 | Where | How |
@@ -24,7 +26,9 @@ The same runner is used in three places, so a folder behaves the same everywhere
 2. Choose the requests, iterations, data file and options on the left.
 3. Press **Run** (or <kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>Enter</kbd>). Results appear on the right as they arrive.
 
-Press **Stop** (or <kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>Enter</kbd> again) to stop. Only one collection run can be in progress at a time in the app.
+Press **Stop** (or <kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>Enter</kbd> again) to stop. Only one run can be in progress at a time in the app, a collection run or a [scenario](../scenarios/).
+
+**Save as a scenario**, the button next to **Run**, makes a [scenario](../scenarios/) of the ticked requests in their order: steps you can pass values between.
 
 ## Runner settings
 
@@ -35,7 +39,7 @@ Press **Stop** (or <kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>Enter</kbd> again) to sto
 | **Delay (ms)** | Pause before each request, except the first one of the run. 0 to 600,000 (10 minutes). | 0 |
 | **Data file** | A CSV or JSON file; each row is one iteration. **Choose file…** picks it and shows a preview. See [Data files](../data-files/). | None |
 | **Stop on the first failure** | End the run as soon as one request fails | Off |
-| **Environment** | Shows the active environment (chosen in the title bar); **Environments…** opens the editor | The active environment |
+| **Environment** | Shows the active environment (chosen in the title bar); **Environments…** shows them in the sidebar and opens the active one | The active environment |
 
 Changes made while a run is in progress apply to the next run.
 

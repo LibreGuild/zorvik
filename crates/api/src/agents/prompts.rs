@@ -94,7 +94,11 @@ pub fn get_prompt(name: &str, arguments: &Value) -> Option<Value> {
                  (a \"Matches the API spec\" test).\n\
                  3. Run them with run_collection. For failures, read the results, find out whether the API or the test is \
                  wrong (look at the code), and fix the test or tell me about the bug.\n\
-                 4. Report what passed, what failed and why."
+                 4. For flows that span several requests (create, then read, then change, then delete), build a \
+                 scenario with save_scenario: one step per request, an output on the step that creates something \
+                 (e.g. {{variable: \"orderId\", path: \"$.id\"}}), {{{{orderId}}}} in the later requests, checks on each \
+                 step, and clean-up steps under always. Run it with run_scenario.\n\
+                 5. Report what passed, what failed and why."
             )
         }
         _ => return None,

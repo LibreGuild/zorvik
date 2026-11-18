@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-A **workspace** is a folder of small, readable YAML files: your requests and folders, environments, mock servers, load tests and imported API specs. Zorvik reads and writes these files directly, so you can commit the folder to Git, review changes in pull requests and pull your teammates' work.
+A **workspace** is a folder of small, readable YAML files: your requests and folders, environments, mock servers, scenarios, load tests and imported API specs. Zorvik reads and writes these files directly, so you can commit the folder to Git, review changes in pull requests and pull your teammates' work.
 
 What belongs to one computer only, such as secret values, cookies, OAuth tokens and history, is kept in the app data folder instead, never in the workspace. See [Secrets](../../variables/secrets/).
 
@@ -24,13 +24,15 @@ my-api/
       List users.yaml
   servers/
     Payments mock.yaml     # mock APIs and other servers
+  scenarios/
+    Checkout.yaml          # scenarios: requests run as steps
   loadtests/
     Checkout smoke.yaml    # load test plans
   specs/
     Payments API.yaml      # OpenAPI documents kept by imports
 ```
 
-`requests/` and `environments/` are created with the workspace; `servers/`, `loadtests/` and `specs/` appear when you first need them. A folder is a workspace as long as it contains `zorvik.yaml`.
+`requests/` and `environments/` are created with the workspace; `servers/`, `scenarios/`, `loadtests/` and `specs/` appear when you first need them. A folder is a workspace as long as it contains `zorvik.yaml`.
 
 A saved request looks like this:
 
@@ -93,7 +95,7 @@ The workspace menu contains:
 | **Scripts** | Pre-request and post-response scripts that run around every request. See [Scripts & tests](../../scripting/overview/). |
 | **Docs** | Notes about the workspace, in Markdown. See [Docs](../../requests/http/#docs). |
 
-Workspace **variables** are edited under **Environments & variables** (<kbd>Mod</kbd>+<kbd>E</kbd>), not here. See [Variables & environments](../../variables/variables-and-environments/#workspace-variables).
+Workspace **variables** are edited under **Workspace variables** in the sidebar's **Environments** section (<kbd>Mod</kbd>+<kbd>E</kbd>), not here. See [Variables & environments](../../variables/variables-and-environments/#workspace-variables).
 
 All of this is stored in `zorvik.yaml`.
 

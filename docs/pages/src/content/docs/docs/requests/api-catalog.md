@@ -25,7 +25,7 @@ Choose **Import**. Zorvik downloads the API's description from its publisher and
 
 - **A folder** named after the API, with a subfolder per group of endpoints.
 - **Sign-in** set up on the folder (bearer token, API key, OAuth 2.0, AWS Signature…), using variables.
-- **An environment** named after the API, made active, with `baseUrl` and empty [secret variables](../../variables/secrets/) for the credentials. Choose **Add your API key** to fill them in.
+- **An environment** named after the API, made active, with `baseUrl` and empty [secret variables](../../variables/secrets/) for the credentials. Choose **Add your API key** to open the environment in a tab and fill them in.
 - The request to try first opens, such as **List models** or **Get balance**.
 
 Very large APIs (Microsoft Graph, GitHub, Google Compute Engine, AWS EC2…) have thousands of endpoints. For those, Zorvik first lists their groups with how many requests each holds, with the most-used ones ticked. Tick the ones you want and choose **Import**. Import more groups later the same way.

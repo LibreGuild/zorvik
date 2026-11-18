@@ -19,6 +19,7 @@ use zorvik_workspace::settings::{AgentChanges, AgentTraffic};
 
 mod connections;
 mod files;
+mod scenarios;
 mod servers;
 mod state;
 
@@ -453,12 +454,13 @@ fn defs() -> Vec<Def> {
         Def {
             name: "delete_items",
             title: "Delete",
-            description: "Delete requests, folders, environments, load tests or servers (to the trash). The user always confirms in Zorvik.",
+            description: "Delete requests, folders, environments, load tests, scenarios or servers (to the trash). The user always confirms in Zorvik.",
             schema: obj(
                 json!({
                     "paths": { "type": "array", "items": { "type": "string" }, "description": "Requests and folders (paths from list_requests)." },
                     "environments": { "type": "array", "items": { "type": "string" } },
                     "loadTests": { "type": "array", "items": { "type": "string" } },
+                    "scenarios": { "type": "array", "items": { "type": "string" } },
                     "servers": { "type": "array", "items": { "type": "string" } },
                 }),
                 &[],
@@ -611,7 +613,7 @@ fn defs() -> Vec<Def> {
         Def {
             name: "get_run_status",
             title: "Collection run status",
-            description: "A collection run's summary and failures when it has finished; waits for it up to waitSeconds.",
+            description: "A collection or scenario run's summary and failures when it has finished; waits for it up to waitSeconds.",
             schema: obj(json!({ "runId": { "type": "string" }, "waitSeconds": wait_schema() }), &["runId"]),
             read_only: true,
             destructive: false,
@@ -620,7 +622,7 @@ fn defs() -> Vec<Def> {
         Def {
             name: "stop_collection_run",
             title: "Stop a collection run",
-            description: "Stop the collection run in progress.",
+            description: "Stop the collection or scenario run in progress.",
             schema: obj(json!({ "runId": { "type": "string" } }), &["runId"]),
             read_only: false,
             destructive: false,
@@ -731,9 +733,9 @@ fn defs() -> Vec<Def> {
         Def {
             name: "open_in_app",
             title: "Show in Zorvik",
-            description: "Open something in the Zorvik window for the user: a request, a folder's runner, a load test, a server or the environments.",
+            description: "Open something in the Zorvik window for the user: a request, a folder's runner, a load test, a scenario, a server or the environments.",
             schema: obj(
-                json!({ "request": { "type": "string" }, "runner": string("Folder path (\"\" = collection)."), "loadTest": { "type": "string" }, "server": { "type": "string" }, "environments": { "type": "boolean" } }),
+                json!({ "request": { "type": "string" }, "runner": string("Folder path (\"\" = collection)."), "loadTest": { "type": "string" }, "scenario": { "type": "string" }, "server": { "type": "string" }, "environments": { "type": "boolean" } }),
                 &[],
             ),
             read_only: true,
@@ -746,6 +748,7 @@ fn defs() -> Vec<Def> {
 /// Every tool: the ones here, then each area's.
 fn all_defs() -> Vec<Def> {
     let mut all = defs();
+    all.extend(scenarios::defs());
     all.extend(servers::defs());
     all.extend(state::defs());
     all.extend(files::defs());
@@ -861,7 +864,8 @@ fn describe(name: &str, args: &Value) -> String {
         }
         "move_item" => s("path"),
         "save_environment" | "read_load_test" | "save_load_test" | "run_load_test" | "start_server" | "stop_server"
-        | "read_server" | "save_server" | "create_mock" | "get_server_traffic" => s("name"),
+        | "read_server" | "save_server" | "create_mock" | "get_server_traffic" | "read_scenario" | "save_scenario"
+        | "run_scenario" => s("name"),
         "set_active_environment" => {
             args.get("name").and_then(Value::as_str).map_or_else(|| "none".into(), str::to_string)
         }
@@ -881,7 +885,8 @@ fn describe(name: &str, args: &Value) -> String {
             }
         }
         "delete_items" => {
-            plural(count("paths") + count("environments") + count("loadTests") + count("servers"), "item")
+            let n = count("paths") + count("environments") + count("loadTests") + count("scenarios") + count("servers");
+            plural(n, "item")
         }
         "update_from_openapi" => s("folder"),
         "open_connection" => {
@@ -985,6 +990,10 @@ impl Api {
             "run_load_test" => run!(self.tool_run_load_test(c)),
             "get_load_test_status" => run!(self.tool_load_status(c)),
             "stop_load_test" => run!(self.tool_stop_load_test()),
+            "list_scenarios" => run!(async move { self.tool_list_scenarios() }),
+            "read_scenario" => run!(async move { self.tool_read_scenario(c) }),
+            "save_scenario" => run!(self.tool_save_scenario(c)),
+            "run_scenario" => run!(self.tool_run_scenario(c)),
             "list_servers" => run!(async move { self.tool_list_servers() }),
             "read_server" => run!(async move { self.tool_read_server(c) }),
             "save_server" => run!(self.tool_save_server(c)),
@@ -1211,8 +1220,9 @@ impl Api {
             "activeEnvironment": environments.iter().find(|e| Some(&e.id) == active.as_ref()).map(|e| &e.environment.name),
             "collectionVariables": ws.meta().variables.iter().map(|v| &v.key).collect::<Vec<_>>(),
             "loadTests": ws.list_load_tests().map(|l| l.len()).unwrap_or(0),
+            "scenarios": ws.list_scenarios().map(|l| l.len()).unwrap_or(0),
             "servers": ws.list_servers().map(|l| l.len()).unwrap_or(0),
-            "files": "Requests are YAML files under requests/ in the workspace folder (environments/, loadtests/, servers/ beside it).",
+            "files": "Requests are YAML files under requests/ in the workspace folder (environments/, loadtests/, scenarios/, servers/ beside it).",
         });
         Ok(Done::new(value, format!("{}: {}", ws.meta().name, plural(requests, "request"))))
     }
@@ -1536,6 +1546,7 @@ impl Api {
             paths: Vec<String>,
             environments: Vec<String>,
             load_tests: Vec<String>,
+            scenarios: Vec<String>,
             servers: Vec<String>,
         }
         let a: A = c.args()?;
@@ -1570,6 +1581,14 @@ impl Api {
                 .find(|t| t.name.eq_ignore_ascii_case(name) || t.id == *name)
                 .ok_or_else(|| Fail::Invalid(format!("Load test '{name}' not found")))?;
             plan.push((format!("Load test {} (and its run history)", t.name), "load.delete", t.id.clone()));
+        }
+        let scenarios = ws.list_scenarios()?;
+        for name in &a.scenarios {
+            let s = scenarios
+                .iter()
+                .find(|s| s.name.eq_ignore_ascii_case(name) || s.id == *name)
+                .ok_or_else(|| Fail::Invalid(format!("Scenario '{name}' not found")))?;
+            plan.push((format!("Scenario {}", s.name), "scenario.delete", s.id.clone()));
         }
         let servers = ws.list_servers()?;
         for name in &a.servers {
@@ -2749,6 +2768,8 @@ impl Api {
             AgentTarget::Runner { folder, name }
         } else if let Some(name) = s("loadTest") {
             AgentTarget::LoadTest { id: self.find_load_test(&ws, &name)?.0 }
+        } else if let Some(name) = s("scenario") {
+            AgentTarget::Scenario { id: self.find_scenario(&ws, &name)?.0 }
         } else if let Some(name) = s("server") {
             let id = ws
                 .list_servers()?
@@ -2760,7 +2781,9 @@ impl Api {
         } else if c.args.get("environments").and_then(Value::as_bool) == Some(true) {
             AgentTarget::Environments
         } else {
-            return Err(Fail::Invalid("Say what to open: request, runner, loadTest, server or environments".into()));
+            return Err(Fail::Invalid(
+                "Say what to open: request, runner, loadTest, scenario, server or environments".into(),
+            ));
         };
         self.emit_agent(AgentEvent::Show { target: target.clone(), explicit: true });
         Ok(Done::new(json!({ "shown": true }), "Shown").at(target))
@@ -3192,6 +3215,7 @@ fn run_outcome(run_id: &str, report: &RunReport) -> Done {
         .take(MAX_FAILURES)
         .map(|r| {
             json!({
+                "name": r.name,
                 "path": r.path,
                 "iteration": r.iteration + 1,
                 "status": r.status,

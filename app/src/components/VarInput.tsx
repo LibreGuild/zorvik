@@ -1,9 +1,16 @@
 // Single-line input that highlights {{variables}} and autocompletes them.
 // The input text is transparent; a backdrop with identical metrics draws the colors.
-import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { createContext, forwardRef, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { segments } from "../lib/vars";
 import { useDynamicCatalog, useVariableNames, useWorkspace } from "../store/workspace";
 import { cx } from "./ui";
+
+/**
+ * Values of their own that `{{variable}}` inputs inside can use, besides the workspace's: a
+ * scenario's, by name, with where each one comes from. A name with dots reads into one of
+ * them (`{{item.id}}`).
+ */
+export const LocalVariables = createContext<Map<string, string> | null>(null);
 
 export interface VarInputProps {
   value: string;
@@ -28,7 +35,14 @@ export const VarInput = forwardRef<HTMLInputElement, VarInputProps>(function Var
   const backdrop = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
   useImperativeHandle(ref, () => input.current as HTMLInputElement);
-  const { names, known } = useVariableNames();
+  const local = useContext(LocalVariables);
+  const workspace = useVariableNames();
+  const { names, known } = useMemo(() => {
+    if (!local?.size) return workspace;
+    const own = [...local.keys()];
+    return { names: [...own, ...workspace.names.filter((n) => !local.has(n))], known: new Set([...own, ...workspace.known]) };
+  }, [local, workspace]);
+  const defined = (name: string) => name.startsWith("$") || known.has(name) || !!local?.has(name.split(".")[0]);
   const catalog = useDynamicCatalog();
   const [menu, setMenu] = useState<{ items: string[]; index: number; from: number; kind: "var" | "plain" } | null>(null);
   const [hover, setHover] = useState<{ name: string; left: number } | null>(null);
@@ -144,7 +158,7 @@ export const VarInput = forwardRef<HTMLInputElement, VarInputProps>(function Var
           ? "•".repeat(Math.min(value.length, 40))
           : parts.map((p, i) =>
               p.variable ? (
-                <span key={i} data-var={p.variable} className={p.variable.startsWith("$") || known.has(p.variable) ? "zv-var" : "zv-var-missing"}>
+                <span key={i} data-var={p.variable} className={defined(p.variable) ? "zv-var" : "zv-var-missing"}>
                   {p.text}
                 </span>
               ) : (
@@ -183,7 +197,7 @@ export const VarInput = forwardRef<HTMLInputElement, VarInputProps>(function Var
         )}
       />
       {hover && !menu && (
-        <VariableHint name={hover.name} left={hover.left} />
+        <VariableHint name={hover.name} left={hover.left} from={local?.get(hover.name) ?? local?.get(hover.name.split(".")[0])} />
       )}
       {menu && (
         <div ref={list} className="zv-pop absolute left-0 top-full z-50 mt-1 max-h-60 min-w-[220px] max-w-[min(28rem,100%)] overflow-auto rounded-lg border border-line bg-elev p-1 shadow-pop">
@@ -248,12 +262,19 @@ export const HINT_TONE: Record<HintLine["tone"], string> = {
 
 export const HINT_BOX = "max-w-[360px] rounded-md border border-line bg-elev px-2.5 py-1.5 text-[12px] shadow-pop";
 
-function VariableHint({ name, left }: { name: string; left: number }) {
+function VariableHint({ name, left, from }: { name: string; left: number; from?: string }) {
   // Read when shown (the hint is on screen only while hovered).
   useWorkspace((s) => s.variables);
+  const lines: HintLine[] = from
+    ? [
+        { text: `{{${name}}}`, tone: "name" },
+        { text: "A value of this scenario", tone: "muted" },
+        { text: `From ${from}`, tone: "source" },
+      ]
+    : variableHint(name);
   return (
     <div style={{ left: Math.max(0, left) }} className={cx("zv-fade pointer-events-none absolute top-full z-50 mt-1", HINT_BOX)}>
-      {variableHint(name).map((line, i) => (
+      {lines.map((line, i) => (
         <div key={i} className={HINT_TONE[line.tone]}>
           {line.text}
         </div>

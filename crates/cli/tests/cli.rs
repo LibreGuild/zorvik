@@ -95,6 +95,135 @@ async fn runs_workspace_requests_and_sets_exit_code() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn runs_a_scenario_with_its_values_checks_and_loops() {
+    let server = TestServer::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let ws = Workspace::create(dir.path(), "CLI").unwrap();
+    ws.create_request("", request("Create", "{{base}}/echo?id=7")).unwrap();
+    ws.create_request("", request("Get", "{{base}}/echo?cart={{cartId}}&who={{user}}&code={{otp}}")).unwrap();
+    ws.create_environment(&Environment {
+        name: "Local".into(),
+        variables: vec![Variable { key: "base".into(), value: server.url(""), enabled: true, secret: false }],
+    })
+    .unwrap();
+    // As a person would write the file by hand.
+    std::fs::create_dir_all(dir.path().join("scenarios")).unwrap();
+    std::fs::write(
+        dir.path().join("scenarios/Cart.yaml"),
+        r#"name: Cart flow
+variables:
+  - { key: limit, value: 5 }
+steps:
+  - type: request
+    request: Create.yaml
+    outputs:
+      - { variable: cartId, path: $.args.id }
+    checks:
+      - { from: status, value: 200 }
+  - type: ask
+    variable: otp
+  - type: forEach
+    list: ada, grace
+    as: user
+    steps:
+      - type: request
+        request: Get.yaml
+        checks:
+          - { path: $.args.cart, value: "{{cartId}}" }
+          - { path: $.args.who, value: "{{user}}" }
+  - type: if
+    when: { rules: [{ value: "{{cartId}}", op: greater, to: "{{limit}}" }] }
+    steps:
+      - { type: set, values: [{ key: big, value: "= Number(cartId) > 5" }] }
+    else:
+      - { type: stop, what: fail, message: too small }
+always:
+  - { type: wait, ms: 1 }
+"#,
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("scenarios/Fails.yaml"), "name: Fails\nsteps:\n  - { type: request, request: Create.yaml, checks: [{ from: status, value: 500 }] }\n  - { type: request, request: Get.yaml }\n").unwrap();
+    let path = dir.path().to_string_lossy().into_owned();
+
+    let p = path.clone();
+    let (code, out) = tokio::task::spawn_blocking(move || {
+        run(&["run", &p, "--env", "Local", "--scenario", "cart flow", "--var", "otp=123"])
+    })
+    .await
+    .unwrap();
+    assert_eq!(code, 0, "{out}");
+    for line in [
+        "✓ GET     Create  ",
+        "    ✓ Status equals 200",
+        "    → cartId = 7",
+        "✓ Ask for otp  given for this run",
+        "· For each user in ada, grace  2 items",
+        "  · user = ada  1 of 2",
+        "  ✓ GET     Get  ",
+        "cart=7&who=grace&code=123",
+        "      ✓ $.args.who equals {{user}}",
+        "· If {{cartId}} is greater than {{limit}}  yes",
+        "  ✓ Set big",
+        "      → big = true",
+        "✓ Wait 1 ms",
+        "Steps     6 passed, 0 failed, 0 skipped (6 total)",
+        "Tests     5 passed, 0 failed",
+    ] {
+        assert!(out.contains(line), "{line:?} not in:\n{out}");
+    }
+
+    // Without the value an ask step needs, and nobody to ask: the run fails there.
+    let p = path.clone();
+    let junit = dir.path().join("report.xml").to_string_lossy().into_owned();
+    let j = junit.clone();
+    let (code, out) =
+        tokio::task::spawn_blocking(move || run(&["run", &p, "-e", "Local", "-s", "Cart", "--json", "--junit", &j]))
+            .await
+            .unwrap();
+    assert_eq!(code, 1, "{out}");
+    let report: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let results = report["results"].as_array().unwrap();
+    let names: Vec<&str> = results.iter().filter_map(|r| r["name"].as_str()).collect();
+    assert_eq!(names, ["Create", "Ask for otp", "Wait 1 ms"], "{out}");
+    assert!(results[1]["error"].as_str().unwrap().contains("give it a value"), "{out}");
+    assert_eq!((report["summary"]["failed"].clone(), report["summary"]["bailed"].clone()), (json!(1), json!(true)));
+    assert_eq!(
+        results[0]["step"],
+        json!({ "path": "steps/0", "kind": "request", "depth": 0, "saved": [{ "key": "cartId", "value": "7" }] })
+    );
+    let xml = std::fs::read_to_string(&junit).unwrap();
+    assert!(xml.contains("<testsuites name=\"Cart flow\" tests=\"3\" failures=\"0\" errors=\"1\""), "{xml}");
+
+    let p = path.clone();
+    let (code, out) =
+        tokio::task::spawn_blocking(move || run(&["run", &p, "--env", "Local", "--scenario", "Fails"])).await.unwrap();
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("✗ Status equals 500 — It is 200") && out.contains("Ended at the first failed step."),
+        "{out}"
+    );
+    assert!(out.contains("Steps     0 passed, 1 failed"), "{out}");
+
+    // Iterations from the command line; a scenario that isn't there names the ones that are.
+    let p = path.clone();
+    let (code, out) = tokio::task::spawn_blocking(move || {
+        run(&["run", &p, "--env", "Local", "--scenario", "Cart", "--var", "otp=1", "-n", "2"])
+    })
+    .await
+    .unwrap();
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("Iteration 2 of 2") && out.contains("Steps     12 passed"), "{out}");
+    let p = path.clone();
+    let (code, out) = tokio::task::spawn_blocking(move || run(&["run", &p, "--scenario", "Nope"])).await.unwrap();
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("scenario 'Nope' not found (there are: Cart flow, Fails)"), "{out}");
+    let (code, out) =
+        tokio::task::spawn_blocking(move || run(&["run", &path, "--scenario", "Cart", "--folder", "x"])).await.unwrap();
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("cannot be used with"), "{out}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn blank_secret_variables_are_reported_as_undefined() {
     let server = TestServer::start().await;
     let dir = tempfile::tempdir().unwrap();

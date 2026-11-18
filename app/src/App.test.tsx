@@ -29,7 +29,7 @@ describe("command palette shortcut", () => {
   });
 
   it("leaves another open dialog alone", () => {
-    for (const type of ["settings", "environments", "workspaceSettings"] as const) {
+    for (const type of ["settings", "cookies", "workspaceSettings"] as const) {
       useUi.setState({ modal: { type } });
       press("k");
       press("p");

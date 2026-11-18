@@ -5,7 +5,6 @@ import { TabBar } from "./components/layout/TabBar";
 import { TitleBar } from "./components/layout/TitleBar";
 import { Welcome } from "./components/layout/Welcome";
 import { Workbench } from "./components/layout/Workbench";
-import { EnvironmentsModal } from "./components/modals/EnvironmentsModal";
 import {
   CommandPalette,
   CookiesModal,
@@ -33,9 +32,11 @@ import { initUpdates } from "./store/updates";
 import { UpdateNotice } from "./components/UpdateNotice";
 import { loadAgents } from "./store/agents";
 import { initConsole, toggleConsole } from "./store/console";
+import { showEnvironments } from "./store/environments";
 import { useDialogs } from "./store/dialogs";
 import { refreshLoadTests, resetLoadTestResults, restoreActiveRun, toggleLoadRun } from "./store/loadtests";
 import { toggleRun } from "./store/runner";
+import { refreshScenarios, toggleScenarioRun } from "./store/scenarios";
 import { autoStartServers, refreshRunning, refreshServers, runServerTab } from "./store/servers";
 import { loadSettings, useSettings, zoom } from "./store/settings";
 import {
@@ -45,7 +46,9 @@ import {
   isLoadTestTab,
   isRequestTab,
   isRunnerTab,
+  isScenarioTab,
   isServerTab,
+  isVariablesTab,
   newRequest,
   restoreTabs,
   saveTab,
@@ -127,6 +130,8 @@ export function useShortcuts(enabled: boolean) {
           } else if (isRunnerTab(active)) {
             // A held key repeats: it must not stop the run it just started.
             if (!e.repeat) void toggleRun(active);
+          } else if (isScenarioTab(active)) {
+            if (!e.repeat) void toggleScenarioRun(active);
           } else void send(activeId);
           break;
         }
@@ -149,7 +154,7 @@ export function useShortcuts(enabled: boolean) {
           break;
         case "e":
           e.preventDefault();
-          openModal({ type: "environments" });
+          showEnvironments();
           break;
         case ",":
           e.preventDefault();
@@ -176,8 +181,6 @@ function Modals() {
   switch (modal.type) {
     case "settings":
       return <SettingsModal />;
-    case "environments":
-      return <EnvironmentsModal focus={modal.focus} />;
     case "import":
       return <ImportModal parent={modal.parent} tab={modal.tab} />;
     case "cookies":
@@ -241,13 +244,14 @@ export default function App() {
     if (wsPath) void autoStartServers();
     resetLoadTestResults();
     void refreshLoadTests().then(() => restoreActiveRun());
+    void refreshScenarios();
   }, [wsPath]);
 
   useEffect(() => {
     // Keep unsaved-work warnings honest if the window is closed in a browser.
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       if (import.meta.env.DEV) return;
-      if (useTabs.getState().tabs.some((t) => (isServerTab(t) || isLoadTestTab(t) || (isRequestTab(t) && t.path)) && isDirty(t))) e.preventDefault();
+      if (useTabs.getState().tabs.some((t) => (isServerTab(t) || isLoadTestTab(t) || isScenarioTab(t) || isVariablesTab(t) || (isRequestTab(t) && t.path)) && isDirty(t))) e.preventDefault();
     };
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);

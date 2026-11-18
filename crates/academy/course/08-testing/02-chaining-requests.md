@@ -159,7 +159,7 @@ Scripts can save values at different levels, like the variables you already know
 | `pm.collectionVariables.set` | until you change it | with the workspace variables, on this computer |
 | `pm.globals.set` | until you change it | every workspace, on this computer |
 
-Values that scripts keep show up in **Environments & variables** (**⌘/Ctrl + E**) under **Set by scripts**. They win over the value in the file, but are never written into it, so a token from your login never ends up in Git. **Clear all** there removes them.
+Values that scripts keep show up in the environment's tab (**⌘/Ctrl + E**) under **Set by scripts**. They win over the value in the file, but are never written into it, so a token from your login never ends up in Git. **Clear all** there removes them.
 
 > [!tip] Reading values in scripts
 > Scripts can read variables too: `pm.environment.get("token")`, or `pm.variables.get("token")`, which looks through every level in order, just like `{{token}}` does.

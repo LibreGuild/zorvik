@@ -182,12 +182,13 @@ export const TOPICS: DocTopic[] = [
     intro:
       "Write `{{baseUrl}}/users/{{id}}` once and switch between Local, Staging and Production in the title bar. Secret values stay on this computer and never go into your workspace files.",
     features: [
-      "Environments ([mod+E]) and collection-wide variables",
+      "Environments have their own section in the left rail ([mod+E]); each one opens in a tab, next to the workspace's variables and globals",
+      "The check mark before an environment makes it the active one; the picker in the title bar switches too",
       "170 dynamic values, all of Postman's and more: `{{$uuid}}`, `{{$randomFullName}}`, `{{$randomInt(1, 100)}}`, `{{$isoDate(+3d)}}`, valid test card numbers and IBANs",
       "Secret variables: stored locally, shown as ••••••",
       "Values set by scripts are kept on this computer, never written to your files, and shown under Set by scripts",
     ],
-    tryIt: ["Press [mod+E], add an environment with `baseUrl`, and select it in the title bar.", "Type `{{$` in a body to browse the dynamic values, with an example of each."],
+    tryIt: ["Press [mod+E], choose + for a new environment, add `baseUrl`, press [mod+S], and choose Set active.", "Type `{{$` in a body to browse the dynamic values, with an example of each."],
     tip: "An undefined host stops the send with a clear message instead of a confusing network error.",
   },
   {
@@ -252,6 +253,32 @@ export const TOPICS: DocTopic[] = [
       "Right-click a folder → Run…, then press [mod+Enter].",
       "To poll, open a request's Settings → Repeat until, and give a condition and a time limit.",
     ],
+  },
+  {
+    id: "scenarios",
+    group: "Test",
+    title: "Scenarios",
+    tagline: "Chain saved requests into a flow: pass values on, check, branch and loop.",
+    image: "docs-runner",
+    intro:
+      "A scenario runs saved requests one after the other as steps, the way you test by hand: create something, read it back, check it is there. A step saves values from its response as outputs, and later steps use them as `{{name}}`. No scripts needed, and scripts still work.",
+    features: [
+      "Steps send saved requests; the same request can be a step as often as you like, each time with its own inputs",
+      "Outputs save a value of the response by JSON path, header, cookie, regex, status or body; pick one from the last response with a click",
+      "Inputs give a step its own values, joined from earlier ones (`{{userId}}-{{cartId}}`) or worked out with JavaScript (`= Number(total) + 1`)",
+      "Checks on status, headers, body and JSON values: each is a test in the results",
+      "If / else if / else, For each over a list, Repeat (a number of times or until a condition holds), and steps that run at the same time",
+      "Set values, Wait, Stop, Script, Ask for a value (a one-time code) and Run scenario (a shared login)",
+      "Run to here and Run only this step, to build a scenario one step at a time",
+      "A scenario's values are its own: the environment and collection variables are read, never changed. See and clear what the last run left under Variables",
+      "A data file runs it once per row; steps under Always at the end clean up whatever happened",
+      "Docs for each scenario; the same file runs with `zorvik run --scenario` and from AI agents",
+    ],
+    tryIt: [
+      "Right-click a folder → New scenario…, then press [mod+Enter].",
+      "Hover a step and press Run to here. Open the step, choose Pick from the response, and use the new value in the next step as `{{name}}`.",
+    ],
+    tip: "Start a value with `=` to work it out with JavaScript: variables are there by name, and all of them in `vars`.",
   },
   {
     id: "load",
@@ -356,15 +383,15 @@ export const TOPICS: DocTopic[] = [
     tagline: "Your collection is a folder of YAML: review it, diff it, share it.",
     image: "docs-workspace",
     intro:
-      "Requests, environments, load tests and servers are small readable YAML files. Commit them, review them in pull requests, and pull your teammates' changes; the app reloads as files change.",
+      "Requests, environments, scenarios, load tests and servers are small readable YAML files. Commit them, review them in pull requests, and pull your teammates' changes; the app reloads as files change.",
     features: [
-      "`requests/`, `environments/`, `loadtests/` and `servers/` folders",
+      "`requests/`, `environments/`, `scenarios/`, `loadtests/` and `servers/` folders",
       "Secret values stay out of the files",
       "Searchable history of every send, and a cookie jar per workspace",
       "Tabs come back as you left them",
       "No account and no cloud: the only connection Zorvik makes by itself is the update check to GitHub, and it sends nothing about you",
     ],
-    tryIt: ["Press [mod+K] to find any request, server, load test or tool.", "Choose automatic updates, notify only or off in Settings → Updates."],
+    tryIt: ["Press [mod+K] to find any request, scenario, server, load test or tool.", "Choose automatic updates, notify only or off in Settings → Updates."],
   },
   {
     id: "cli",
@@ -376,6 +403,7 @@ export const TOPICS: DocTopic[] = [
       "`zorvik` is installed with the app. Run your collection's tests in CI, gate a deployment on load-test thresholds, or start a mock server for integration tests.",
     features: [
       "`zorvik run <workspace>`: environments, folders, data files, JUnit and JSON reports (`--allow-programs` for MCP calls that start a program)",
+      "`zorvik run <workspace> --scenario <name>`: a saved scenario's steps, with `--var` for the values it asks for",
       "`zorvik load <workspace> <test>`: exits with 1 when a threshold fails; `--csv-seconds` and `--csv-requests` save CSV files",
       "`zorvik serve <workspace> <server>`: runs a saved mock or server; `--stdio` serves an MCP server to an AI app that starts it",
       "`zorvik mcp`: the connection for AI agents",
@@ -397,6 +425,7 @@ export const TOPICS: DocTopic[] = [
     features: [
       "One command to connect (Settings → AI agents shows it for your agent)",
       "Agents can build and run mock servers (MCP servers too), call MCP servers, read their traffic, read streams, variables, history and the console, and export code",
+      "Agents can build and run scenarios: steps, the values passed between them, checks and flow; the scenario's tab shows the run live",
       "Agents can open WebSocket, Socket.IO, TCP, UDP and MQTT connections, send messages and wait for replies; you see the conversation live in a tab",
       "Deletes, load tests, servers, programs and requests to outside hosts ask you first",
       "The AI agents panel lists every action; follow mode opens what the agent touches",

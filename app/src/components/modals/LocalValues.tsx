@@ -6,7 +6,7 @@ import { Eye, EyeOff, X } from "lucide-react";
 import type { LocalValue } from "../../bindings/LocalValue";
 import { api, errorMessage } from "../../lib/rpc";
 import { toast } from "../../store/toasts";
-import { refreshVariables } from "../../store/workspace";
+import { refreshVariables, useWorkspace } from "../../store/workspace";
 import { Button, cx, IconButton } from "../ui";
 
 export type LocalScope = "environment" | "workspace" | "globals";
@@ -19,9 +19,11 @@ export function LocalValues({ scope, environmentId, secretKeys = [] }: { scope: 
     const all = await api.localValues().catch(() => []);
     setValues(all.filter((v) => v.scope === scope && (scope !== "environment" || v.environmentId === environmentId)));
   }, [scope, environmentId]);
+  // Read again when the variables change: a request sent meanwhile may have set some.
+  const variables = useWorkspace((s) => s.variables);
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, variables]);
 
   const clear = async (key?: string) => {
     try {

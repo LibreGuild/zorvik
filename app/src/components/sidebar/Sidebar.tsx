@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
-import { Activity, BookOpen, Bot, Boxes, Braces, Cable, ChevronRight, Copy, FilePlus2, Folder, FolderInput, FolderOpen, FolderPlus, History, Import, Layers, ListChecks, MessagesSquare, MoreHorizontal, Network, Pencil, Plus, Radio, RefreshCw, Search, Server as ServerIcon, Settings2, Terminal, Trash2, TriangleAlert, Unplug, Wrench, Zap } from "lucide-react";
+import { Activity, BookOpen, Bot, Boxes, Braces, Cable, ChevronRight, Copy, FilePlus2, Folder, FolderInput, FolderOpen, FolderPlus, Globe2, History, Import, Layers, ListChecks, MessagesSquare, MoreHorizontal, Network, Pencil, Plus, Radio, RefreshCw, Search, Server as ServerIcon, Settings2, Terminal, Trash2, TriangleAlert, Unplug, Workflow, Wrench, Zap } from "lucide-react";
 import type { TreeNode } from "../../bindings/TreeNode";
 import { GRAPHQL_BADGE, methodColor, methodLabel } from "../../lib/http";
 import { api, errorMessage } from "../../lib/rpc";
 import { confirm, prompt } from "../../store/dialogs";
 import { loadTestFolder, loadTestRequest } from "../../store/loadtests";
+import { scenarioFromFolder } from "../../store/scenarios";
 import {
   isRequestTab,
   type NewRequestType,
@@ -23,19 +24,28 @@ import { refreshTree, useWorkspace } from "../../store/workspace";
 import { ContextMenu, cx, EmptyState, Menu, type MenuEntry } from "../ui";
 import { AgentsPanel } from "../agents/AgentsPanel";
 import { DocsList } from "../docs/DocsList";
+import { EnvironmentsList } from "./EnvironmentsList";
 import { HistoryList } from "./HistoryList";
 import { LoadTestsList } from "./LoadTestsList";
+import { ScenariosList } from "./ScenariosList";
 import { ServersList } from "./ServersList";
 import { ToolsList } from "./ToolsList";
 import { mockFolder } from "../servers/MockDialogs";
 
-export const SIDEBAR_SECTIONS: { id: SidebarSection; label: string; icon: React.ReactNode }[] = [
+/**
+ * The sections of the left rail, in groups (`group` starts one): what you build (the
+ * collection and its environments), what you run against it (scenarios, load tests,
+ * servers), what you look things up with (history, tools), then agents and help.
+ */
+export const SIDEBAR_SECTIONS: { id: SidebarSection; label: string; icon: React.ReactNode; group?: boolean }[] = [
   { id: "collection", label: "Collection", icon: <Layers size={17} /> },
+  { id: "environments", label: "Environments", icon: <Globe2 size={17} /> },
+  { id: "scenarios", label: "Scenarios", icon: <Workflow size={17} />, group: true },
   { id: "loadtests", label: "Load tests", icon: <Activity size={17} /> },
   { id: "servers", label: "Servers", icon: <ServerIcon size={17} /> },
+  { id: "history", label: "History", icon: <History size={17} />, group: true },
   { id: "tools", label: "Tools", icon: <Wrench size={17} /> },
-  { id: "history", label: "History", icon: <History size={17} /> },
-  { id: "agents", label: "AI agents", icon: <Bot size={17} /> },
+  { id: "agents", label: "AI agents", icon: <Bot size={17} />, group: true },
   { id: "docs", label: "Docs", icon: <BookOpen size={17} /> },
 ];
 
@@ -47,6 +57,10 @@ export function Sidebar() {
       <div className="flex h-7 shrink-0 items-center px-3 text-[11px] font-semibold uppercase tracking-wide text-faint">{label}</div>
       {tab === "collection" ? (
         <CollectionTree />
+      ) : tab === "environments" ? (
+        <EnvironmentsList />
+      ) : tab === "scenarios" ? (
+        <ScenariosList />
       ) : tab === "loadtests" ? (
         <LoadTestsList />
       ) : tab === "servers" ? (
@@ -133,6 +147,7 @@ function CollectionTree() {
     { separator: true },
     { label: "Import…", icon: <Import size={14} />, onSelect: () => openModal({ type: "import" }) },
     { label: "Run…", icon: <ListChecks size={14} />, onSelect: () => openRunner("", info.meta.name) },
+    { label: "New scenario…", icon: <Workflow size={14} />, onSelect: () => void scenarioFromFolder(info.tree, "", info.meta.name) },
     { label: "Mock the collection…", icon: <ServerIcon size={14} />, onSelect: () => void mockFolder("", info.meta.name) },
     { label: "Load test the collection…", icon: <Activity size={14} />, onSelect: () => void loadTestFolder(info.tree, "", info.meta.name) },
   ];
@@ -277,6 +292,11 @@ function TreeRow({ node, depth, forceOpen, index, parent }: { node: TreeNode; de
         { label: "Folder settings…", icon: <Settings2 size={14} />, onSelect: () => openModal({ type: "folderSettings", path: node.path }) },
         { label: "Import into folder…", icon: <Import size={14} />, onSelect: () => openModal({ type: "import", parent: node.path }) },
         { label: "Run…", icon: <ListChecks size={14} />, onSelect: () => openRunner(node.path, node.name) },
+        {
+          label: "New scenario…",
+          icon: <Workflow size={14} />,
+          onSelect: () => void scenarioFromFolder(useWorkspace.getState().info?.tree ?? [], node.path, node.name),
+        },
         { label: "Mock this folder…", icon: <ServerIcon size={14} />, onSelect: () => void mockFolder(node.path, node.name) },
         ...(node.fromSpec
           ? [{ label: "Update from API spec…", icon: <RefreshCw size={14} />, onSelect: () => openModal({ type: "specUpdate", folder: node.path, name: node.name }) }]

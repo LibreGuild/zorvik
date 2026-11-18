@@ -162,6 +162,8 @@ To be sure of the type in any script, store JSON and parse it when reading: `JSO
 | `pm.collectionVariables` | Kept on this computer | Kept until the run ends |
 | `pm.globals` | Kept on this computer, shared by every workspace | Kept until the run ends; starts empty |
 
+In a [scenario](../../testing/scenarios/#a-scenarios-values-are-its-own), values set in any of these scopes stay in the scenario, as its own values for the steps after: nothing is kept on this computer.
+
 Values kept on this computer live in the app's data folder, not in the workspace files, and win over the value saved in the file. `unset` removes the value a script set, so the value saved in the file (if any) applies again from the next send. See [Variables and environments](../../variables/variables-and-environments/).
 
 ### Dynamic variables in replaceIn
@@ -383,7 +385,7 @@ Passing `pm.response` to `pm.expect` gives the [response assertions](../assertio
 - A name is looked up among the requests of the run: the first request with that name, then a request with that path.
 - If no request of the run has that name or path, the iteration ends, with a console warning: `setNextRequest: no request named 'X' in this run; the iteration ends here.`
 - An iteration can send at most 10,000 requests. A loop that goes beyond that stops the run with `Stopped: iteration N sent more than 10000 requests (a setNextRequest loop?)`.
-- A single send ignores it.
+- A single send ignores it. So does a [scenario](../../testing/scenarios/), where **If** and **Stop** steps decide what runs next; the result's console says so.
 
 `postman.setNextRequest(name)` does the same. See [Collection runner](../../testing/collection-runner/#changing-the-order-with-setnextrequest).
 

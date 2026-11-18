@@ -1,11 +1,11 @@
 ---
 title: zorvik run
-description: Run the requests of a workspace or folder with their scripts and tests from a terminal or CI, with environments, data files, JSON and JUnit reports.
+description: Run the requests of a workspace or folder, or a saved scenario, with their scripts and tests from a terminal or CI, with environments, data files, JSON and JUnit reports.
 sidebar:
   order: 2
 ---
 
-`zorvik run` is the [collection runner](../../testing/collection-runner/) on the command line. It sends the requests of a workspace (or of one folder) in sidebar order, with their [scripts and tests](../../scripting/overview/), once per iteration or per data file row, and reports the results.
+`zorvik run` is the [collection runner](../../testing/collection-runner/) on the command line. It sends the requests of a workspace (or of one folder) in sidebar order, with their [scripts and tests](../../scripting/overview/), once per iteration or per data file row, and reports the results. With `--scenario` it runs the steps of a saved [scenario](../../testing/scenarios/) instead.
 
 ```text
 zorvik run [OPTIONS] <WORKSPACE>
@@ -14,6 +14,7 @@ zorvik run [OPTIONS] <WORKSPACE>
 ```bash
 zorvik run ./my-api --env Staging
 zorvik run ./my-api --folder Users -d users.csv --junit report.xml
+zorvik run ./my-api --scenario Checkout --env Staging
 ```
 
 ## Arguments
@@ -28,6 +29,7 @@ zorvik run ./my-api --folder Users -d users.csv --junit report.xml
 |---|---|---|---|
 | `-e`, `--env` | `<ENV>` | None | Environment to use, by name or id (file name without `.yaml`), ignoring case |
 | `-f`, `--folder` | `<FOLDER>` | The whole workspace | Only run requests under this folder: its path under `requests/`, for example `Users` or `Users/Admin` |
+| `-s`, `--scenario` | `<NAME>` | None | Run a saved [scenario](../../testing/scenarios/) instead of a folder's requests. Not with `--folder`, `--delay` or `--bail`. |
 | `--var` | `<KEY=VALUE>` | | Set a variable with the highest precedence. Repeatable. |
 | `-d`, `--data` | `<FILE>` | None | Data file: CSV with a header row, or a JSON array of objects. One iteration per row; columns are variables. |
 | `-n`, `--iterations` | `<N>` | One per data row, or 1 | How many times to run the requests: 1 to 100,000 |
@@ -53,6 +55,49 @@ An unknown name stops with `error: environment 'x' not found` (exit code 2).
 Runs only the requests under this folder, including its subfolders, in sidebar order. The path is the folder's path under `requests/`, as the directories are named in the workspace. Without it, the whole workspace runs. An unknown folder stops with `error: Folder 'x' not found`.
 
 There's no option to pick single requests or change the order: every request under the folder runs, in sidebar order. Use a folder for each set you want to run, or `pm.execution.setNextRequest` to change the order ([details](../../testing/collection-runner/#changing-the-order-with-setnextrequest)).
+
+### -s, --scenario
+
+```bash
+zorvik run . --scenario Checkout --env Staging
+zorvik run . -s "Sign up" --var otp=123456 --junit report.xml
+```
+
+Runs the steps of a saved [scenario](../../testing/scenarios/) instead of the requests of a folder: the same steps, checks, outputs and flow as the scenario's tab in the app. Give its name, or its file name under `scenarios/` without `.yaml`, in any case.
+
+- **Not with `--folder`, `--delay` or `--bail`.** The scenario says what runs, in which order, where it waits and whether it goes on after a failed step. The command refuses the combination (exit code 2).
+- **`--var`** values win over the scenario's own values and every other variable. They also answer the scenario's [**Ask for a value**](../../testing/scenarios/#ask-for-a-value) steps (`--var otp=123456`): nobody can be asked in a terminal, so an ask step without a value fails.
+- **`--data`** and **`--iterations`** replace the scenario's own data file and times. Without `--data`, the scenario's data file is read: its path is relative to the workspace folder, and it must be inside it unless `--allow-outside-files` is given.
+- **`--env`**, **`--allow-http-errors`**, **`--timeout`**, **`--insecure`**, **`--allow-programs`**, **`--json`** and **`--junit`** work as for a folder.
+
+The environment and the workspace's variables are only read: a scenario's values are its own, and nothing is kept after the run.
+
+A name that matches no scenario stops with `error: scenario 'x' not found (there are: Checkout, Sign up)` (exit code 2). So does a scenario whose file can't be read, or one with no steps switched on.
+
+The text output lists the steps as they finish, indented as they are nested. Steps that only direct others (if, loops and their rounds) have a `·`, and `→` lines show the values a step saved:
+
+```text
+✓ POST    Create cart  https://staging.example.com/carts  201 41 ms, 96 B
+    ✓ Status equals 201
+    → cartId = 7
+· For each productId in 42, 77  2 items
+  · productId = 42  1 of 2
+  ✓ POST    Add item  https://staging.example.com/carts/7/items  201 38 ms, 54 B
+  · productId = 77  2 of 2
+  ✓ POST    Add item  https://staging.example.com/carts/7/items  201 35 ms, 54 B
+✓ GET     Get cart  https://staging.example.com/carts/7  200 33 ms, 212 B
+    → total = 30
+· If {{total}} is greater than 100  else
+  ✓ Set coupon
+      → coupon = standard
+✓ DELETE  Delete cart  https://staging.example.com/carts/7  204 30 ms, 0 B
+
+Steps     6 passed, 0 failed, 0 skipped (6 total)
+Tests     1 passed, 0 failed
+Time      0.2 s
+```
+
+The summary counts the steps that did something. A scenario that ended at a failed step says `Ended at the first failed step.` The exit codes are the same as for a folder: `1` when a step, check or test failed. `--json` and `--junit` give the [same reports](../../testing/reports/); each result has a `step` with its place in the scenario, its kind and the values it saved.
 
 ### --var
 
@@ -124,7 +169,8 @@ Saves a JUnit XML report to the file, in addition to the normal output (text or 
 - Every request under the workspace or folder, in sidebar order, once per iteration.
 - HTTP, GraphQL and [MCP](../../mcp/client/#in-runs-the-cli-and-for-agents) requests are sent (an MCP call connects, calls and disconnects). [Server-Sent Events requests](../../testing/repeat-and-streams/#event-streams-in-runs) and [GraphQL subscriptions](../../protocols/graphql/#subscriptions) are read until their stop settings say to stop.
 - [WebSocket](../../protocols/websocket/#in-collection-runs) and [Socket.IO](../../protocols/socketio/#in-collection-runs) requests connect, run their On connect steps (each wait is a test) and close.
-- TCP, UDP, MQTT, gRPC and DNS requests are listed as skipped, with the reason.
+- [gRPC](../../protocols/grpc/#in-collection-runs) requests are called: unary calls send their message; streams run their On connect steps and end.
+- TCP, UDP, MQTT and DNS requests are listed as skipped, with the reason.
 - For each request: pre-request scripts, send, post-response scripts, then "repeat until" and the OpenAPI contract check when they apply.
 - Script values and cookies carry from one request to the next during the run, and are forgotten at the end.
 
@@ -156,8 +202,8 @@ Press <kbd>Ctrl</kbd>+<kbd>C</kbd> to stop. The request in flight is dropped; th
 | Code | Meaning |
 |---|---|
 | `0` | Every request passed. Also when there was nothing to run. |
-| `1` | A request or test failed, or the run ended with an error (such as a `setNextRequest` loop) |
-| `2` | Stopped with Ctrl+C, or couldn't start: wrong options (`--iterations 0`, a `--var` without `=`), workspace, folder or environment not found, a data file problem, or the JUnit file couldn't be written |
+| `1` | A request, step or test failed, or the run ended with an error (such as a `setNextRequest` loop) |
+| `2` | Stopped with Ctrl+C, or couldn't start: wrong options (`--iterations 0`, a `--var` without `=`, `--scenario` with `--folder`), workspace, folder, scenario or environment not found, a data file problem, or the JUnit file couldn't be written |
 
 ## Examples
 
@@ -179,6 +225,9 @@ zorvik run . --var base=https://localhost:8443 -k --timeout 5000
 
 # JUnit for CI, JSON for your own checks
 zorvik run . -e Staging --junit zorvik-junit.xml --json > zorvik.json
+
+# A scenario, with the value its ask step needs
+zorvik run . -e Staging --scenario "Sign up" --var otp="$TEST_OTP" --junit zorvik-junit.xml
 ```
 
 ## CI examples

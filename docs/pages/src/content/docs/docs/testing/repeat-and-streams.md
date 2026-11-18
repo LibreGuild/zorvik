@@ -2,7 +2,7 @@
 title: Repeat until and event streams
 description: Poll a request in a collection run until a condition holds, and test Server-Sent Events streams with pm.response.events.
 sidebar:
-  order: 3
+  order: 4
 ---
 
 Two request settings make collection runs work with APIs that don't answer right away:

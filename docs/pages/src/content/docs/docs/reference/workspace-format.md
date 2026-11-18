@@ -1,6 +1,6 @@
 ---
 title: Workspace format
-description: Every file in a Zorvik workspace (zorvik.yaml, requests, folders, environments, servers, load tests and specs) with examples, fields and defaults.
+description: Every file in a Zorvik workspace (zorvik.yaml, requests, folders, environments, servers, scenarios, load tests and specs) with examples, fields and defaults.
 sidebar:
   order: 1
 ---
@@ -22,6 +22,8 @@ my-api/
         Delete user.yaml
   servers/
     Payments mock.yaml        # a mock API or another server
+  scenarios/
+    Checkout.yaml             # a scenario: requests run as steps
   loadtests/
     Checkout smoke.yaml       # a load test
   specs/
@@ -38,7 +40,7 @@ my-api/
 - **Hidden and linked files.** Files and folders whose name starts with `.` are ignored. Symbolic links are not followed anywhere in the workspace (they could point outside it).
 - **Limits.** YAML files over 50 MB are not read. The request tree is read at most 32 folder levels deep.
 - **Broken files.** A file that doesn't parse shows in the sidebar with a warning (and the parse error) instead of breaking the workspace.
-- **What is not in the workspace.** Secret values, values set by scripts, cookies, OAuth tokens, history, load test results and the active environment live in the app's data folder on each computer. See [Data locations](../data-locations/).
+- **What is not in the workspace.** Secret values, values set by scripts, cookies, OAuth tokens, history, load test results and the active environment live in the app's data folder on each computer; the values a scenario's last run left are kept in memory only. See [Data locations](../data-locations/).
 
 `{{variables}}` can be used in almost every text field of requests, folders and the workspace (URLs, headers, bodies, auth fields). See [Variables](../../variables/secrets/).
 
@@ -81,7 +83,7 @@ Edit it in the app with **Workspace settings** (name, default auth, default head
 
 ## Requests (`requests/**/*.yaml`)
 
-Each request is one `.yaml` file (any case of the extension) under `requests/`. Folders are folders. A request's **path** is its file path relative to `requests/`, with `/`: `Users/List users.yaml`. Load tests, agents and the command line refer to requests by this path.
+Each request is one `.yaml` file (any case of the extension) under `requests/`. Folders are folders. A request's **path** is its file path relative to `requests/`, with `/`: `Users/List users.yaml`. Scenarios, load tests, agents and the command line refer to requests by this path.
 
 ```yaml title="requests/Users/Create user.yaml"
 name: Create user
@@ -571,6 +573,142 @@ Results, resource texts and prompt messages can use `{{args.name}}`, `{{args}}`,
 | `dropAfterMs` | `0` | Fault: close both connections this long after the target connected (0: never). |
 | `dropAfterBytes` | `0` | Fault: close both connections once this many bytes went through, both directions together (0: never). |
 
+## Scenarios (`scenarios/*.yaml`)
+
+One file per scenario. The file name (without `.yaml`) is its id, used by `zorvik run --scenario` and by the steps of other scenarios that run it. See [Scenarios](../../testing/scenarios/).
+
+```yaml title="scenarios/Checkout.yaml"
+name: Checkout
+seq: 0
+variables:
+  - { key: quantity, value: 2 }
+steps:
+  - type: request
+    request: Cart/Create cart.yaml
+    outputs:
+      - { variable: cartId, path: $.id }
+      - { variable: session, from: cookie, path: sid, secret: true }
+    checks:
+      - { from: status, value: 201 }
+  - type: forEach
+    list: "{{products}}"
+    as: productId
+    steps:
+      - name: Add one product
+        type: request
+        request: Cart/Add item.yaml
+        inputs:
+          - { key: qty, value: "{{quantity}}" }
+        retry: { times: 2, delayMs: 500 }
+  - type: if
+    when:
+      rules:
+        - { value: "{{cartId}}", op: exists }
+    steps:
+      - type: request
+        request: Cart/Get cart.yaml
+    else:
+      - { type: stop, what: fail, message: No cart was made }
+always:
+  - type: request
+    request: Cart/Delete cart.yaml
+dataFile: data/shoppers.csv
+docs: Buys what is in stock and deletes the cart afterwards.
+```
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | string | | Display name. |
+| `seq` | number | `0` | Position in the sidebar. |
+| `variables` | list | `[]` | The values a run starts with: `key`, `value`, `enabled` (default `true`). Set in order; a value may use an earlier one or the environment. |
+| `steps` | list | `[]` | The steps, in order (below). |
+| `always` | list | `[]` | Steps that run at the end whatever happened before (clean up). |
+| `dataFile` | string | | CSV or JSON data file, relative to the workspace folder (or absolute): the scenario runs once per row. |
+| `iterations` | number | once per data row, or 1 | How many times it runs: 1 to 100,000. |
+| `continueOnFailure` | bool | `false` | Go on after a failed step. By default the first failed step ends the run (`always` still runs). |
+| `docs` | string | | Markdown notes. |
+
+**Values.** A `value` (and `to`, `list`, `message`, a check's `value`) is text with `{{variables}}`, or JavaScript when it starts with `=` (`= Number(total) + 1`). Written without quotes as a number or `true`/`false`, it is read as that text: `value: 201` is the text `201`.
+
+**Every step** has a `type` and may have:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `type` | | `request`, `if`, `forEach`, `repeat`, `parallel`, `set`, `wait`, `stop`, `scenario`, `script` or `ask`. |
+| `name` | what the step does | Shown in the list and the results. |
+| `enabled` | `true` | `false` = left out of runs. |
+| `continueOnFailure` | `false` | Go on with the next step when this one fails (the scenario still fails). |
+
+`type: request`, send a saved request:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `request` | | Request path relative to `requests/`. |
+| `inputs` | `[]` | `key`, `value`, `enabled`: values for this step only, over every other variable. |
+| `outputs` | `[]` | Values of the response saved for the steps after it (below). |
+| `checks` | `[]` | What the response must be; each is a test (below). |
+| `retry` | | `times` (more tries when the step fails, up to 99) and `delayMs` (pause before each, default `0`). |
+
+`outputs[]`:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `variable` | | The name it is saved under: no spaces or braces. |
+| `from` | `json` | `json` (a JSONPath into the body), `header`, `cookie`, `regex` (the first group), `status`, `body` or `time` (milliseconds). |
+| `path` | | The JSONPath, the header or cookie name, or the regular expression. Not used by `status`, `body` and `time`. |
+| `secret` | `false` | Hide the value in results. |
+| `optional` | `false` | Finding nothing is fine: the variable is then not set. Otherwise it fails the step. |
+| `collect` | `false` | Add the value to a list under this name instead of replacing it. |
+
+`checks[]`:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `from`, `path` | `json` | Where the value is read, as for outputs. |
+| `op` | `equals` | `equals`, `notEquals`, `contains`, `notContains`, `matches` (a regular expression), `greater`, `greaterOrEqual`, `less`, `lessOrEqual`, `exists`, `notExists`, `in`, `notIn`, `isTrue`, `isFalse`. |
+| `value` | | What it is compared with. Not used by `exists`, `notExists`, `isTrue` and `isFalse`. |
+| `enabled` | `true` | |
+
+`type: if`:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `when` | | The condition: `rules` (a list of `value`, `op` (default `equals`) and `to`) and `any` (default `false`: every rule must hold; `true`: one is enough). No rules: it holds. |
+| `steps` | `[]` | Run when the condition holds. |
+| `elseIf` | `[]` | More branches, each with `when` and `steps`; the first whose condition holds runs. |
+| `else` | `[]` | Run when no condition holds. |
+
+`type: forEach`, `type: repeat` and `type: parallel` hold `steps` too:
+
+| Type | Field | Default | Meaning |
+|---|---|---|---|
+| `forEach` | `list` | | `{{variable}}` holding a list, a JSON array, values separated by commas, or JavaScript after `=`. |
+| | `as` | `item` | The variable each item is in. `{{index}}` counts from 0. |
+| `repeat` | `times` | `1` | How many rounds; with `until`, at most this many. |
+| | `until` | | A condition (like `when`) checked after each round: the loop ends when it holds, and the step fails when it never does. |
+| | `delayMs` | `0` | Pause between two rounds. |
+| `parallel` | | | Its `steps` start together, each with its own copy of the values. |
+
+The other types:
+
+| Type | Field | Default | Meaning |
+|---|---|---|---|
+| `set` | `values` | `[]` | `key`, `value`, `enabled`: values to set. |
+| `wait` | `ms` | | Milliseconds to pause (at most 600,000). |
+| `stop` | `what` | `scenario` | `loop` (leave the loop it is in), `scenario` (end the scenario as passed) or `fail` (end it as failed). |
+| | `message` | | Why, shown in the results. |
+| `scenario` | `scenario` | | The id of the scenario to run (its file name without `.yaml`). |
+| | `inputs` | `[]` | `key`, `value`: values it starts with, read with this scenario's values. |
+| | `outputs` | `[]` | `key`, `value`: values to bring back, each `value` read with the other scenario's values (`{ key: token, value: "{{token}}" }`). |
+| `script` | `code` | `""` | JavaScript with the `pm` API. |
+| `ask` | `variable` | | The variable the answer goes in. |
+| | `message` | | The question. |
+| | `secret` | `false` | Hide the answer. |
+
+Steps can be nested 16 levels deep. A scenario with a deeper list, or with a name that can't be a variable (an output, an input, a value to set, a loop's `as`, an ask's `variable`), shows in the sidebar with a warning and doesn't run.
+
+When a request is renamed or moved in Zorvik, scenarios that send it are updated in place (their file name doesn't change). So are the scenarios that run a scenario you rename.
+
 ## Load tests (`loadtests/*.yaml`)
 
 One file per load test. The file name (without `.yaml`) is its id, used by `zorvik load` and in the run history. See [Load testing](../../load-testing/overview/).
@@ -641,6 +779,6 @@ An OpenAPI import keeps the document in `specs/`, named after the import (`.json
 
 ## Other files
 
-A workspace can hold any other files: data files for runs and load tests, files sent as bodies, `.proto` files. Zorvik reads them only where a request, run or load test refers to them. Paths in those fields are relative to the workspace folder (or absolute). By default, files outside the workspace folder can't be used (Settings → Data & privacy → **Files outside the workspace**), so a workspace you clone can't make Zorvik send your private files.
+A workspace can hold any other files: data files for runs, scenarios and load tests, files sent as bodies, `.proto` files. Zorvik reads them only where a request, run, scenario or load test refers to them. Paths in those fields are relative to the workspace folder (or absolute). By default, files outside the workspace folder can't be used (Settings → Data & privacy → **Files outside the workspace**), so a workspace you clone can't make Zorvik send your private files.
 
-Zorvik creates `requests/` and `environments/` when it opens a workspace, and `servers/`, `loadtests/` and `specs/` when something is first saved there. It adds nothing else: no lock files, caches or `.gitignore`.
+Zorvik creates `requests/` and `environments/` when it opens a workspace, and `servers/`, `scenarios/`, `loadtests/` and `specs/` when something is first saved there. It adds nothing else: no lock files, caches or `.gitignore`.

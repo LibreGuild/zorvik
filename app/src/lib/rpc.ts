@@ -53,6 +53,9 @@ import type { Request } from "../bindings/Request";
 import type { RunningServerInfo } from "../bindings/RunningServerInfo";
 import type { RunDetails } from "../bindings/RunDetails";
 import type { RunStarted } from "../bindings/RunStarted";
+import type { Scenario } from "../bindings/Scenario";
+import type { ScenarioNode } from "../bindings/ScenarioNode";
+import type { ScenarioValue } from "../bindings/ScenarioValue";
 import type { SendResult } from "../bindings/SendResult";
 import type { Server } from "../bindings/Server";
 import type { ServerNode } from "../bindings/ServerNode";
@@ -277,6 +280,26 @@ export const api = {
   exportRun: (runId: string, path: string, format: "json" | "junit") => call<null>("runner.export", { runId, path, format }),
   /** What a result sent and got (null once the app no longer keeps it). */
   runDetails: (runId: string, seq: number) => call<RunDetails | null>("runner.details", { runId, seq }),
+
+  scenarios: () => call<ScenarioNode[]>("scenario.list"),
+  readScenario: (id: string) => call<Scenario>("scenario.read", { id }),
+  createScenario: (scenario: Scenario) => call<string>("scenario.create", { scenario }),
+  saveScenario: (id: string, scenario: Scenario) => call<string>("scenario.save", { id, scenario }),
+  duplicateScenario: (id: string) => call<string>("scenario.duplicate", { id }),
+  deleteScenario: (id: string) => call<null>("scenario.delete", { id }),
+  reorderScenarios: (ids: string[]) => call<null>("scenario.reorder", { ids }),
+  /**
+   * Run a scenario as edited (`scenario`): all of it, up to and including the step at `to`, or
+   * `only` that step with the values the last run left. Events `runner {runId}`; stop with `stopRun`.
+   */
+  runScenario: (id: string, scenario: Scenario, part: { to?: string; only?: string } = {}) =>
+    call<RunStarted>("scenario.run", { id, scenario, ...part }),
+  /** The value an "ask" step of a run waits for (null: none, the step fails). */
+  answerScenario: (runId: string, value: string | null) => call<null>("scenario.answer", { runId, value }),
+  /** The values the last run of a scenario left (kept in memory, secret ones hidden). */
+  scenarioValues: (id: string) => call<ScenarioValue[]>("scenario.values", { id }),
+  /** Forget them: all, or the one named `key`. */
+  clearScenarioValues: (id: string, key?: string) => call<null>("scenario.clearValues", { id, key }),
 
   /** The console's lines, oldest first (new ones come as `console` events). */
   consoleList: () => call<ConsoleLine[]>("console.list"),

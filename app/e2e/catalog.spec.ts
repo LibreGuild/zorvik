@@ -82,14 +82,15 @@ test("imports Anthropic from the API catalog: folder, first request and active e
   await expect(dialog).toContainText(/The environment “Anthropic.*” is now active/);
   await expect(page.getByTestId("env-picker")).toContainText("Anthropic");
 
-  // "Add your API key" opens the new environment.
+  // "Add your API key" opens the new environment in a tab, the sidebar on the environments.
   await dialog.getByRole("button", { name: "Add your API key" }).click();
-  const environments = page.getByRole("dialog", { name: "Environments & variables" });
-  await expect(environments.getByLabel("Environment name")).toHaveValue(/^Anthropic/);
-  await environments.getByRole("button", { name: "Close", exact: true }).last().click();
-  await expect(environments).toHaveCount(0);
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByTestId("variables-view").getByLabel("Environment name")).toHaveValue(/^Anthropic/);
+  await expect(page.getByTestId("environments-list")).toBeVisible();
 
-  // Its first request is open, and shown in the sidebar with the folders above it open.
+  // Its first request is open too, and shown in the sidebar with the folders above it open.
+  await page.getByRole("tab", { name: /Create a message/ }).click();
+  await page.getByTestId("rail-collection").click();
   const tree = page.getByTestId("collection-tree");
   await expect(page.getByRole("tab", { name: /Create a message/ })).toHaveAttribute("aria-selected", "true");
   await expect(tree.getByRole("treeitem", { name: /Create a message/, selected: true })).toBeVisible();

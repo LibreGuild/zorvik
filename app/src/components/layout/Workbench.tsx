@@ -1,9 +1,11 @@
 import { useRef } from "react";
 import { Columns2, FilePlus2, Import, Radio, Rows2, Zap } from "lucide-react";
 import { modKey } from "../../lib/platform";
-import { isLive, isLoadTestTab, isRunnerTab, isServerTab, isToolTab, newRequest, type Tab, useTabs } from "../../store/tabs";
+import { isLive, isLoadTestTab, isRunnerTab, isScenarioTab, isServerTab, isToolTab, isVariablesTab, newRequest, type Tab, useTabs } from "../../store/tabs";
+import { VariablesView } from "../environments/VariablesView";
 import { LoadTestView } from "../loadtests/LoadTestView";
 import { RunnerView } from "../runner/RunnerView";
+import { ScenarioView } from "../scenarios/ScenarioView";
 import { openModal, useUi } from "../../store/ui";
 import { RequestEditor } from "../request/RequestEditor";
 import { UrlBar } from "../request/UrlBar";
@@ -22,6 +24,8 @@ export function Workbench() {
   if (isToolTab(tab)) return <ToolView key={tab.id} tab={tab} />;
   if (isLoadTestTab(tab)) return <LoadTestView key={tab.id} tab={tab} />;
   if (isRunnerTab(tab)) return <RunnerView key={tab.id} tab={tab} />;
+  if (isScenarioTab(tab)) return <ScenarioView key={tab.id} tab={tab} />;
+  if (isVariablesTab(tab)) return <VariablesView key={tab.id} tab={tab} />;
   return <RequestWorkbench key={tab.id} tab={tab} />;
 }
 

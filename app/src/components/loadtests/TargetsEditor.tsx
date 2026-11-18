@@ -27,6 +27,7 @@ export const TargetsEditor = memo(function TargetsEditor({
   const all = useMemo(() => flattenRequests(tree), [tree]);
   const byPath = useMemo(() => new Map(all.map((r) => [r.path, r])), [all]);
   const shares = useMemo(() => targetShares(targets), [targets]);
+  const added = useMemo(() => targets.map((t) => t.request), [targets]);
   const add = (paths: string[]) =>
     onChange((list) => [...list, ...paths.filter((p) => !list.some((t) => t.request === p)).map((request) => ({ request }))]);
   const update = (i: number, patch: Partial<LoadTarget>) => onChange((list) => list.map((t, j) => (j === i ? { ...t, ...patch } : t)));
@@ -37,7 +38,7 @@ export const TargetsEditor = memo(function TargetsEditor({
       {targets.length === 0 ? (
         <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-line-strong px-4 py-5 text-center">
           <div className="text-[12.5px] text-muted">Add the saved HTTP requests this test sends. With several, weights set how often each one is picked.</div>
-          <RequestPicker all={all} added={targets} onAdd={add} trigger={<Button size="sm" variant="primary" icon={<Plus size={13} />}>Add requests</Button>} />
+          <RequestPicker all={all} added={added} onAdd={add} trigger={<Button size="sm" variant="primary" icon={<Plus size={13} />}>Add requests</Button>} />
         </div>
       ) : (
         <>
@@ -67,7 +68,7 @@ export const TargetsEditor = memo(function TargetsEditor({
             ))}
           </div>
           <div>
-            <RequestPicker all={all} added={targets} onAdd={add} trigger={<Button size="sm" variant="ghost" icon={<Plus size={13} />}>Add requests</Button>} />
+            <RequestPicker all={all} added={added} onAdd={add} trigger={<Button size="sm" variant="ghost" icon={<Plus size={13} />}>Add requests</Button>} />
           </div>
         </>
       )}
@@ -149,14 +150,35 @@ function TargetRow({
   );
 }
 
-/** Popover to pick saved HTTP requests (search, keyboard, several in a row). */
-function RequestPicker({ all, added, onAdd, trigger }: { all: RequestEntry[]; added: LoadTarget[]; onAdd: (paths: string[]) => void; trigger: React.ReactNode }) {
+const HTTP_ONLY = (r: RequestEntry) => r.kind === "http";
+
+/**
+ * Popover to pick saved requests (search, keyboard, several in a row). By default HTTP
+ * requests, each once (`added`: the ones already picked); a scenario takes the kinds a run
+ * sends, any number of times.
+ */
+export function RequestPicker({
+  all,
+  added,
+  onAdd,
+  trigger,
+  accept = HTTP_ONLY,
+  words = { search: "Search HTTP requests", none: "No saved HTTP requests yet. Save a request to the collection first.", note: "Only HTTP requests can be load tested." },
+}: {
+  all: RequestEntry[];
+  /** Paths that can't be picked again. */
+  added?: string[];
+  onAdd: (paths: string[]) => void;
+  trigger: React.ReactNode;
+  accept?: (r: RequestEntry) => boolean;
+  words?: { search: string; none: string; note: string };
+}) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [index, setIndex] = useState(0);
   const list = useRef<HTMLDivElement>(null);
-  const http = useMemo(() => all.filter((r) => r.kind === "http" && !r.error), [all]);
-  const addedSet = useMemo(() => new Set(added.map((t) => t.request)), [added]);
+  const http = useMemo(() => all.filter((r) => accept(r) && !r.error), [all, accept]);
+  const addedSet = useMemo(() => new Set(added ?? []), [added]);
   const results = useMemo(() => {
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
     return http.filter((r) => words.every((w) => `${r.method} ${r.trail} ${r.name}`.toLowerCase().includes(w)));
@@ -203,14 +225,14 @@ function RequestPicker({ all, added, onAdd, trigger }: { all: RequestEntry[]; ad
               autoFocus
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Search HTTP requests"
+              placeholder={words.search}
               aria-label="Search requests"
               className="h-10 min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-faint"
             />
           </div>
           <div ref={list} role="listbox" aria-label="Requests" className="min-h-0 flex-1 overflow-auto p-1.5">
             {http.length === 0 ? (
-              <div className="p-5 text-center text-[12.5px] text-muted">No saved HTTP requests yet. Save a request to the collection first.</div>
+              <div className="p-5 text-center text-[12.5px] text-muted">{words.none}</div>
             ) : results.length === 0 ? (
               <div className="p-5 text-center text-[12.5px] text-muted">No requests match “{q}”.</div>
             ) : (
@@ -242,8 +264,8 @@ function RequestPicker({ all, added, onAdd, trigger }: { all: RequestEntry[]; ad
             )}
           </div>
           <div className="flex items-center gap-2 border-t border-line px-3 py-2 text-[11px] text-faint">
-            <span className="min-w-0 flex-1">Only HTTP requests can be load tested.</span>
-            {addable.length > 1 && (
+            <span className="min-w-0 flex-1">{words.note}</span>
+            {added && addable.length > 1 && (
               <Button size="sm" variant="secondary" onClick={() => onAdd(addable.map((r) => r.path))}>
                 Add {addable.length === results.length ? "all" : "these"} {addable.length}
               </Button>

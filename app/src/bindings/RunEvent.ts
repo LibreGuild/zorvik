@@ -5,4 +5,4 @@ import type { RunSummary } from "./RunSummary";
 /**
  * Events of a run (`runner {runId, event}`).
  */
-export type RunEvent = { "type": "started", name: string, total: number, iterations: number, } | { "type": "result", result: RunResult, } | { "type": "finished", summary: RunSummary, };
+export type RunEvent = { "type": "started", name: string, total: number, iterations: number, } | { "type": "result", result: RunResult, } | { "type": "finished", summary: RunSummary, } | { "type": "ask", variable: string, message: string, secret: boolean, };

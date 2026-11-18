@@ -83,10 +83,10 @@ lab:
       solution:
         - answer: "1"
     - text: |
-        On a build server you'd pass the key with `--var apiKey=…`. In the app, add it to the environment: press **⌘/Ctrl + E**, select **Lab**, add `apiKey` with the value `ci-demo-4242`, click the **lock** to make it secret, and **Save changes**. Then run the folder again.
+        On a build server you'd pass the key with `--var apiKey=…`. In the app, add it to the environment: press **⌘/Ctrl + E** (the **Lab** environment opens in a tab), add `apiKey` with the value `ci-demo-4242`, click the **lock** to make it secret, and save with **⌘/Ctrl + S**. Then run the folder again.
       hints:
         - The Catalog request already says {{apiKey}}. It only needs a value.
-        - In Environments & variables, pick Lab, add a row apiKey = ci-demo-4242, close the lock, Save changes. Then Run again in the runner tab.
+        - In the Lab environment's tab (Environments in the left rail), add a row apiKey = ci-demo-4242, close the lock and press ⌘/Ctrl + S. Then Run again in the runner tab.
         - "Both requests pass now: the run's exit code would be 0."
       check:
         all:

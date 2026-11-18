@@ -403,8 +403,9 @@ struct Kept {
     details: Option<Arc<ConsoleDetails>>,
     sensitive: bool,
     /// The secret values in use when it was logged, hidden from agents (they may have changed
-    /// since: a script that rotates a key, another workspace).
-    redact: Option<Arc<Redactor>>,
+    /// since: a script that rotates a key, another workspace). Shared with the scope that
+    /// logged it, which may learn of more ([`ConsoleScope::hide`]).
+    redact: Arc<Mutex<Redactor>>,
     weight: usize,
 }
 
@@ -427,7 +428,7 @@ pub(crate) struct Read {
     pub line: ConsoleLine,
     pub details: Option<Arc<ConsoleDetails>>,
     pub sensitive: bool,
-    pub redact: Option<Arc<Redactor>>,
+    pub redact: Arc<Mutex<Redactor>>,
 }
 
 impl Console {
@@ -442,7 +443,7 @@ impl Console {
         item: ConsoleItem,
         details: Option<ConsoleDetails>,
         sensitive: bool,
-        redact: Option<Arc<Redactor>>,
+        redact: Arc<Mutex<Redactor>>,
     ) {
         let text = match &item {
             ConsoleItem::Log { message, .. } => message.len(),
@@ -510,12 +511,18 @@ pub struct ConsoleScope {
     source: ConsoleSource,
     request: Option<Arc<str>>,
     /// The workspace's secret values now, for what agents read of these lines later.
-    redact: Option<Arc<Redactor>>,
+    redact: Arc<Mutex<Redactor>>,
 }
 
 impl ConsoleScope {
     pub(crate) fn new(console: Arc<Console>, source: ConsoleSource, redact: Option<Redactor>) -> Self {
-        Self { console, source, request: None, redact: redact.filter(|r| !r.is_empty()).map(Arc::new) }
+        Self { console, source, request: None, redact: Arc::new(Mutex::new(redact.unwrap_or_default())) }
+    }
+
+    /// A secret value learned while running (a scenario's secret output, a secret answer):
+    /// agents read `{{key}}` for it in every line of this scope, also the ones logged before.
+    pub(crate) fn hide(&self, key: &str, value: &str) {
+        lock(&self.redact).hide(key, value);
     }
 
     /// The same console, for the request named `name`.
@@ -695,6 +702,27 @@ mod tests {
         scope.log(ConsoleLevel::Log, "after");
         assert_eq!(console.list()[0].id, 4, "ids go on after a clear");
         assert!(console.details(2).is_none());
+    }
+
+    #[test]
+    fn a_secret_learned_later_is_hidden_in_the_lines_before_it_too() {
+        let (scope, console, _) = scope();
+        scope.of("Log in").log(ConsoleLevel::Log, "token tok-12345");
+        scope.hide("token", "tok-12345");
+        scope.log(ConsoleLevel::Log, "again tok-12345");
+        let read = console.read(10, |_| true);
+        let shown: Vec<String> = read
+            .iter()
+            .map(|r| match &r.line.item {
+                ConsoleItem::Log { message, .. } => lock(&r.redact).text(message),
+                ConsoleItem::Exchange { .. } => String::new(),
+            })
+            .collect();
+        assert_eq!(shown, ["token {{token}}", "again {{token}}"]);
+        // Another scope's lines don't hide it.
+        let (other, console, _) = self::scope();
+        other.log(ConsoleLevel::Log, "tok-12345");
+        assert!(lock(&console.read(1, |_| true)[0].redact).is_empty());
     }
 
     #[test]

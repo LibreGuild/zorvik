@@ -2,7 +2,7 @@
 title: OpenAPI contract checks
 description: The automatic "Matches the API spec" test for requests imported from an OpenAPI document, what it checks, how to turn it off, and how to update from a new spec version.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 When you import an OpenAPI (or Swagger 2) document, Zorvik keeps a copy of it in the workspace and remembers which operation each request came from. After every send of such a request, it checks the response against the document and adds the result as a test named **Matches the API spec**:
