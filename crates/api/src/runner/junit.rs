@@ -13,9 +13,15 @@ pub fn junit_xml(report: &RunReport) -> String {
     // Suites in the order their requests first ran.
     let mut suites: Vec<(&str, Vec<&RunResult>)> = Vec::new();
     for r in &report.results {
-        match suites.iter_mut().find(|(path, _)| *path == r.path) {
+        // A scenario's flow steps (if, loops, their rounds) are cases only when they fail,
+        // and its steps that send nothing are suites by their name.
+        if r.passed && r.step.as_ref().is_some_and(|step| step.kind.is_flow()) {
+            continue;
+        }
+        let suite = if r.path.is_empty() { &r.name } else { &r.path };
+        match suites.iter_mut().find(|(path, _)| *path == suite) {
             Some((_, list)) => list.push(r),
-            None => suites.push((&r.path, vec![r])),
+            None => suites.push((suite, vec![r])),
         }
     }
     let repeat = s.iterations > 1;

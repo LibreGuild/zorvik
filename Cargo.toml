@@ -31,7 +31,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.90"
 license = "MIT OR Apache-2.0"
@@ -100,7 +100,7 @@ pem = "4"
 # RSA-SHA1 (OAuth 1.0a), which ring only verifies.
 num-bigint = "0.5"
 rusqlite = { version = "0.40", features = ["bundled"] }
-ts-rs = { version = "12", features = ["serde-json-impl"] }
+ts-rs = { version = "12", features = ["serde-json-impl", "no-serde-warnings"] }
 trash = "5"
 notify = "8"
 notify-debouncer-full = "0.7"

@@ -35,14 +35,14 @@
 </picture>
 
 ## Why Zorvik
-- **Your coding agent can drive it.** Claude Code, Codex, Gemini CLI, Cursor and any MCP client use Zorvik's 46 built-in tools to turn the APIs in your code into requests, test them, mock them and load test them, while you watch every step and approve anything risky. [More below](#ai-agents).
+- **Your coding agent can drive it.** Claude Code, Codex, Gemini CLI, Cursor and any MCP client use Zorvik's 50 built-in tools to turn the APIs in your code into requests, test them, mock them and load test them, while you watch every step and approve anything risky. [More below](#ai-agents).
 - **Test the tools your AI agents use.** Connect to any MCP server (over HTTP or as a local program), see its tools, resources and prompts, call them, and test the answers in CI. Build MCP servers in minutes to try tools with a real AI app or to test your own agent. [More below](#mcp-test-the-tools-ai-agents-use).
 - **Every feature is free, for good.** No paid plans, no "team" tier, no feature behind a login, and none planned. Open source under MIT or Apache-2.0.
 - **Everything in one place.** HTTP, GraphQL (with subscriptions), gRPC, MCP, WebSocket, Socket.IO, SSE, TCP, UDP, MQTT and DNS clients; mock servers, MCP servers included; load tests; network tools. One app instead of five.
 - **Your API work is plain files.** A workspace is a folder of readable YAML. Commit it to Git, review it in pull requests, share it with your team. Secrets stay on your computer.
 - **Honest numbers.** Every request shows where its time went (DNS, connect, TLS, first byte, download), which certificate answered and the headers that really left your machine. Load tests measure latency without hiding a slow server's queue.
 - **Local first.** No account, no cloud sync, no tracking, and none planned. It works offline and behind corporate proxies and TLS inspection. The only thing it connects to by itself is GitHub, to check for updates, and it sends nothing about you.
-- **Scriptable and automatable.** Postman-compatible scripts and tests, a collection runner with data files, and the `zorvik` command line for CI.
+- **Scriptable and automatable.** Postman-compatible scripts and tests, scenarios that chain requests without scripts, a collection runner with data files, and the `zorvik` command line for CI.
 - **Learn it inside the app.** The Training Bootcamp teaches networks and APIs from zero, with hands-on labs in the real workbench.
 
 <p align="center">
@@ -103,6 +103,7 @@ Then ask things like *"map the API routes in this repo to a Zorvik collection"* 
 - **Scripts:** pre-request and post-response JavaScript with a Postman-compatible `pm` API, so imported collections run as they are: `pm.sendRequest`, cookies, timers, the visualizer, and Postman's libraries built in (lodash, crypto-js, moment, ajv, chai and more), all offline.
 - **Tests:** `pm.test`, `pm.expect` and JSON Schema checks, with results next to the response.
 - **Collection runner:** run a folder in order, repeat it, drive it with CSV or JSON data, stop on the first failure, export JSON or JUnit reports.
+- **Scenarios:** saved requests as steps that pass values to each other: outputs picked from a response, inputs, checks, if and loops, steps at the same time, a shared login as a scenario of its own. A scenario's values stay its own; it runs in the app, in CI and from AI agents.
 - **Polling and streams in runs:** send a request again until a condition holds (wait for a job to finish), and test Server-Sent Events streams (`pm.response.events`).
 - **Contract checks:** requests imported from an OpenAPI document are checked against it on every send and run: an undocumented status or a field of the wrong type fails a test.
 - **CI:** `zorvik run` runs the same collections in any pipeline.

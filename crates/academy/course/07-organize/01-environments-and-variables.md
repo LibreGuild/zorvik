@@ -32,29 +32,29 @@ lab:
             body: '{"environment": "staging", "version": "2.0.3", "healthy": true}'
   steps:
     - text: |
-        Press **⌘/Ctrl + E** to open **Environments & variables**. Click **+** next to *Environments*, rename the new environment to **Dev**, and add one variable: `baseUrl`, with the Dev server's address `{{=dev}}` as its value. Press **Save changes**.
+        Press **⌘/Ctrl + E** to show the **Environments** in the sidebar. Click **+** at the top of the sidebar: a new environment opens in a tab. Rename it to **Dev**, add one variable: `baseUrl`, with the Dev server's address `{{=dev}}` as its value, and save with **⌘/Ctrl + S**.
       hints:
         - An environment is a named list of variables. Dev needs just one, called baseUrl.
-        - In the dialog, click + next to "Environments", type Dev in the name field at the top, then type baseUrl in the Variable column and the address in the Value column.
-        - "Value: the address itself, starting with http://127.0.0.1: and no slash at the end. Not a variable: once Dev is active, the Lab environment is switched off. Then press Save changes."
+        - In the sidebar, click + at the top, type Dev in the name field at the top of the new tab, then type baseUrl in the Variable column and the address in the Value column.
+        - "Value: the address itself, starting with http://127.0.0.1: and no slash at the end. Not a variable: once Dev is active, the Lab environment is switched off. Then press ⌘/Ctrl + S to save."
       check:
         saved:
           environment: { name: Dev, variables: [{ key: baseUrl, value: "{{dev}}*" }] }
       solution:
         - call: { method: env.create, params: { environment: { name: Dev, variables: [{ key: baseUrl, value: "{{dev}}" }] } } }
         - call: { method: env.save, params: { id: Dev, environment: { name: Dev, variables: [{ key: baseUrl, value: "{{dev}}" }] } } }
-    - text: With **Dev** selected in the dialog, click **Duplicate**. Rename the copy to **Staging**, change its `baseUrl` to the Staging server's address, `{{=staging}}`, and save.
+    - text: In the **Dev** tab, click **Duplicate**. The copy opens in its own tab. Rename it to **Staging**, change its `baseUrl` to the Staging server's address, `{{=staging}}`, and save with **⌘/Ctrl + S**.
       hints:
         - Duplicate copies every variable, so you only change what is different.
-        - The Duplicate button is at the top right of the dialog, next to Delete. The copy is called "Dev copy".
-        - "Rename \"Dev copy\" to Staging, set baseUrl to the Staging server's address from the step above (same host, different port), then Save changes."
+        - The Duplicate button is at the top right of the Dev tab, next to Delete (it is also in the menu of Dev's row in the sidebar). The copy is called "Dev copy".
+        - "Rename \"Dev copy\" to Staging, set baseUrl to the Staging server's address from the step above (same host, different port), then press ⌘/Ctrl + S."
       check:
         saved:
           environment: { name: Staging, variables: [{ key: baseUrl, value: "{{staging}}*" }] }
       solution:
         - call: { method: env.create, params: { environment: { name: Staging, variables: [{ key: baseUrl, value: "{{staging}}" }] } } }
         - call: { method: env.save, params: { id: Staging, environment: { name: Staging, variables: [{ key: baseUrl, value: "{{staging}}" }] } } }
-    - text: Close the dialog. Pick **Dev** in the environment menu at the top right of the window, then send `GET {{baseUrl}}/status` from a new request (**⌘/Ctrl + N**).
+    - text: Make **Dev** the active environment (pick it in the environment menu at the top right of the window, or click **Set active** in its tab), then send `GET {{baseUrl}}/status` from a new request (**⌘/Ctrl + N**).
       hints:
         - The environment menu shows the active environment's name (right now it says Lab).
         - Click it, choose Dev, then press ⌘N and type {{baseUrl}}/status in the URL bar. Hover {{baseUrl}} to see its value.
@@ -124,7 +124,7 @@ GET baseUrl/status -[Staging active]-> Staging server
 
 ## Where variables live
 
-Open **Environments & variables** with **⌘/Ctrl + E**:
+Open **Environments** in the left rail, or press **⌘/Ctrl + E**. The sidebar lists them, and each opens in a tab:
 
 - **Environments** hold values that differ per server, like `baseUrl` or a test account's id.
 - **Workspace variables** are shared by every environment, like an API version.

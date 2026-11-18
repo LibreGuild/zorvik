@@ -104,9 +104,18 @@ pub struct ScriptVars {
     pub environment: Option<(String, String)>,
     /// Environment, workspace and global changes by scripts, in order, to keep as local values.
     pub changes: Vec<VariableChange>,
+    /// A scenario's run: `overrides` and `pm.variables` hold the scenario's values, which are
+    /// data (see [`VarContext::push_data_layer`]).
+    pub scenario: bool,
 }
 
 impl ScriptVars {
+    /// Whether what scripts set with `pm.environment` goes somewhere: the active
+    /// environment's local values, or a scenario's own values.
+    pub(crate) fn keeps_environment(&self) -> bool {
+        self.environment.is_some() || self.scenario
+    }
+
     /// `{{variables}}` for the request: overrides > `pm.variables` > data row >
     /// environment > workspace > globals.
     pub fn var_context(&self) -> VarContext {
@@ -114,12 +123,18 @@ impl ScriptVars {
         let data: BTreeMap<String, String> =
             v.data.iter().map(|(k, x)| (k.clone(), zorvik_script::value_text(x))).collect();
         let mut ctx = VarContext::new();
-        for layer in [&v.overrides, &v.local, &data, &v.environment, &v.collection, &v.globals] {
+        for (i, layer) in
+            [&v.overrides, &v.local, &data, &v.environment, &v.collection, &v.globals].into_iter().enumerate()
+        {
             let vars: Vec<Variable> = layer
                 .iter()
                 .map(|(key, value)| Variable { key: key.clone(), value: value.clone(), enabled: true, secret: false })
                 .collect();
-            ctx.push_layer(&vars);
+            if self.scenario && i < 2 {
+                ctx.push_data_layer(&vars);
+            } else {
+                ctx.push_layer(&vars);
+            }
         }
         ctx
     }
@@ -300,7 +315,7 @@ pub(crate) async fn send_scripted_with(
         let mut input = script_input(Event::PostResponse, &info, vars, sent, Some(res));
         input.cookies = jar_cookies(cx.jar, &resolved.request.url);
         let merged = report.get_or_insert_with(Default::default);
-        match run_chain(Event::PostResponse, post, input, vars.environment.is_some(), limits, host).await {
+        match run_chain(Event::PostResponse, post, input, vars.keeps_environment(), limits, host).await {
             Ok(outcome) => {
                 vars.values = outcome.values;
                 vars.changes.extend(outcome.changes);
@@ -377,7 +392,7 @@ pub(crate) async fn pre_request(p: &Pre<'_>, request: &mut Request, vars: &mut S
     let mut input = script_input(Event::PreRequest, p.info, vars, before.clone(), None);
     input.cookies = jar_cookies(p.cx.jar, p.url);
     let outcome =
-        match run_chain(Event::PreRequest, pre, input, vars.environment.is_some(), p.limits, p.host.clone()).await {
+        match run_chain(Event::PreRequest, pre, input, vars.keeps_environment(), p.limits, p.host.clone()).await {
             Ok(outcome) => outcome,
             Err(e) => return PreRan { report: None, next_request: None, result: Err(e) },
         };
@@ -1058,6 +1073,7 @@ impl Api {
             },
             environment,
             changes: Vec::new(),
+            scenario: false,
         }
     }
 

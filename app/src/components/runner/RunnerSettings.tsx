@@ -6,7 +6,7 @@ import { methodColor, methodLabel } from "../../lib/http";
 import type { RequestEntry } from "../loadtests/model";
 import { type DataState, MAX_DELAY_MS, MAX_ITERATIONS, moveInOrder, orderRequests, pickDataFile, setDataFile, settingsOf, updateSettings, useRunner } from "../../store/runner";
 import type { RunnerTab } from "../../store/tabs";
-import { openModal } from "../../store/ui";
+import { showEnvironments } from "../../store/environments";
 import { useWorkspace } from "../../store/workspace";
 import { EditorSection } from "../servers/ServerView";
 import { Button, Checkbox, cx, IconButton, NumberInput, Switch } from "../ui";
@@ -87,7 +87,7 @@ export const RunnerSettingsPane = memo(function RunnerSettingsPane({ tab, entrie
           <span className={cx("font-medium", environment ? "text-fg" : "text-faint")} data-testid="runner-environment">
             {environment ?? "None"}
           </span>
-          <button className="text-[12px] text-accent hover:underline" onClick={() => openModal({ type: "environments" })}>
+          <button className="text-[12px] text-accent hover:underline" onClick={() => showEnvironments()}>
             Environments…
           </button>
         </div>

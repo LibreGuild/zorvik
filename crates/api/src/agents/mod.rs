@@ -120,6 +120,10 @@ pub enum AgentTarget {
         folder: String,
         name: String,
     },
+    #[serde(rename_all = "camelCase")]
+    Scenario {
+        id: String,
+    },
     Environments,
 }
 
@@ -212,6 +216,9 @@ pub enum AgentEvent {
     /// A collection run the agent started.
     #[serde(rename_all = "camelCase")]
     Run { folder: String, run: RunStarted },
+    /// A scenario run the agent started.
+    #[serde(rename_all = "camelCase")]
+    ScenarioRun { id: String, run: RunStarted },
     /// A live connection the agent opened: shown in a tab, live. `opened` is what
     /// connecting returned (`StreamOpened` for WebSocket, `SocketOpened` for the others).
     #[serde(rename_all = "camelCase")]

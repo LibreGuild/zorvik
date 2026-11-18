@@ -375,6 +375,19 @@ input[type="number"] {
   animation: zv-fade 0.15s ease-out;
 }
 
+/* A run whose length isn't known (a scenario): the bar's block goes from side to side. */
+@keyframes zv-indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+.zv-indeterminate {
+  animation: zv-indeterminate 1.4s ease-in-out infinite;
+}
+
 /* Academy: diagrams play in, rewards pop */
 @keyframes zv-seq-in {
   from {
@@ -454,6 +467,10 @@ input[type="number"] {
   animation: zv-step-done 0.9s ease-out;
 }
 @media (prefers-reduced-motion: reduce) {
+  .zv-indeterminate {
+    animation: none;
+    width: 100%;
+  }
   .zv-seq-in,
   .zv-rise,
   .zv-badge-in,

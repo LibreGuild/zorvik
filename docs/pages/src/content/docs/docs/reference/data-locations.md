@@ -7,7 +7,7 @@ sidebar:
 
 Zorvik keeps two kinds of data apart:
 
-- **Your workspace folder** holds what you share: requests, folders, environments, servers, load tests and kept OpenAPI documents (see [Workspace format](../workspace-format/)). Commit it to Git.
+- **Your workspace folder** holds what you share: requests, folders, environments, servers, scenarios, load tests and kept OpenAPI documents (see [Workspace format](../workspace-format/)). Commit it to Git.
 - **The app data folder** holds what belongs to this computer and this user: settings, history, secret values, cookies, OAuth tokens, load test results and the Training Bootcamp. It is never written into a workspace.
 
 ## The app data folder
@@ -51,7 +51,8 @@ If `secrets.json` can't be read (for example, after a disk error), Zorvik moves 
 
 - The window layout (sidebar width, split positions, **Response position**, the console's height) is kept by the app window itself, not in these files.
 - The [console](../../requests/console/) is kept in memory only, never in a file: it is empty again when the app starts.
-- Deleted requests, folders, environments, servers and load tests go to the **system trash** (Recycle Bin on Windows), where you can restore them.
+- The values a [scenario](../../testing/scenarios/#values-of-the-last-run)'s last run left are kept in memory only too: they are gone when you clear them, close the workspace or quit.
+- Deleted requests, folders, environments, servers, scenarios and load tests go to the **system trash** (Recycle Bin on Windows), where you can restore them.
 
 ## Logs
 

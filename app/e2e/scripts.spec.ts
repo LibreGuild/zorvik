@@ -60,10 +60,12 @@ test("pm.environment values show under Set by scripts and can be cleared", async
   // An active environment is needed for pm.environment.set values to be kept.
   await page.getByTestId("env-picker").click();
   await page.getByRole("menuitem", { name: "Manage environments…" }).click();
-  await page.getByRole("button", { name: "New environment" }).click();
+  await page.getByTestId("environments-list").getByRole("button", { name: "New environment" }).first().click();
+  // Its tab first: until it opens, another environment's may be showing.
+  await expect(page.getByRole("tab", { name: "New environment", selected: true })).toBeVisible();
   await page.getByLabel("Environment name").fill("Scripted");
-  await page.getByRole("button", { name: "Save changes" }).click();
-  await page.getByRole("button", { name: "Close", exact: true }).last().click();
+  await page.getByTestId("variables-save").click();
+  await expect(page.getByTestId("environment-row-Scripted")).toBeVisible();
   await page.getByTestId("env-picker").click();
   await page.getByRole("menuitem", { name: /Scripted/ }).click();
 
@@ -73,8 +75,9 @@ test("pm.environment values show under Set by scripts and can be cleared", async
   await expect(page.getByTestId("response-status")).toHaveText("200 OK");
 
   await page.getByTestId("env-picker").click();
+  // "Manage environments…" opens the active environment's tab.
   await page.getByRole("menuitem", { name: "Manage environments…" }).click();
-  await page.getByRole("dialog").getByRole("button", { name: /Scripted/ }).click();
+  await expect(page.getByRole("tab", { name: /Scripted/, selected: true })).toBeVisible();
   const local = page.getByTestId("local-values");
   await expect(local).toContainText("seenName");
   await expect(local).toContainText("Zorvik");

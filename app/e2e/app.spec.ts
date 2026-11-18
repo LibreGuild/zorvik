@@ -46,17 +46,39 @@ test("shows a helpful error when the server is down", async ({ page }) => {
 });
 
 test("environment variables are substituted", async ({ page }) => {
+  // "Manage environments…" shows them in the sidebar; one opens in a tab, like a request.
   await page.getByTestId("env-picker").click();
   await page.getByRole("menuitem", { name: "Manage environments…" }).click();
-  await page.getByRole("button", { name: "New environment" }).click();
-  await page.getByLabel("Environment name").fill("Local");
-  await page.getByPlaceholder("Variable").last().fill("base");
-  await page.getByPlaceholder("Value").first().fill(HTTP);
-  await page.getByRole("button", { name: "Save changes" }).click();
-  await page.getByRole("button", { name: "Close", exact: true }).last().click();
+  const list = page.getByTestId("environments-list");
+  await expect(list).toBeVisible();
+  await expect(page.getByTestId("rail-environments")).toHaveAttribute("aria-pressed", "true");
+  await list.getByRole("button", { name: "New environment" }).first().click();
+  const view = page.getByTestId("variables-view");
+  await expect(page.getByRole("tab", { name: "New environment", selected: true })).toBeVisible();
+  await view.getByLabel("Environment name").fill("Local");
+  await view.getByPlaceholder("Variable").last().fill("base");
+  await view.getByPlaceholder("Value").first().fill(HTTP);
+  // Unsaved: a dot on its row; Mod+S saves, and the file follows the name.
+  await expect(list.getByLabel("Unsaved changes")).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect(list.getByLabel("Unsaved changes")).toHaveCount(0);
+  await expect(page.getByTestId("environment-row-Local")).toContainText("Local");
+  await expect(page.getByRole("tab", { name: /Local/, selected: true })).toBeVisible();
+  // Active from the tab, from its row in the sidebar, or from the picker in the title bar.
+  await expect(page.getByTestId("variables-status")).toContainText("Not active · 1 variable");
+  await view.getByTestId("environment-activate").click();
+  await expect(page.getByTestId("env-picker")).toContainText("Local");
+  await expect(page.getByTestId("variables-status")).toContainText("Active");
+  await page.getByRole("checkbox", { name: "Local is active. Use no environment" }).click();
+  await expect(page.getByTestId("env-picker")).toContainText("No environment");
   await page.getByTestId("env-picker").click();
   await page.getByRole("menuitem", { name: /Local/ }).click();
   await expect(page.getByTestId("env-picker")).toContainText("Local");
+  // The workspace's own variables and globals open from the same list.
+  await page.getByTestId("environments-workspace").click();
+  await expect(page.getByRole("tab", { name: "Workspace variables", selected: true })).toBeVisible();
+  await page.getByTestId("environments-globals").click();
+  await expect(page.getByTestId("variables-view")).toContainText("No global values yet");
 
   await newTab(page, "HTTP request");
   await setUrl(page, "{{base}}/echo?from=env");

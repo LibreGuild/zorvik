@@ -43,9 +43,14 @@ impl Redactor {
     pub fn new(secrets: &[Variable]) -> Self {
         let mut r = Self::default();
         for v in secrets.iter().filter(|v| v.secret && v.enabled) {
-            r.add(&v.value, &format!("{{{{{}}}}}", v.key.trim()), MIN_SECRET_LEN);
+            r.hide(&v.key, &v.value);
         }
         r
+    }
+
+    /// Also hide `value`, as `{{key}}`.
+    pub fn hide(&mut self, key: &str, value: &str) {
+        self.add(value, &format!("{{{{{}}}}}", key.trim()), MIN_SECRET_LEN);
     }
 
     /// Also hide what these headers carried (e.g. the token of `Authorization: Bearer …`).

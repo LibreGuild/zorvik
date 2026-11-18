@@ -3,7 +3,7 @@ import { create } from "zustand";
 
 export type DialogRequest =
   | { kind: "confirm"; title: string; message: string; details?: string[]; confirmLabel: string; danger: boolean; resolve: (ok: boolean) => void }
-  | { kind: "prompt"; title: string; message?: string; value: string; placeholder?: string; confirmLabel: string; resolve: (v: string | null) => void };
+  | { kind: "prompt"; title: string; message?: string; value: string; placeholder?: string; confirmLabel: string; secret?: boolean; resolve: (v: string | null) => void };
 
 export const useDialogs = create<{ current: DialogRequest | null }>(() => ({ current: null }));
 
@@ -30,7 +30,8 @@ export function confirm(opts: { title: string; message: string; details?: string
   );
 }
 
-export function prompt(opts: { title: string; message?: string; value?: string; placeholder?: string; confirmLabel?: string }): Promise<string | null> {
+/** `secret`: the text is hidden as it is typed. */
+export function prompt(opts: { title: string; message?: string; value?: string; placeholder?: string; confirmLabel?: string; secret?: boolean }): Promise<string | null> {
   return new Promise((resolve) =>
     show({
       kind: "prompt",
@@ -39,6 +40,7 @@ export function prompt(opts: { title: string; message?: string; value?: string; 
       value: opts.value ?? "",
       placeholder: opts.placeholder,
       confirmLabel: opts.confirmLabel ?? "OK",
+      secret: opts.secret,
       resolve,
     }),
   );

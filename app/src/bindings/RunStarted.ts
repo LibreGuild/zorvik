@@ -2,6 +2,6 @@
 
 export type RunStarted = { runId: string, name: string, 
 /**
- * Requests if every iteration goes through the list once.
+ * Requests if every iteration goes through the list once (0: not known, a scenario).
  */
 total: number, iterations: number, environment: string | null, };

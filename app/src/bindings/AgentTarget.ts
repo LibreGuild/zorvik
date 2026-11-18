@@ -3,4 +3,4 @@
 /**
  * Something in the app an agent action is about (clicking the entry opens it).
  */
-export type AgentTarget = { "type": "request", path: string, } | { "type": "folder", path: string, } | { "type": "loadTest", id: string, } | { "type": "server", id: string, } | { "type": "runner", folder: string, name: string, } | { "type": "environments" };
+export type AgentTarget = { "type": "request", path: string, } | { "type": "folder", path: string, } | { "type": "loadTest", id: string, } | { "type": "server", id: string, } | { "type": "runner", folder: string, name: string, } | { "type": "scenario", id: string, } | { "type": "environments" };

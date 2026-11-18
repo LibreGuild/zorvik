@@ -6,6 +6,7 @@
 //! <root>/requests/**            folders (with optional _folder.yaml) and request files (*.yaml)
 //! <root>/servers/*.yaml         servers (mock HTTP, WebSocket, TCP, UDP, DNS, …)
 //! <root>/loadtests/*.yaml       load tests
+//! <root>/scenarios/*.yaml       scenarios
 //! ```
 //!
 //! Item paths in the API are relative to `requests/` and use `/` separators.
@@ -16,7 +17,7 @@ use serde::Serialize;
 use ts_rs::TS;
 use zorvik_formats::{
     BodyType, Environment, FORMAT_VERSION, FolderMeta, ImportSummary, ImportedCollection, ImportedItem, LoadTest,
-    LoadTestNode, NodeKind, Request, RequestKind, Server, ServerNode, TreeNode, WorkspaceMeta,
+    LoadTestNode, NodeKind, Request, RequestKind, Scenario, ScenarioNode, Server, ServerNode, TreeNode, WorkspaceMeta,
 };
 
 use crate::error::{Error, ErrorCode, Result};
@@ -30,6 +31,7 @@ pub const REQUESTS_DIR: &str = "requests";
 pub const ENV_DIR: &str = "environments";
 pub const SERVERS_DIR: &str = "servers";
 pub const LOAD_TESTS_DIR: &str = "loadtests";
+pub const SCENARIOS_DIR: &str = "scenarios";
 pub const FOLDER_FILE: &str = "_folder.yaml";
 const EXT: &str = ".yaml";
 /// Folder levels shown in the tree. Deeper content (e.g. from a hostile repo)
@@ -841,6 +843,57 @@ impl Workspace {
         self.flat_reorder::<LoadTest>(ids)
     }
 
+    /// Saved scenarios in sidebar order. Files that don't parse are listed with an error.
+    pub fn list_scenarios(&self) -> Result<Vec<ScenarioNode>> {
+        Ok(self
+            .flat_list::<Scenario>()
+            .into_iter()
+            .map(|(id, scenario)| match scenario.and_then(checked_scenario) {
+                Ok(s) => ScenarioNode {
+                    name: display_name(&s.name, &id).to_string(),
+                    id,
+                    steps: s.step_count(),
+                    seq: s.seq,
+                    error: None,
+                },
+                Err(err) => ScenarioNode { name: id.clone(), id, steps: 0, seq: u32::MAX, error: Some(err.message) },
+            })
+            .collect())
+    }
+
+    pub fn read_scenario(&self, id: &str) -> Result<Scenario> {
+        self.flat_read(id).and_then(checked_scenario)
+    }
+
+    /// Save a scenario. Renaming it also renames the file; returns the (possibly new) id.
+    pub fn save_scenario(&self, id: &str, scenario: &Scenario) -> Result<String> {
+        checked_scenario(scenario.clone())?;
+        self.flat_save(id, scenario)
+    }
+
+    /// Overwrite a scenario without renaming its file (e.g. to follow a renamed request).
+    pub fn update_scenario(&self, id: &str, scenario: &Scenario) -> Result<()> {
+        self.flat_overwrite(id, scenario).map(drop)
+    }
+
+    pub fn create_scenario(&self, scenario: &Scenario) -> Result<String> {
+        checked_scenario(scenario.clone())?;
+        self.flat_create(scenario)
+    }
+
+    pub fn duplicate_scenario(&self, id: &str) -> Result<String> {
+        let scenario = self.read_scenario(id)?;
+        self.create_scenario(&Scenario { name: format!("{} copy", scenario.name), ..scenario })
+    }
+
+    pub fn delete_scenario(&self, id: &str) -> Result<()> {
+        self.flat_delete::<Scenario>(id)
+    }
+
+    pub fn reorder_scenarios(&self, ids: &[String]) -> Result<()> {
+        self.flat_reorder::<Scenario>(ids)
+    }
+
     // ---- import -----------------------------------------------------------
 
     /// Write an imported collection into a new folder under `parent`.
@@ -1032,7 +1085,7 @@ pub fn new_request(name: &str, kind: RequestKind) -> Request {
     r
 }
 
-/// Files of a flat folder: servers (`servers/`) and load tests (`loadtests/`).
+/// Files of a flat folder: servers (`servers/`), load tests (`loadtests/`) and scenarios (`scenarios/`).
 trait FlatItem: Serialize + serde::de::DeserializeOwned + Clone {
     const DIR: &'static str;
     /// Lower-case noun for messages.
@@ -1067,6 +1120,28 @@ impl FlatItem for LoadTest {
     }
     fn set_seq(&mut self, seq: u32) {
         self.seq = seq;
+    }
+}
+
+impl FlatItem for Scenario {
+    const DIR: &'static str = SCENARIOS_DIR;
+    const WHAT: &'static str = "scenario";
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn seq(&self) -> u32 {
+        self.seq
+    }
+    fn set_seq(&mut self, seq: u32) {
+        self.seq = seq;
+    }
+}
+
+/// A scenario that can be used (see [`Scenario::problem`]).
+fn checked_scenario(scenario: Scenario) -> Result<Scenario> {
+    match scenario.problem() {
+        Some(problem) => Err(Error::invalid(problem)),
+        None => Ok(scenario),
     }
 }
 

@@ -18,6 +18,7 @@ pub mod mcp;
 mod message_scripts;
 mod mock;
 pub mod runner;
+pub mod scenario;
 mod scripting;
 mod servers;
 mod sockets;
@@ -173,6 +174,8 @@ struct Inner {
     grpc: grpc::GrpcState,
     /// The collection run in progress and the last finished ones (`runner.*`).
     runner: runner::RunnerState,
+    /// What scenarios' last runs left in their values, and a run's question (`scenario.*`).
+    scenarios: scenario::ScenarioState,
     /// Registered before connecting so `sse.close` can abort a pending connect.
     sse_streams: Mutex<HashMap<String, (u64, CancellationToken)>>,
     generation: std::sync::atomic::AtomicU64,
@@ -393,6 +396,7 @@ impl Api {
             graphql: Default::default(),
             grpc: Default::default(),
             runner: Default::default(),
+            scenarios: Default::default(),
             sse_streams: Mutex::new(HashMap::new()),
             responses: Mutex::new(ResponseStore::default()),
             specs: Default::default(),
@@ -443,6 +447,7 @@ impl Api {
             "graphql" => return self.call_graphql(method, p).await,
             "grpc" => return self.call_grpc(method, p).await,
             "runner" => return self.call_runner(method, p).await,
+            "scenario" => return self.call_scenario(method, p).await,
             "agent" => return self.call_agent(method, p).await,
             "academy" => return self.call_academy(method, p).await,
             _ => {}
@@ -496,6 +501,7 @@ impl Api {
             "workspace.close" => {
                 *self.inner.workspace.write().unwrap_or_else(|e| e.into_inner()) = None;
                 self.inner.console.clear();
+                self.inner.scenarios.clear();
                 *lock(&self.inner.watcher) = None;
                 let mut local = lock(&self.inner.local);
                 local.last_workspace = None;
@@ -578,6 +584,7 @@ impl Api {
                 let ws = self.ws()?;
                 let new_path = ws.rename(&path, &name)?;
                 self.retarget_load_tests(&ws, &path, &new_path);
+                self.retarget_scenarios(&ws, &path, &new_path);
                 ok(new_path)
             }
             "item.delete" => {
@@ -600,6 +607,7 @@ impl Api {
                 let ws = self.ws()?;
                 let new_path = ws.move_item(&path, &parent, index)?;
                 self.retarget_load_tests(&ws, &path, &new_path);
+                self.retarget_scenarios(&ws, &path, &new_path);
                 ok(new_path)
             }
 
@@ -1017,6 +1025,7 @@ impl Api {
         // Another workspace: what the console shows of the last one (its secrets too) goes.
         if self.try_ws().is_some_and(|open| open.root() != ws.root()) {
             self.inner.console.clear();
+            self.inner.scenarios.clear();
         }
         *self.inner.workspace.write().unwrap_or_else(|e| e.into_inner()) = Some(ws.clone());
         *lock(&self.inner.watcher) = watcher::Watcher::start(ws.root(), self.inner.sink.clone())

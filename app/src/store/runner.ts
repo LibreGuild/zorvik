@@ -1,5 +1,6 @@
 // Collection runs: the settings of each runner tab, the run in progress (one at a
 // time, app-wide) and the latest run of each tab with its results as they come.
+// Scenario tabs keep their runs here too: a scenario's run is a run like any other.
 //
 // A fast collection sends results in bursts; they are applied once per animation
 // frame so a burst renders once. A long run keeps its counts exact but only the
@@ -18,7 +19,8 @@ import { onEvent } from "../lib/events";
 import { pickFile, pickSavePath } from "../lib/platform";
 import { api, errorMessage } from "../lib/rpc";
 import { workspaceRelative } from "./grpc";
-import { isRunnerTab, onItemsMoved, type RunnerTab, useTabs } from "./tabs";
+import { prompt } from "./dialogs";
+import { isRunnerTab, isScenarioTab, onItemsMoved, type RunnerTab, useTabs } from "./tabs";
 import { toast } from "./toasts";
 import { useSettings } from "./settings";
 import { useWorkspace } from "./workspace";
@@ -52,7 +54,7 @@ export interface RunView {
   runId: string;
   name: string;
   environment: string | null;
-  /** Requests if every iteration goes through the list once (setNextRequest may change it). */
+  /** Requests if every iteration goes through the list once (setNextRequest may change it); 0 for a scenario: not known. */
   total: number;
   iterations: number;
   /** Unix epoch milliseconds. */
@@ -192,8 +194,10 @@ export function withResults(run: RunView, extra: RunResult[], limit = MAX_RESULT
   const counts = { ...run.counts };
   const results = run.results.slice();
   for (const r of extra) {
+    // A scenario's flow steps (if, loops, their rounds) count only when they fail.
+    const flow = r.passed && !!r.step && FLOW_STEPS.has(r.step.kind);
     if (r.skipped) counts.skipped++;
-    else counts.requests++;
+    else if (!flow) counts.requests++;
     if (!r.passed) counts.failed++;
     const t = testCounts(r);
     counts.testsPassed += t.passed;
@@ -203,17 +207,20 @@ export function withResults(run: RunView, extra: RunResult[], limit = MAX_RESULT
   return { ...run, results, counts, received: run.received + extra.length };
 }
 
+/** The kinds of scenario step that only hold or direct other steps. */
+export const FLOW_STEPS: ReadonlySet<string> = new Set(["if", "forEach", "repeat", "parallel", "scenario", "round"]);
+
 /** 0–1: results so far of the planned total (a setNextRequest loop may run past it). */
 export function progress(run: RunView): number {
   if (run.summary) return 1;
   return run.total > 0 ? Math.min(1, run.received / run.total) : 0;
 }
 
-/** Toast text for a finished run. */
-export function finishedMessage(name: string, s: RunSummary): { tone: "success" | "error" | "info"; title: string; detail: string } {
+/** Toast text for a finished run (`what` it counts: requests, or a scenario's steps). */
+export function finishedMessage(name: string, s: RunSummary, what = "request"): { tone: "success" | "error" | "info"; title: string; detail: string } {
   const tests = s.testsPassed + s.testsFailed;
   const detail = [
-    `${s.requests} ${s.requests === 1 ? "request" : "requests"}${s.failed ? `, ${s.failed} failed` : ""}`,
+    `${s.requests} ${s.requests === 1 ? what : `${what}s`}${s.failed ? `, ${s.failed} failed` : ""}`,
     tests ? `${s.testsPassed}/${tests} tests passed` : null,
     s.iterations > 1 ? `${s.perIteration.length} of ${s.iterations} iterations` : null,
   ]
@@ -341,7 +348,7 @@ export async function startRun(tab: RunnerTab, entries: RequestEntry[]): Promise
   if (starting) return false;
   if (active) {
     const other = runs[active]?.name ?? "Another run";
-    toast("info", "A run is in progress", `Stop “${other}” first: one collection run at a time.`);
+    toast("info", "A run is in progress", `Stop “${other}” first: one run at a time.`);
     return false;
   }
   const settings = settingsOf(tab.id);
@@ -487,10 +494,26 @@ function handle(runId: string, event: RunEvent, agent = false) {
     list.push(event.result);
     incoming.set(runId, list);
     scheduleFlush();
+  } else if (event.type === "ask") {
+    // What ran before the question shows while the user answers.
+    flushRunnerEvents();
+    void ask(runId, event);
   } else {
     flushRunnerEvents();
     finish(tabId, runId, event.summary);
   }
+}
+
+/** A scenario step asks for a value: the user types it (Cancel: no value, the step fails). */
+async function ask(runId: string, event: Extract<RunEvent, { type: "ask" }>) {
+  const value = await prompt({
+    title: `Value for ${event.variable}`,
+    message: event.message || `The scenario asks for “${event.variable}”.`,
+    value: "",
+    confirmLabel: "Continue",
+    secret: event.secret,
+  });
+  await api.answerScenario(runId, value).catch(() => {});
 }
 
 function buffer(runId: string, event: RunEvent) {
@@ -540,8 +563,16 @@ function finish(tabId: string, runId: string, summary: RunSummary) {
     runs: { ...s.runs, [tabId]: { ...run, summary, stopping: false } },
     active: s.active === tabId ? null : s.active,
   }));
-  const { tone, title, detail } = finishedMessage(run.name, summary);
+  const scenario = isScenarioTab(useTabs.getState().tabs.find((t) => t.id === tabId));
+  const { tone, title, detail } = finishedMessage(run.name, summary, scenario ? "step" : "request");
   toast(tone, title, detail);
+  for (const h of finishedHandlers) h(tabId);
+}
+
+/** Called when a tab's run has finished (a scenario reads the values it left). */
+const finishedHandlers = new Set<(tabId: string) => void>();
+export function onRunFinished(handler: (tabId: string) => void) {
+  finishedHandlers.add(handler);
 }
 
 onEvent((e) => {
@@ -561,11 +592,11 @@ export function resetRunner() {
   set({ settings: {}, data: {}, runs: {}, filter: {}, active: null, starting: null });
 }
 
-// A closed runner tab takes its state along (and stops its run); a restored one gets its settings back.
+// A closed runner or scenario tab takes its state along (and stops its run); a restored runner tab gets its settings back.
 useTabs.subscribe((s, prev) => {
   if (s.tabs === prev.tabs) return;
   const runnerTabs = s.tabs.filter(isRunnerTab);
-  const open = new Set(runnerTabs.map((t) => t.id));
+  const open = new Set(s.tabs.filter((t) => isRunnerTab(t) || isScenarioTab(t)).map((t) => t.id));
   // A tab that comes back (tabs dropped and restored) looks its settings up again.
   for (const id of hydrated) if (!open.has(id)) hydrated.delete(id);
   hydrateSettings(runnerTabs);

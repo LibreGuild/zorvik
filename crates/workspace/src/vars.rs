@@ -20,7 +20,14 @@ const MAX_DEPTH: usize = 10;
 /// Variables in precedence order: earlier layers win.
 #[derive(Debug, Default, Clone)]
 pub struct VarContext {
-    layers: Vec<HashMap<String, String>>,
+    layers: Vec<Layer>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct Layer {
+    vars: HashMap<String, String>,
+    /// The values are data, not templates (see [`VarContext::push_data_layer`]).
+    data: bool,
 }
 
 impl VarContext {
@@ -30,17 +37,29 @@ impl VarContext {
 
     /// Add a lower-precedence layer (only enabled variables with a key).
     pub fn push_layer(&mut self, vars: &[Variable]) -> &mut Self {
-        self.layers.push(
-            vars.iter()
-                .filter(|v| v.enabled && !v.key.trim().is_empty())
-                .map(|v| (v.key.trim().to_string(), v.value.clone()))
-                .collect(),
-        );
+        self.push(vars, false)
+    }
+
+    /// Add a lower-precedence layer of data: values that came from somewhere else (a
+    /// response, a computation), so `{{` in them is text, never expanded. A name with dots
+    /// reads into a value that is JSON: `{{user.address.city}}`, `{{items.0.id}}`,
+    /// `{{items.length}}`.
+    pub fn push_data_layer(&mut self, vars: &[Variable]) -> &mut Self {
+        self.push(vars, true)
+    }
+
+    fn push(&mut self, vars: &[Variable], data: bool) -> &mut Self {
+        let vars = vars
+            .iter()
+            .filter(|v| v.enabled && !v.key.trim().is_empty())
+            .map(|v| (v.key.trim().to_string(), v.value.clone()))
+            .collect();
+        self.layers.push(Layer { vars, data });
         self
     }
 
     pub fn get(&self, name: &str) -> Option<&str> {
-        self.layers.iter().find_map(|l| l.get(name)).map(String::as_str)
+        self.layers.iter().find_map(|l| l.vars.get(name)).map(String::as_str)
     }
 
     /// Render `template`, recording names that could not be resolved.
@@ -114,7 +133,7 @@ impl VarContext {
             }
             match value {
                 // Generated values are data: `{{` in them is never expanded.
-                Some((value, Kind::Dynamic)) => out.push_str(&value),
+                Some((value, Kind::Dynamic | Kind::Data)) => out.push_str(&value),
                 Some((value, Kind::Defined)) if depth < MAX_DEPTH => {
                     out.push_str(&self.render_depth(&value, unresolved, depth + 1, budget))
                 }
@@ -142,11 +161,57 @@ impl VarContext {
     /// Defined variables first, then dynamic ones (docs/architecture.md, "Variables").
     /// A dynamic name may carry arguments: `$randomInt(1, 10)`.
     fn lookup(&self, name: &str) -> Option<(Cow<'_, str>, Kind)> {
-        if let Some(value) = self.get(name) {
-            return Some((Cow::Borrowed(value), Kind::Defined));
+        for layer in &self.layers {
+            if let Some(value) = layer.vars.get(name) {
+                let kind = if layer.data { Kind::Data } else { Kind::Defined };
+                return Some((Cow::Borrowed(value.as_str()), kind));
+            }
+            if layer.data
+                && let Some(value) = inside(&layer.vars, name)
+            {
+                return Some((Cow::Owned(value), Kind::Data));
+            }
         }
         name.starts_with('$').then(|| dynamic::generate(name)).flatten().map(|v| (Cow::Owned(v), Kind::Dynamic))
     }
+}
+
+/// `user.address.city` read out of the variable `user` when its value is JSON (the longest
+/// name that is a variable is the one read into). Lists take a position (`items.0`) or
+/// `length`. Text comes as it is, `null` as nothing, anything else as JSON.
+fn inside(vars: &HashMap<String, String>, name: &str) -> Option<String> {
+    let mut split = name.len();
+    while let Some(dot) = name[..split].rfind('.') {
+        split = dot;
+        let Some(value) = vars.get(&name[..dot]) else { continue };
+        let Ok(mut at) = serde_json::from_str::<serde_json::Value>(value) else { continue };
+        let mut found = true;
+        for part in name[dot + 1..].split('.') {
+            let next = match &mut at {
+                serde_json::Value::Object(map) => map.remove(part),
+                serde_json::Value::Array(items) if part == "length" => Some(items.len().into()),
+                serde_json::Value::Array(items) => {
+                    part.parse::<usize>().ok().filter(|i| *i < items.len()).map(|i| items.swap_remove(i))
+                }
+                _ => None,
+            };
+            match next {
+                Some(value) => at = value,
+                None => {
+                    found = false;
+                    break;
+                }
+            }
+        }
+        if found {
+            return Some(match at {
+                serde_json::Value::String(s) => s,
+                serde_json::Value::Null => String::new(),
+                other => other.to_string(),
+            });
+        }
+    }
+    None
 }
 
 /// Where a looked-up value came from.
@@ -155,6 +220,8 @@ enum Kind {
     Defined,
     /// Generated by a dynamic variable: inserted as it is.
     Dynamic,
+    /// From a data layer: inserted as it is.
+    Data,
 }
 
 /// Start of the `{{` that the left-to-right scan in `render_depth` would try
@@ -222,6 +289,36 @@ mod tests {
             "https://env.example.com/v2/x?q={{ missing }}"
         );
         assert_eq!(missing.into_iter().collect::<Vec<_>>(), vec!["missing"]);
+    }
+
+    #[test]
+    fn data_layers_are_text_and_can_be_read_into() {
+        let mut ctx = VarContext::new();
+        ctx.push_data_layer(&[
+            var("fromServer", "{{token}}"),
+            var("user", r#"{"id":7,"name":"Ada","address":{"city":"Paris"},"tags":["a","b"],"none":null}"#),
+            var("user.name", "wins as its own variable"),
+            var("plain", "not json"),
+        ]);
+        ctx.push_layer(&[var("token", "s3cret"), var("url", "/users/{{user.id}}"), var("obj", r#"{"a":1}"#)]);
+        let mut missing = BTreeSet::new();
+        let mut render = |s: &str| ctx.render(s, &mut missing);
+        // A value that came from somewhere else is never expanded.
+        assert_eq!(render("{{fromServer}} {{token}}"), "{{token}} s3cret");
+        assert_eq!(render("{{user.id}} {{user.address.city}} {{user.tags.1}} {{user.tags.length}}"), "7 Paris b 2");
+        assert_eq!(
+            render("{{user.address}}|{{user.none}}|{{user.name}}"),
+            r#"{"city":"Paris"}||wins as its own variable"#
+        );
+        // Templates below still expand, and reach the data above them.
+        assert_eq!(render("{{url}}"), "/users/7");
+        // Not there, not JSON, or not a data layer: undefined, as before.
+        assert_eq!(
+            render("{{user.nope}} {{user.tags.9}} {{plain.x}} {{obj.a}}"),
+            "{{user.nope}} {{user.tags.9}} {{plain.x}} {{obj.a}}"
+        );
+        assert_eq!(missing.into_iter().collect::<Vec<_>>(), ["obj.a", "plain.x", "user.nope", "user.tags.9"]);
+        assert_eq!(ctx.get("user.id"), None);
     }
 
     #[test]

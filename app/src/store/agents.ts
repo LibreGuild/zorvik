@@ -13,6 +13,7 @@ import type { SendResult } from "../bindings/SendResult";
 import { onEvent } from "../lib/events";
 import { api, errorMessage, isTauri } from "../lib/rpc";
 import { openCall, showInvokeResult } from "./grpc";
+import { showEnvironments } from "./environments";
 import { attachRun } from "./runner";
 import { useSettings } from "./settings";
 import {
@@ -23,6 +24,7 @@ import {
   openLoadTest,
   openRequest,
   openRunner,
+  openScenario,
   openServer,
   resetTabs,
   restoreTabs,
@@ -30,7 +32,7 @@ import {
   useTabs,
 } from "./tabs";
 import { toast } from "./toasts";
-import { openModal, toggleExpanded, useUi } from "./ui";
+import { toggleExpanded, useUi } from "./ui";
 import { adoptWorkspace, refreshVariables, reloadWorkspace, useWorkspace } from "./workspace";
 
 interface AgentsState {
@@ -129,6 +131,10 @@ export async function openTarget(target: AgentTarget, explicit = false) {
     case "loadTest":
       if (explicit) useUi.setState({ sidebarTab: "loadtests" });
       return openLoadTest(target.id);
+    case "scenario":
+      if (explicit) useUi.setState({ sidebarTab: "scenarios" });
+      await openScenario(target.id, { activate });
+      return;
     case "server":
       if (explicit) useUi.setState({ sidebarTab: "servers" });
       return openServer(target.id);
@@ -136,8 +142,8 @@ export async function openTarget(target: AgentTarget, explicit = false) {
       openRunner(target.folder, target.name, { activate });
       return;
     case "environments":
-      // A dialog only when asked for: following must not pop one up mid-typing.
-      if (explicit) openModal({ type: "environments" });
+      // Only when asked for: following must not take the user's tab mid-typing.
+      if (explicit) showEnvironments();
       return;
   }
 }
@@ -229,6 +235,10 @@ onEvent((e) => {
       return;
     case "run":
       if (following()) attachRun(openRunner(ev.folder, ev.run.name, { activate: !typing() }), ev.run);
+      return;
+    case "scenarioRun":
+      // Its tab shows the run live (the scenario as saved: that is what the agent runs).
+      if (following()) void openScenario(ev.id, { activate: !typing() }).then((tabId) => tabId && attachRun(tabId, ev.run));
       return;
     case "stream":
       if (following()) void attachStream(ev.path, ev.request, ev.connId, ev.opened, "Connected by an AI agent", !typing());

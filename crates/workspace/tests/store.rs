@@ -548,6 +548,49 @@ fn load_tests_crud_and_order() {
 }
 
 #[test]
+fn scenarios_crud_and_order() {
+    use zorvik_formats::{Scenario, Step, StepAction, StepParallel, StepValue};
+    let dir = tempfile::tempdir().unwrap();
+    let ws = Workspace::create(dir.path(), "Demo").unwrap();
+    assert!(ws.list_scenarios().unwrap().is_empty());
+    let a = ws.create_scenario(&Scenario::new("Checkout", vec!["a.yaml".into(), "b.yaml".into()])).unwrap();
+    let b = ws.create_scenario(&Scenario::new("Sign up: new user", vec![])).unwrap();
+    assert_eq!((a.as_str(), b.as_str()), ("Checkout", "Sign up- new user"));
+    let list = ws.list_scenarios().unwrap();
+    assert_eq!(
+        list.iter().map(|n| (n.name.as_str(), n.steps)).collect::<Vec<_>>(),
+        [("Checkout", 2), ("Sign up: new user", 0)]
+    );
+
+    let mut scenario = ws.read_scenario(&a).unwrap();
+    scenario.name = "Checkout flow".into();
+    scenario.docs = "Buys one thing.".into();
+    let a = ws.save_scenario(&a, &scenario).unwrap();
+    assert_eq!(a, "Checkout flow");
+    assert_eq!(ws.read_scenario(&a).unwrap().docs, "Buys one thing.");
+    ws.reorder_scenarios(&[b.clone(), a.clone()]).unwrap();
+    ws.duplicate_scenario(&a).unwrap();
+    let names: Vec<_> = ws.list_scenarios().unwrap().into_iter().map(|n| n.name).collect();
+    assert_eq!(names, ["Sign up: new user", "Checkout flow", "Checkout flow copy"]);
+    assert!(ws.read_scenario("../zorvik").is_err());
+
+    // What can't be used is refused when saved, and listed with why when it comes from a file.
+    scenario.variables = vec![StepValue::new("two words", "1")];
+    assert!(ws.save_scenario(&a, &scenario).unwrap_err().message.contains("two words"));
+    std::fs::write(dir.path().join("scenarios/Broken.yaml"), "steps: [").unwrap();
+    let mut deep = Step::request("a.yaml");
+    for _ in 0..40 {
+        deep = Step::new(StepAction::Parallel(StepParallel { steps: vec![deep] }));
+    }
+    let deep = Scenario { steps: vec![deep], ..Scenario::new("Deep", vec![]) };
+    std::fs::write(dir.path().join("scenarios/Deep.yaml"), serde_yaml_ng::to_string(&deep).unwrap()).unwrap();
+    let listed = ws.list_scenarios().unwrap();
+    assert!(listed.iter().any(|n| n.id == "Broken" && n.error.is_some()));
+    assert!(listed.iter().any(|n| n.id == "Deep" && n.error.as_deref().is_some_and(|e| e.contains("nested"))));
+    assert!(ws.read_scenario("Deep").is_err());
+}
+
+#[test]
 fn graphql_requests_are_flagged_in_the_tree() {
     use zorvik_formats::{Body, BodyType, GraphqlBody};
     let dir = tempfile::tempdir().unwrap();

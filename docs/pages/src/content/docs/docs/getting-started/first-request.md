@@ -91,10 +91,10 @@ Folders can hold auth, headers and scripts that apply to every request inside th
 
 Environments let one request run against different servers, for example your laptop and a staging server.
 
-1. Press <kbd>Mod</kbd>+<kbd>E</kbd> to open **Environments & variables**.
-2. Next to **Environments**, choose **+** (**New environment**). Rename it `Local` in the name field.
+1. Press <kbd>Mod</kbd>+<kbd>E</kbd>, or choose **Environments** in the left rail. The sidebar shows the environments.
+2. Choose **+** (**New environment**) at the top of the sidebar. The environment opens in a tab; rename it `Local` in the name field.
 3. Add a variable: `baseUrl` with the value `https://jsonplaceholder.typicode.com`.
-4. Choose **Save changes**, then **Close**.
+4. Press <kbd>Mod</kbd>+<kbd>S</kbd> to save, then go back to the request's tab.
 5. In the title bar, open the environment picker (it says **No environment**) and choose **Local**.
 6. Change the request's URL to:
 

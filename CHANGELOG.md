@@ -6,6 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-18
+
+### Added
+- **Scenarios:** run saved requests one after the other as steps, with values passed from one to the next and no scripts needed (the **Scenarios** section of the left rail, or right-click a folder → **New scenario…**). A step saves values of its response as **outputs** (a JSON path, header, cookie, regex, the status or the body; pick one from the step's last response with a click), and later steps use them as `{{name}}` or as **inputs**, which can join several values (`{{userId}}-{{cartId}}`) or work one out with JavaScript (`= Number(total) + 1`). **Checks** on the status, headers, body and JSON values are tests in the results. Steps can branch (**If** / **else if** / **else**), loop (**For each** over a list, **Repeat** a number of times or until a condition holds), run **at the same time**, **Set values**, **Wait**, **Stop**, run a **Script**, **Ask for a value** (a one-time code) and **Run** another **scenario** (a shared login). The same request can be a step as often as needed; a failed step can be tried again; steps under **Always at the end** clean up whatever happened. **Run to here** and **Run only this step** build a scenario one step at a time. A data file runs it once per row.
+- **A scenario's values are its own:** its variables, what its steps save and what its scripts set (also with `pm.environment.set`) stay in the scenario. The environment, workspace variables and globals are read, never changed, so a request sent on its own afterwards behaves as before. **Variables** shows the values the last run left and clears them; they are kept in memory only.
+- **Scenarios everywhere:** each scenario has docs, is a plain file under `scenarios/` in the workspace, runs in CI with `zorvik run <workspace> --scenario <name>` (JSON and JUnit reports as for collection runs), and AI agents list, read, save and run them with `list_scenarios`, `read_scenario`, `save_scenario` and `run_scenario` (also up to a step, or one step). Renaming or moving a request updates the scenarios that use it.
+- **Collection runner:** **Save as a scenario** turns the chosen requests, in their order, into a scenario.
+
+### Changed
+- **Environments in the sidebar:** environments, the workspace's variables and globals have their own section in the left rail, and each opens in a tab like a request, instead of the **Environments & variables** dialog. The check mark before an environment makes it the active one; a tab has **Set active**, **Duplicate**, **Delete** and saves with <kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>S</kbd>. The picker in the title bar still switches the active environment, and its **Manage environments…** (or <kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>E</kbd>) opens the section with the active environment.
+- **The left rail is in groups:** Collection and Environments; Scenarios, Load tests and Servers; History and Tools; AI agents and Docs.
+
 ## [0.4.0] - 2026-11-17
 
 ### Added
@@ -208,7 +220,9 @@ The first public release.
 - In-app docs, light and dark themes, zoom and font settings.
 - Installers for Windows, macOS (universal) and Linux (deb, rpm, AppImage).
 
-[Unreleased]: https://github.com/LibreGuild/zorvik/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/LibreGuild/zorvik/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/LibreGuild/zorvik/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/LibreGuild/zorvik/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/LibreGuild/zorvik/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/LibreGuild/zorvik/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/LibreGuild/zorvik/compare/v0.2.0...v0.2.1

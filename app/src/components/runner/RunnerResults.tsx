@@ -1,7 +1,9 @@
 // The results side of a runner tab: a summary header, then every request of every
 // iteration (status, time, tests), expandable to its tests, errors and console.
+// A scenario tab shows its run here too: its steps, indented as they are nested, with
+// what the steps that send nothing did and the values each step saved.
 import { memo, useEffect, useMemo, useState } from "react";
-import { ChevronRight, CircleCheck, CircleMinus, CircleX, Download, ListChecks } from "lucide-react";
+import { ChevronRight, CircleCheck, CircleMinus, CircleX, CornerDownRight, Download, ListChecks, Workflow } from "lucide-react";
 import type { ConsoleLevel } from "../../bindings/ConsoleLevel";
 import type { Header } from "../../bindings/Header";
 import type { RunDetails } from "../../bindings/RunDetails";
@@ -12,7 +14,8 @@ import { modKey } from "../../lib/platform";
 import { api } from "../../lib/rpc";
 import { prettyMessage } from "../request/jsonFormat";
 import { HeaderTable } from "../response/ResponsePane";
-import { exportRun, groupResults, type IterationGroup, liveCounts, MAX_RESULTS, type RunView, setFilter, testCounts, useRunner } from "../../store/runner";
+import { exportRun, FLOW_STEPS, groupResults, type IterationGroup, liveCounts, MAX_RESULTS, type RunView, setFilter, testCounts, useRunner } from "../../store/runner";
+import { stepLabel } from "../scenarios/model";
 import { cx, EmptyState, Menu, Segmented } from "../ui";
 import { useTicker, Verdict } from "../loadtests/parts";
 
@@ -23,7 +26,10 @@ const GROUP_LIMIT = 200;
 /** Iterations with failures that open by themselves (each can list ROW_LIMIT rows). */
 const OPEN_FAILED = 10;
 
-export function RunnerResults({ tabId }: { tabId: string }) {
+/** A step of a scenario that only holds or directs other steps (and did not fail): no verdict of its own. */
+const isFlow = (r: RunResult) => r.passed && !!r.step && FLOW_STEPS.has(r.step.kind);
+
+export function RunnerResults({ tabId, scenario = false }: { tabId: string; scenario?: boolean }) {
   const run = useRunner((s) => s.runs[tabId]);
   const filter = useRunner((s) => s.filter[tabId] ?? "all");
   const groups = useMemo(() => (run ? groupResults(run.results, filter) : []), [run, filter]);
@@ -31,10 +37,17 @@ export function RunnerResults({ tabId }: { tabId: string }) {
   if (!run) {
     return (
       <div className="flex h-full items-center justify-center">
-        <EmptyState icon={<ListChecks size={28} strokeWidth={1.5} />} title="No runs yet">
-          Press <b className="font-medium text-fg">Run</b> ({modKey}+Enter) to send the selected requests in order with their scripts and tests. Results show here
-          as they come.
-        </EmptyState>
+        {scenario ? (
+          <EmptyState icon={<Workflow size={28} strokeWidth={1.5} />} title="No runs yet">
+            Press <b className="font-medium text-fg">Run</b> ({modKey}+Enter) to go through the steps in order. Or run up to one step from its row, look at what came
+            back, and build the next step from it.
+          </EmptyState>
+        ) : (
+          <EmptyState icon={<ListChecks size={28} strokeWidth={1.5} />} title="No runs yet">
+            Press <b className="font-medium text-fg">Run</b> ({modKey}+Enter) to send the selected requests in order with their scripts and tests. Results show
+            here as they come.
+          </EmptyState>
+        )}
       </div>
     );
   }
@@ -45,7 +58,7 @@ export function RunnerResults({ tabId }: { tabId: string }) {
   return (
     <div className="flex min-h-full flex-col" data-testid="runner-results">
       <div className="sticky top-0 z-20 flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-line/60 bg-bg/95 px-4 py-1.5 backdrop-blur">
-        <SummaryLine run={run} />
+        <SummaryLine run={run} scenario={scenario} />
         <div className="flex-1" />
         <Segmented
           items={[
@@ -75,7 +88,7 @@ export function RunnerResults({ tabId }: { tabId: string }) {
         {groups.slice(0, limit).map((g, i) => {
           const open = groups.length <= 3 || (live && i === groups.length - 1) || (g.failed > 0 && failedOpen++ < OPEN_FAILED);
           // Keyed by the filter too: rows are listed by position, their open state must not move to another result.
-          return <Iteration key={`${filter}:${g.iteration}`} group={g} count={run.iterations} open={open} runId={run.runId} />;
+          return <Iteration key={`${filter}:${g.iteration}`} group={g} count={run.iterations} open={open} runId={run.runId} scenario={scenario} />;
         })}
         {hidden > 0 && (
           <button className="rounded-xl border border-dashed border-line-strong py-1.5 text-[12px] text-accent hover:underline" onClick={() => setLimit((l) => l + GROUP_LIMIT)}>
@@ -88,7 +101,9 @@ export function RunnerResults({ tabId }: { tabId: string }) {
           </p>
         )}
         {!groups.length && (
-          <div className="py-8 text-center text-[12.5px] text-muted">{filter === "failed" ? "Nothing failed." : live ? "Waiting for the first result…" : "No requests ran."}</div>
+          <div className="py-8 text-center text-[12.5px] text-muted">
+            {filter === "failed" ? "Nothing failed." : live ? "Waiting for the first result…" : scenario ? "No steps ran." : "No requests ran."}
+          </div>
         )}
       </div>
     </div>
@@ -96,7 +111,7 @@ export function RunnerResults({ tabId }: { tabId: string }) {
 }
 
 /** Verdict, counts and time of the run. */
-function SummaryLine({ run }: { run: RunView }) {
+function SummaryLine({ run, scenario }: { run: RunView; scenario: boolean }) {
   useTicker(!run.summary);
   const c = liveCounts(run);
   const s = run.summary;
@@ -131,24 +146,38 @@ function SummaryLine({ run }: { run: RunView }) {
         </span>
       )}
       <span className="tabular-nums text-faint">{formatMs(duration)}</span>
-      {s?.bailed && <span className="text-faint">stopped at the first failure</span>}
+      {s?.bailed && <span className="text-faint">{scenario ? "ended at the first failed step" : "stopped at the first failure"}</span>}
     </div>
   );
 }
 
-const Iteration = memo(function Iteration({ group, count, open: initiallyOpen, runId }: { group: IterationGroup; count: number; open: boolean; runId: string }) {
+const Iteration = memo(function Iteration({
+  group,
+  count,
+  open: initiallyOpen,
+  runId,
+  scenario,
+}: {
+  group: IterationGroup;
+  count: number;
+  open: boolean;
+  runId: string;
+  scenario: boolean;
+}) {
   const [open, setOpen] = useState<boolean | null>(null);
   const [all, setAll] = useState(false);
   const shown = open ?? initiallyOpen;
   const tests = group.testsPassed + group.testsFailed;
   const rows = all ? group.results : group.results.slice(0, ROW_LIMIT);
+  const counted = scenario ? group.results.filter((r) => !isFlow(r)).length : group.results.length;
+  const noun = scenario ? "step" : "request";
   return (
     <section className="overflow-hidden rounded-xl border border-line/80 bg-bg" data-testid="runner-iteration">
       <button className="flex h-9 w-full items-center gap-2 px-3 text-left text-[12.5px] hover:bg-hover/60" onClick={() => setOpen(!shown)} aria-expanded={shown}>
         <ChevronRight size={14} className={cx("shrink-0 text-faint transition-transform", shown && "rotate-90")} />
-        <span className="font-semibold text-fg">{count > 1 ? `Iteration ${group.iteration + 1}` : "Requests"}</span>
+        <span className="font-semibold text-fg">{count > 1 ? `Iteration ${group.iteration + 1}` : scenario ? "Steps" : "Requests"}</span>
         <span className="tabular-nums text-faint">
-          {group.results.length} {group.results.length === 1 ? "request" : "requests"}
+          {counted} {counted === 1 ? noun : `${noun}s`}
           {group.failed ? <span className="text-danger"> · {group.failed} failed</span> : null}
           {tests ? ` · tests ${group.testsPassed}/${tests}` : ""}
         </span>
@@ -173,27 +202,40 @@ const ResultRow = memo(function ResultRow({ result: r, runId }: { result: RunRes
   const [open, setOpen] = useState(false);
   const t = testCounts(r);
   const problem = r.error ?? r.scriptErrors[0] ?? null;
-  const expandable = !r.skipped;
+  // A scenario's step: indented as it is nested; one that sends nothing says what it is and did.
+  const step = r.step;
+  const sends = !step || step.kind === "request";
+  const flow = isFlow(r);
+  const saved = step?.saved ?? [];
+  const expandable = !r.skipped && (sends || !!problem || r.tests.length > 0 || r.console.length > 0 || saved.length > 0);
   return (
     <div className="border-b border-line/50 last:border-b-0" data-testid="runner-result">
       <button
-        className={cx("flex min-h-[34px] w-full items-center gap-2 px-3 py-1 text-left", expandable && "hover:bg-hover/60")}
+        className={cx("flex min-h-[34px] w-full items-center gap-2 px-3 py-1 text-left", expandable && "hover:bg-hover/60", flow && "min-h-[28px]")}
+        style={step?.depth ? { paddingLeft: 12 + step.depth * 18 } : undefined}
         onClick={() => expandable && setOpen(!open)}
         aria-expanded={expandable ? open : undefined}
       >
         {r.skipped ? (
           <CircleMinus size={14} className="shrink-0 text-faint" aria-label="Skipped" />
+        ) : flow ? (
+          <CornerDownRight size={13} className="shrink-0 text-faint" aria-hidden />
         ) : r.passed ? (
           <CircleCheck size={14} className="shrink-0 text-success" aria-label="Passed" />
         ) : (
           <CircleX size={14} className="shrink-0 text-danger" aria-label="Failed" />
         )}
-        <span className="w-[38px] shrink-0 text-right font-mono text-[10px] font-bold" style={{ color: methodColor(r.method, r.kind) }}>
-          {methodLabel(r.method, r.kind)}
-        </span>
+        {sends ? (
+          <span className="w-[38px] shrink-0 text-right font-mono text-[10px] font-bold" style={{ color: methodColor(r.method, r.kind) }}>
+            {methodLabel(r.method, r.kind)}
+          </span>
+        ) : step.kind !== "round" ? (
+          <span className="shrink-0 rounded bg-panel-2 px-1 py-px text-[9.5px] font-bold uppercase tracking-wide text-muted">{stepLabel(step.kind)}</span>
+        ) : null}
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[12.5px] text-fg" title={r.path}>
+          <div className={cx("truncate text-[12.5px]", flow ? "text-muted" : "text-fg")} title={r.path || r.name}>
             {r.name}
+            {step?.note && <span className="text-faint"> · {step.note}</span>}
           </div>
           {r.skipped ? (
             <div className="truncate text-[11px] text-faint" title={r.skipReason}>
@@ -206,8 +248,13 @@ const ResultRow = memo(function ResultRow({ result: r, runId }: { result: RunRes
           ) : null}
         </div>
         {r.attempts != null && r.attempts > 1 && (
-          <span className="shrink-0 text-[11.5px] tabular-nums text-faint" title="Sent again until the “repeat until” condition held" data-testid="result-attempts">
+          <span className="shrink-0 text-[11.5px] tabular-nums text-faint" title={r.step ? "Sent this many times: tried again after it failed, or until its “repeat until” held" : "Sent again until the “repeat until” condition held"} data-testid="result-attempts">
             {r.attempts}×
+          </span>
+        )}
+        {saved.length > 0 && (
+          <span className="hidden max-w-[40%] shrink truncate font-mono text-[11px] text-faint sm:inline" title="Values this step saved" data-testid="result-saved">
+            {saved.map((v) => `${v.key} = ${v.value}`).join(" · ")}
           </span>
         )}
         {t.total > 0 && (
@@ -245,14 +292,19 @@ function ResultDetails({ result: r, runId }: { result: RunResult; runId: string 
       .then((d) => setDetails(d ?? "gone"))
       .catch(() => setDetails("gone"));
   }, [view, details, runId, r.seq]);
+  const sends = !r.step || r.step.kind === "request";
   return (
     <div className="selectable flex flex-col gap-2 bg-panel-2/40 px-3 pb-3 pt-1.5 pl-[70px] text-[12px]" data-testid="runner-result-details">
       <div className="flex flex-wrap items-center gap-2">
         <div className="min-w-0 flex-1 break-all font-mono text-[11.5px] text-muted">
-          {r.method} {r.url}
+          {sends && (
+            <>
+              {r.method} {r.url}
+            </>
+          )}
           {r.size != null && <span className="text-faint"> · {formatBytes(r.size)}</span>}
         </div>
-        {r.seq > 0 && (
+        {sends && r.seq > 0 && (
           <Segmented<DetailView>
             items={[
               { id: "result", label: "Result" },
@@ -338,6 +390,16 @@ function ResultBody({ result: r }: { result: RunResult }) {
         </div>
       ))}
       {r.unresolved.length > 0 && <div className="text-warning">Undefined variables: {r.unresolved.join(", ")}</div>}
+      {(r.step?.saved ?? []).length > 0 && (
+        <div className="overflow-hidden rounded-lg border border-line/60 font-mono text-[11.5px]" data-testid="runner-saved">
+          {(r.step?.saved ?? []).map((v) => (
+            <div key={v.key} className="flex gap-3 border-b border-line/50 px-2 py-0.5 last:border-b-0">
+              <span className="w-[30%] shrink-0 truncate text-fg">{v.key}</span>
+              <span className={cx("min-w-0 flex-1 whitespace-pre-wrap break-all", v.secret ? "text-faint" : "text-accent")}>{v.value}</span>
+            </div>
+          ))}
+        </div>
+      )}
       {r.tests.length > 0 && (
         <div className="flex flex-col gap-1">
           {r.tests.map((t, i) => (

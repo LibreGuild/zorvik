@@ -58,7 +58,7 @@ A variable can be defined in several places. When the same name is defined in mo
 | 2 | Request variables | `pm.variables.set()` in a script | This send, or the whole collection run |
 | 3 | Data row | A data file in the [collection runner](../../testing/collection-runner/) (CSV column or JSON key) | That iteration |
 | 4 | **Active environment** | The environment chosen in the title bar | Saved in `environments/` |
-| 5 | **Workspace variables** | **Environments & variables → Workspace variables** | Saved in `zorvik.yaml` |
+| 5 | **Workspace variables** | **Environments → Workspace variables** in the sidebar | Saved in `zorvik.yaml` |
 | 6 | **Globals** | `pm.globals.set()` in a script | On this computer, for every workspace |
 | 7 | Dynamic variables | Built in: `{{$uuid}}`, `{{$timestamp}}`, … | Generated each time they're used |
 
@@ -68,32 +68,41 @@ In the environment, workspace and global scopes, a [value set by a script](#valu
 
 Within one scope, a variable that is switched off (its checkbox cleared) doesn't exist, and if the same name appears twice, the last one counts.
 
+A [scenario](../../testing/scenarios/#variables) has values of its own on top of these: its starting values and what its steps save. They win over the environment, workspace variables and globals while the scenario runs, and they stay in the scenario.
+
 ## Environments
 
 An environment is a named set of variables, such as `Local`, `Staging` or `Production`. One environment is **active** at a time, or none.
 
 ### Choosing the active environment
 
-The environment picker in the title bar shows the active environment, or **No environment**. Open it to choose another one; each shows how many variables it has. **Manage environments…** opens the editor.
+The environment picker in the title bar shows the active environment, or **No environment**. Open it to choose another one; each shows how many variables it has. **Manage environments…** shows the [Environments section](#editing-environments) of the sidebar and opens the active environment.
+
+You can also make an environment active where you edit it: the check mark before its name in the sidebar (click it again to use none), **Set active** in its menu, or the **Set active** button in its tab.
 
 The active environment is remembered per workspace on this computer, not in the workspace files, so each teammate can pick their own.
 
 ### Editing environments
 
-Press <kbd>Mod</kbd>+<kbd>E</kbd>, or choose **Manage environments…** in the picker, to open **Environments & variables**. On the left are **Workspace variables**, **Globals** and your **Environments**, sorted by name; the active one has a highlighted icon.
+Environments have their own section in the sidebar: choose **Environments** in the left rail (the second icon, under **Collection**), press <kbd>Mod</kbd>+<kbd>E</kbd>, or choose **Manage environments…** in the picker. The last two also open the active environment (the first one when none is active, **Workspace variables** when there are none).
+
+The section lists **Workspace variables**, **Globals** and your **Environments** (with how many variables each has), and has a **Filter**. The active environment has a check mark before its name. Click a row to open it in a tab, like a request: the name at the top, the variable table under it, and what [scripts set](#values-set-by-scripts) below that. Several can be open at once.
 
 | To | Do |
 |---|---|
-| Create an environment | **+** next to **Environments**. It starts as "New environment" with no variables. |
-| Rename it | Edit the name at the top. Its file is renamed when you save. |
-| Copy it | **Duplicate**: "*name* copy", with all its variables, secret values included |
-| Delete it | **Delete**, then confirm. The file goes to your system's trash; its secret values and values set by scripts on this computer are deleted. |
+| Create an environment | **+** at the top of the section. It opens as "New environment" with no variables. |
+| Rename it | Edit the name at the top of its tab. Its file is renamed when you save. |
+| Make it active | The check mark before its name, **Set active** in its menu (right-click, or **⋯**), or **Set active** in its tab. The same again uses no environment. |
+| Copy it | **Duplicate**, in its menu or its tab: "*name* copy", with all its variables, secret values included |
+| Delete it | **Delete**, in its menu or its tab, then confirm. The file goes to your system's trash; its secret values and values set by scripts on this computer are deleted. |
 | Add a variable | Type in the empty last row: **Variable** and **Value** |
 | Switch a variable off | Clear its checkbox. It stays in the file but isn't defined. |
 | Make it secret | Choose the lock icon. See [Secrets](../secrets/). |
 | Reorder or remove | Drag the handle; the trash icon removes a row |
 
-Changes aren't saved until you choose **Save changes**. A dot marks every environment with unsaved changes; **Save changes** saves them all. Closing with unsaved changes asks **Discard changes?** Rows without a name are dropped when saving.
+Changes aren't saved until you save the tab: <kbd>Mod</kbd>+<kbd>S</kbd>, or the save button at the top right. Each tab is saved on its own. A dot marks a tab, and its row in the sidebar, while it has unsaved changes; closing such a tab, or opening another workspace, asks **Discard unsaved changes?** Rows without a name are dropped when saving. Unsaved changes to variables aren't kept when Zorvik restarts (they could hold secret values), so save before you quit.
+
+An environment that changes outside the app (a Git pull, an AI agent, an import) shows the change in its tab; a tab with unsaved changes keeps them.
 
 ### Environment files
 
@@ -120,7 +129,7 @@ variables:
 
 Workspace variables apply whichever environment is active, and are the fallback when no environment is active or the environment doesn't define a name. Use them for values that are the same everywhere, such as an API version or a page size.
 
-Edit them in **Environments & variables → Workspace variables**, with the same table as environments. They are stored in `zorvik.yaml`:
+Edit them under **Workspace variables** in the sidebar's **Environments** section. It opens in a tab with the same table as an environment, saved with <kbd>Mod</kbd>+<kbd>S</kbd>. They are stored in `zorvik.yaml`:
 
 ```yaml title="zorvik.yaml"
 version: 1
@@ -139,7 +148,7 @@ Scripts see workspace variables as `pm.collectionVariables`. Postman collection 
 
 Globals apply to **every workspace** on this computer, below environments and workspace variables. They are only ever set by scripts, with `pm.globals.set("name", "value")`, and never written to any workspace file.
 
-**Environments & variables → Globals** lists them; clear one with **×**, or all with **Clear all**. With none set, it says *No global values yet. Scripts set them with pm.globals.set; they apply to every workspace.*
+**Globals** in the sidebar's **Environments** section opens them in a tab; clear one with **×**, or all with **Clear all**. With none set, it says *No global values yet. Scripts set them with pm.globals.set; they apply to every workspace.*
 
 ## Values set by scripts
 
@@ -156,11 +165,13 @@ The matching `unset()` calls remove a kept value again.
 
 Kept values are **current values**: they live in the app data folder (`local-values.json`), **never in the workspace files**, so a token a login script stores never ends up in Git. In their scope they win over the file's value (and switch on a variable whose checkbox is cleared); a name the file doesn't have is added.
 
-Under the variable table of each environment and of the workspace variables, **Set by scripts** lists these values: *Current values from scripts. They override the values above, stay on this computer and are never written to workspace files.*
+In the tab of each environment and of the workspace variables, under the variable table, **Set by scripts** lists these values: *Current values from scripts. They override the values above, stay on this computer and are never written to workspace files.*
 
 - **×** next to a value forgets it; **Clear all** forgets all of that scope. The file's value applies again.
 - Values of variables marked secret stay hidden until you choose the eye icon.
 - Renaming an environment keeps its values; deleting it deletes them.
+
+In a [scenario](../../testing/scenarios/#a-scenarios-values-are-its-own), none of these calls keeps anything: what a script sets there is a value of the scenario, for the steps after it, and the environment, workspace variables and globals stay as they were.
 
 All values set by scripts together may take at most 32 MB. A script that would go past that keeps its values for the current send only, and the console says *Values set by scripts were not kept*.
 

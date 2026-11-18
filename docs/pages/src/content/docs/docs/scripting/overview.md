@@ -131,6 +131,8 @@ Scripts can set variables in four scopes. The table shows how long a value lasts
 
 "Kept on this computer" means the value is stored in the app's data folder, never in the workspace files, so tokens that scripts save don't end up in Git. These values win over the value in the file for the same variable. If no environment is active, `pm.environment.set` still works for the rest of the send, but the value is not kept, and the console shows: `No environment is active: values set with pm.environment are not kept.`
 
+In a [scenario](../../testing/scenarios/#a-scenarios-values-are-its-own), a value set with any of these calls becomes a value of the scenario: the steps after it see it, and nothing is kept on this computer or changed in the environment.
+
 Values are kept as text: numbers and booleans become their text form, objects and arrays become JSON. Within one send or one collection run, scripts get a number, array or object back as they set it, as in Postman; see [How values are stored](../pm-reference/#how-values-are-stored). See [Variables and environments](../../variables/variables-and-environments/) for how scopes are resolved.
 
 ## The console

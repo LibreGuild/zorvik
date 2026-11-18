@@ -9,6 +9,7 @@ import { api, errorMessage } from "../../lib/rpc";
 import { saveAsExample } from "../../store/examples";
 import { cancel, isRequestTab, type Tab, updateTab, useTabs } from "../../store/tabs";
 import { toast } from "../../store/toasts";
+import { showEnvironments } from "../../store/environments";
 import { openModal } from "../../store/ui";
 import { CodeEditor, type EditorLanguage } from "../CodeEditor";
 import { Badge, Banner, Button, cx, EmptyState, IconButton, Kbd, Segmented, Spinner, type TabItem, Tabs } from "../ui";
@@ -91,7 +92,7 @@ function ErrorView({ kind, code, message, durationMs }: { kind: ErrorKind | null
       <div className="flex items-center gap-2">
         {!undefinedVar && <span className="text-[11.5px] text-faint">after {formatMs(durationMs)}</span>}
         {undefinedVar && (
-          <Button size="sm" onClick={() => openModal({ type: "environments" })}>
+          <Button size="sm" onClick={() => showEnvironments()}>
             Open environments
           </Button>
         )}

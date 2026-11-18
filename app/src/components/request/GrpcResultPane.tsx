@@ -11,7 +11,7 @@ import { copyText, modKey } from "../../lib/platform";
 import { CALL_KIND_LABEL, callKind, cancelCall, endStream, type GrpcCall, grpcTone, MAX_MESSAGES, shortMethod, STATUS_MEANING, useGrpc } from "../../store/grpc";
 import { type Tab, updateTab } from "../../store/tabs";
 import { toast } from "../../store/toasts";
-import { openModal } from "../../store/ui";
+import { showEnvironments } from "../../store/environments";
 import { CodeEditor } from "../CodeEditor";
 import { HeaderTable } from "../response/ResponsePane";
 import { TimingView } from "../response/ResponseInfo";
@@ -87,7 +87,7 @@ function GrpcError({ kind, code, message, durationMs }: { kind: ErrorKind | null
       <div className="flex items-center gap-2">
         {!undefinedVar && <span className="text-[11.5px] text-faint">after {formatMs(durationMs)}</span>}
         {undefinedVar && (
-          <Button size="sm" onClick={() => openModal({ type: "environments" })}>
+          <Button size="sm" onClick={() => showEnvironments()}>
             Open environments
           </Button>
         )}

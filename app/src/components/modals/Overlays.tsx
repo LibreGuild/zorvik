@@ -61,6 +61,7 @@ export function Dialogs() {
           {current.message && <p className="text-[13px] text-muted">{current.message}</p>}
           <Input
             autoFocus
+            type={current.secret ? "password" : "text"}
             value={value}
             placeholder={current.placeholder}
             onChange={(e) => setValue(e.target.value)}

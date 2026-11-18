@@ -2,7 +2,7 @@
 title: Data files
 description: Drive a collection run with a CSV or JSON file, one iteration per row, and use each row's values as variables in requests and scripts.
 sidebar:
-  order: 2
+  order: 3
 ---
 
 A data file runs the same requests with different inputs: each row is one iteration of the run, and each column is a variable for that iteration. Use it to try a list of users, products or edge cases without copying requests.

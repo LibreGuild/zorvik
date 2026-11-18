@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-`zorvik mcp` offers 43 tools. Agents read their full JSON schemas (every field, unit and placeholder) from `tools/list`; this page is the human overview. The **Asks** column says when you are asked, with the default settings (see [Permissions and safety](../permissions-and-safety/)):
+`zorvik mcp` offers 50 tools. Agents read their full JSON schemas (every field, unit and placeholder) from `tools/list`; this page is the human overview. The **Asks** column says when you are asked, with the default settings (see [Permissions and safety](../permissions-and-safety/)):
 
 - **no**: never asks.
 - **edit**: an edit. Allowed by default; asks when **Edits by agents** is *Ask me*.
@@ -17,9 +17,9 @@ Every tool is annotated for the client: `readOnlyHint` (reads only), `destructiv
 ## Conventions
 
 - **Paths** of requests and folders are relative to the workspace's `requests/` folder, with `/` between folders, exactly as `list_requests` shows them: `Users/Get user.yaml`, `Users/Admin`. `""` means the whole collection.
-- **Names** of environments, load tests and servers match without regard to case; their file id works too.
-- **Long calls** (`run_collection`, `run_load_test`, the status tools) wait up to `waitSeconds` (default 45, at most 600) and then return a `runId` to poll. Some agents give up on a call after 60 seconds, hence the default.
-- **Strict input**: `save_requests`, `send_request` (with `request`), `save_server` and `save_load_test` refuse fields they don't know, name the nearest known one ("did you mean `status`?") and save nothing, so a typo is never saved silently.
+- **Names** of environments, load tests, scenarios and servers match without regard to case; their file id works too.
+- **Long calls** (`run_collection`, `run_scenario`, `run_load_test`, the status tools) wait up to `waitSeconds` (default 45, at most 600) and then return a `runId` to poll. Some agents give up on a call after 60 seconds, hence the default.
+- **Strict input**: `save_requests`, `send_request` (with `request`), `save_server` and `save_load_test` refuse fields they don't know, name the nearest known one ("did you mean `status`?") and save nothing, so a typo is never saved silently. `save_scenario` does the same and says where each unknown field is (`scenario.steps[0].outputs[0].pathh`).
 - **Redaction**: secret variable values come back as `{{name}}` and credential headers as `••••••`, in results and errors alike. See [Redaction](../permissions-and-safety/#redaction).
 - **No workspace open**: tools that need one fail with a message telling the agent to ask you which folder to use and call `open_workspace`.
 
@@ -27,9 +27,9 @@ Every tool is annotated for the client: `readOnlyHint` (reads only), `destructiv
 
 | Tool | What it does | Main inputs | Asks |
 |---|---|---|---|
-| `get_workspace` | The open workspace: name, folder, request and folder counts, environments and the active one, collection variable names, load test and server counts. With none open: the recent workspaces. The agent is told to call this first. | none | no |
+| `get_workspace` | The open workspace: name, folder, request and folder counts, environments and the active one, collection variable names, load test, scenario and server counts. With none open: the recent workspaces. The agent is told to call this first. | none | no |
 | `open_workspace` | Open another workspace folder, or create a workspace there. | `path` (absolute folder), `create` (make one when the folder isn't a workspace), `name` (of a new workspace) | always |
-| `open_in_app` | Show something in the Zorvik window: a request, a folder's runner, a load test, a server or the environments. It opens even when **Follow agents** is off. | one of `request`, `runner` (folder path), `loadTest`, `server`, `environments: true` | no |
+| `open_in_app` | Show something in the Zorvik window: a request, a folder's runner, a load test, a scenario, a server or the environments. It opens even when **Follow agents** is off. | one of `request`, `runner` (folder path), `loadTest`, `scenario`, `server`, `environments: true` | no |
 
 ## Requests and folders
 
@@ -39,8 +39,8 @@ Every tool is annotated for the client: `readOnlyHint` (reads only), `destructiv
 | `read_request` | Everything saved in one or more requests: URL, query and path parameters, headers, body, auth, scripts, settings, docs, examples. | `path`, or `paths` (up to 50) | no |
 | `save_requests` | Create or update up to 200 requests. Each goes into `folder` (created when missing) under its `name`; a request with that name there is updated. Only the fields given change, unless `replace: true`. Give `path` to update that exact request. | `requests[]`: `name`, `folder` or `path`, `kind`, `method`, `url`, `query`, `pathParams`, `headers`, `body`, `auth`, `scripts`, `settings`, `grpc`, `mcp`, `websocket`, `socketio`, `docs`, `examples`; `replace` | edit |
 | `save_folder_settings` | Auth, headers, scripts and docs that requests in a folder inherit, merged into what is there. `folder: ""` is the collection, which also has variables (merged by key). | `folder`, `auth`, `headers`, `scripts`, `docs`, `variables` | edit |
-| `move_item` | Move a request or folder to another folder and/or rename it. Load tests that send it follow. | `path`, `toFolder`, `newName` | edit |
-| `delete_items` | Move requests, folders, environments, load tests or servers to the trash. Deleting a load test also deletes its run history. | `paths`, `environments`, `loadTests`, `servers` | always |
+| `move_item` | Move a request or folder to another folder and/or rename it. Load tests and scenarios that send it follow. | `path`, `toFolder`, `newName` | edit |
+| `delete_items` | Move requests, folders, environments, load tests, scenarios or servers to the trash. Deleting a load test also deletes its run history. | `paths`, `environments`, `loadTests`, `scenarios`, `servers` | always |
 | `export_request` | A request as a ready-to-run command or code: cURL for bash (`curl`), Windows cmd (`curlCmd`) or PowerShell (`curlPowerShell`), or code: `javascript` (fetch), `javascriptAxios`, `python` (requests), `pythonHttpx`, `go`, `java`, `kotlin` (OkHttp), `swift`, `csharp`, `php`, `ruby`, `rust`, `dart`, `c` (libcurl), `powerShell`, `httpie` or `wget`. Comments at the top say what the code can't do that Zorvik does (answer a Digest challenge, sign each request). Variables are filled in unless `resolveVariables: false`; secret values come back as `••••••` (you can copy the full version in Zorvik). | `path` or `request` (+ `folder`), `format`, `resolveVariables` | no |
 
 Request fields for `save_requests` and `send_request`:
@@ -115,8 +115,26 @@ To keep a large JSON response short, give `send_request` a `filter`: `{language:
 | Tool | What it does | Main inputs | Asks |
 |---|---|---|---|
 | `run_collection` | Run the requests of a folder (or the collection) with their scripts and tests, like the Runner tab, which shows it live. Returns the summary and the failures (up to 50), or a `runId` if it runs longer than `waitSeconds`. | `folder`, `requests` (only these paths, in this order), `iterations`, `delayMs`, `dataFile` (inside the workspace), `stopOnFailure`, `waitSeconds` | traffic |
-| `get_run_status` | A run's summary and failures once finished; waits up to `waitSeconds`. | `runId`, `waitSeconds` | no |
-| `stop_collection_run` | Stop the run in progress. | `runId` | no |
+| `get_run_status` | A run's summary and failures once finished; waits up to `waitSeconds`. Also for a scenario's run. | `runId`, `waitSeconds` | no |
+| `stop_collection_run` | Stop the run in progress, a collection run or a scenario's. | `runId` | no |
+
+## Scenarios
+
+| Tool | What it does | Main inputs | Asks |
+|---|---|---|---|
+| `list_scenarios` | Saved [scenarios](../../testing/scenarios/): id, name and number of steps. | none | no |
+| `read_scenario` | A scenario's variables, steps, settings and docs, in the shape `save_scenario` takes, and the values its last run left (secret ones hidden). | `name` | no |
+| `save_scenario` | Create or replace a scenario. Its request steps send requests that are saved in the collection (save them first with `save_requests`); a request path that isn't there, or a scenario step naming a scenario that isn't saved, is refused. | `name`, `scenario {variables, steps, always, dataFile, iterations, continueOnFailure, docs}` | edit |
+| `run_scenario` | Run a saved scenario, like its tab, which shows the run live. Returns the summary, the failures (up to 50), what each step did with the values it saved (`steps`, up to 200) and the values the run left (`values`), or a `runId` if it runs longer than `waitSeconds` (poll with `get_run_status`, stop with `stop_collection_run`). `toStep` runs from the start up to and including one step; `onlyStep` runs one step with the values the last run left. | `name`, `variables` (`{name: value}` for this run), `toStep`, `onlyStep`, `waitSeconds` | traffic |
+
+The `scenario` object uses the [scenario file format](../../reference/workspace-format/#scenarios-scenariosyaml): `steps[]` (and `always[]`), each with a `type` (`request`, `if`, `forEach`, `repeat`, `parallel`, `set`, `wait`, `stop`, `scenario`, `script`, `ask`) and that type's fields. A step that runs another scenario may name it by its name; the file keeps its id.
+
+- **Passing values**: an output on one step (`{variable: "cartId", path: "$.id"}`) and `{{cartId}}` in a later request, or as an input of a later step.
+- **Steps are addressed by their place**: `steps/2` is the third step, `steps/2/steps/0` the first step inside it, `steps/2/elseIf/0/1`, `steps/2/else/0` and `always/0` the same way. `toStep`, `onlyStep` and each result's `step` use these paths.
+- **`variables`** win over the scenario's own values and every other variable, and answer its **ask** steps: an agent's run can't ask you, so an ask step without a value fails.
+- **A scenario's values stay its own**: the environment and collection variables are read, never changed, and nothing is kept as after `send_request`. Secret values and outputs marked `secret` come back hidden.
+- An agent's run never starts a program (an MCP request over stdio), like `run_collection`.
+- `run_scenario` asks about the hosts of every request the scenario can send, those of the scenarios it runs too (see [Host approvals](../permissions-and-safety/#host-approvals)).
 
 ## Load tests
 
@@ -151,7 +169,7 @@ WebSocket servers in `save_server` take everything the app has: `websocket.rules
 |---|---|---|---|
 | `read_history` | Requests sent from Zorvik (by you or by agents), newest first: method, URL, status, time, size, and for the last 50 sends the response headers and body. | `limit` (default 20, at most 100), `path`, `search`, `maxBodyChars` (default 4,000, at most 20,000; 0 for none) | no |
 | `read_console` | The app's [console](../../requests/console/), oldest first: every request Zorvik sent since it started or the console was cleared (yours, collection runs', agents', scripts' `pm.sendRequest` and OAuth 2.0 token requests) with the headers and body that went out and came back, connections opening and closing, and what scripts logged. The way to see why a request failed. Token requests come without their headers and bodies. | `limit` (the newest lines; default 50, at most 200), `search`, `errorsOnly`, `kind` (`all`, `requests` or `logs`), `details` (default true), `maxBodyChars` (default 4,000, at most 20,000; 0 for none) | no |
-| `write_file` | Put a file of up to 10 MB into the workspace folder: a sample upload, a CSV or JSON data file, a `.proto` file. An existing file is replaced only with `overwrite: true`. It can't write outside the workspace, through a symbolic link, or into `zorvik.yaml`, `requests/`, `environments/`, `servers/`, `loadtests/` or `.git`. | `path` (relative, `/` between folders), `text` or `base64`, `overwrite` | edit |
+| `write_file` | Put a file of up to 10 MB into the workspace folder: a sample upload, a CSV or JSON data file, a `.proto` file. An existing file is replaced only with `overwrite: true`. It can't write outside the workspace, through a symbolic link, or into `zorvik.yaml`, `requests/`, `environments/`, `servers/`, `loadtests/`, `scenarios/` or `.git`. | `path` (relative, `/` between folders), `text` or `base64`, `overwrite` | edit |
 
 ## What agents can't do
 

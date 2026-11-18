@@ -1,16 +1,17 @@
 // A runner tab: header (run/stop, status), settings on the left (requests, iterations,
 // data file, options) and results on the right; one pane at a time when narrow.
 import { useMemo } from "react";
-import { ListChecks, Loader2, Play, Square } from "lucide-react";
+import { ListChecks, Loader2, Play, Square, Workflow } from "lucide-react";
 import type { TreeNode } from "../../bindings/TreeNode";
 import { modKey } from "../../lib/platform";
 import { liveCounts, progress, runnableRequests, selectedPaths, settingsOf, startProblem, startRun, stopRun, useRunner } from "../../store/runner";
+import { scenarioFromRequests } from "../../store/scenarios";
 import { type RunnerTab, updateRunnerTab } from "../../store/tabs";
 import { useUi } from "../../store/ui";
 import { useWorkspace } from "../../store/workspace";
 import { useElementWidth } from "../loadtests/parts";
 import { Splitter } from "../Splitter";
-import { Banner, Button, cx, Segmented, Tooltip } from "../ui";
+import { Banner, Button, cx, IconButton, Segmented, Tooltip } from "../ui";
 import { RunnerResults } from "./RunnerResults";
 import { RunnerSettingsPane } from "./RunnerSettings";
 
@@ -71,6 +72,16 @@ export function RunnerView({ tab }: { tab: RunnerTab }) {
             </Button>
           </span>
         </Tooltip>
+        <IconButton
+          label="Save as a scenario: these requests in this order, as steps you can pass values between"
+          disabled={!entries || !selectedPaths(entries, settings).length}
+          onClick={() => entries && void scenarioFromRequests(title, selectedPaths(entries, settings))}
+          size={36}
+          className="rounded-xl"
+          data-testid="runner-to-scenario"
+        >
+          <Workflow size={16} />
+        </IconButton>
       </div>
       <Progress tabId={tab.id} />
       {narrow && (

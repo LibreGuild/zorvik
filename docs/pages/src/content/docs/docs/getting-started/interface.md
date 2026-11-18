@@ -11,7 +11,7 @@ With a workspace open, the window has these parts:
 
 1. **The title bar** at the top: the workspace, the active environment and app-wide controls.
 2. **The left rail**: icons that switch what the sidebar shows.
-3. **The sidebar**: the collection, load tests, servers, tools, history, AI agents or docs.
+3. **The sidebar**: the collection, environments, scenarios, load tests, servers, history, tools, AI agents or docs.
 4. **The tab bar**: everything you have open.
 5. **The work area**: for a request, the request editor and its response.
 6. **The console**, when you open it, under the work area: every request Zorvik sends and what scripts log.
@@ -34,7 +34,7 @@ Zorvik draws its own title bar. Drag any empty part of it to move the window. On
 | Agent name, e.g. **Claude Code** | An AI agent is connected | Shows the agent's activity in the **AI agents** sidebar; a number shows how many questions wait for you. The square button disconnects the agent. See [AI agents](../../agents/setup/). |
 | **Load test** and a timer | A load test runs | Opens the load test; the square button stops it |
 | **N running** | Servers are running | Lists every running server, in any workspace, to open or stop them; **Stop all** stops them all |
-| Environment picker | Always | Shows the active environment (or **No environment**). Choose another one, or **Manage environments…**. See [Variables & environments](../../variables/variables-and-environments/). |
+| Environment picker | Always | Shows the active environment (or **No environment**). Choose another one, or **Manage environments…** to see them in the sidebar and open the active one. See [Variables & environments](../../variables/variables-and-environments/). |
 | Cookie icon | Always | The workspace's cookie jar. See [Cookies](../../requests/cookies/). |
 | Theme icon | Always | Cycles the theme: match system → dark → light |
 | Keyboard icon | Always | The list of keyboard shortcuts |
@@ -42,15 +42,17 @@ Zorvik draws its own title bar. Drag any empty part of it to move the window. On
 
 ## Left rail and sidebar
 
-The rail on the far left switches the sidebar between seven sections. Hover an icon to see its name.
+The rail on the far left switches the sidebar between nine sections, in groups: what you build (the collection and its environments), what you run against it (scenarios, load tests, servers), what you look things up with (history, tools), then AI agents and docs. Hover an icon to see its name.
 
 | Section | Shows |
 |---|---|
-| **Collection** | The requests and folders of the workspace, with **Filter** and **+** (new request, new folder, import, run, mock, load test). See [Workspaces](../workspaces/#requests). |
+| **Collection** | The requests and folders of the workspace, with **Filter** and **+** (new request, new folder, import, run, scenario, mock, load test). See [Workspaces](../workspaces/#requests). |
+| **Environments** | **Workspace variables**, **Globals** and the workspace's environments. Each opens in a tab; the check mark before an environment makes it the active one. See [Variables & environments](../../variables/variables-and-environments/#editing-environments). |
+| **Scenarios** | The workspace's scenarios: saved requests run as steps that pass values to each other. A pulsing dot on the icon means one is running. See [Scenarios](../../testing/scenarios/). |
 | **Load tests** | The workspace's load tests. A pulsing dot on the icon means one is running. See [Load testing](../../load-testing/overview/). |
 | **Servers** | Mock APIs and other servers. A badge on the icon counts the running ones. See [Mock servers](../../servers/mock-api/). |
-| **Tools** | Tools that open in their own tab: **TLS inspector**, **DNS lookup**, **Port check**, **Ping**, **Network interfaces**, **Encoders**, **HTTP/3 check**, **Certificate decoder**, **JSON compare**, **Filter playground** and **Regex tester**. See [Network tools](../../tools/network-tools/) |
 | **History** | Every request you sent in this workspace. See [Responses](../../requests/responses/#history). |
+| **Tools** | Tools that open in their own tab: **TLS inspector**, **DNS lookup**, **Port check**, **Ping**, **Network interfaces**, **Encoders**, **HTTP/3 check**, **Certificate decoder**, **JSON compare**, **Filter playground** and **Regex tester**. See [Network tools](../../tools/network-tools/) |
 | **AI agents** | What connected agents do, and how to connect one. A green dot on the icon means an agent is connected. See [AI agents](../../agents/setup/). |
 | **Docs** | Short in-app docs for every feature |
 
@@ -60,12 +62,12 @@ At the foot of the rail, the **Console** button (<kbd>Mod</kbd>+<kbd>J</kbd>) sh
 
 ## Tabs
 
-Every request, server, load test, collection run and tool opens in a tab.
+Every request, server, scenario, load test, collection run and tool opens in a tab.
 
 - **New tab**: the **+** at the right end of the tab bar offers every kind of request. <kbd>Mod</kbd>+<kbd>N</kbd> opens a new HTTP request.
 - **Badges**: a request tab shows its method (or `GQL`, `WS`, `SSE`, `TCP`, `UDP`, `DNS`, `MQTT`, `gRPC`, `SIO`), servers and load tests their kind. Hover a tab to see its file.
 - **Unsaved**: a tab that was never saved shows its name in italics. A tab with unsaved changes shows a dot where the close button is; hover it to close.
-- **Live**: a green dot means a connection is open or a request is running; a pulsing dot means a load test or collection run is going.
+- **Live**: a green dot means a connection is open or a request is running; a pulsing dot means a load test, a scenario or a collection run is going.
 - **Close**: <kbd>Mod</kbd>+<kbd>W</kbd>, the **×**, or a middle click. Right-click a tab for **Close** and **Close others**. Closing a tab with unsaved changes asks **Discard unsaved changes?** A new tab you haven't typed anything into closes without asking.
 - **Switch**: click a tab, or press <kbd>Ctrl</kbd>+<kbd>Tab</kbd> (next) and <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> (previous). This is <kbd>Ctrl</kbd> on every system, also on macOS.
 
@@ -73,7 +75,7 @@ Opening a request that already has a tab switches to that tab. Tabs are remember
 
 ## Command palette
 
-Press <kbd>Mod</kbd>+<kbd>K</kbd> (or <kbd>Mod</kbd>+<kbd>P</kbd>) to open **Go to**. Type to search requests, load tests, servers and tools; it also has **Run collection** and **Open the Academy**.
+Press <kbd>Mod</kbd>+<kbd>K</kbd> (or <kbd>Mod</kbd>+<kbd>P</kbd>) to open **Go to**. Type to search requests, scenarios, load tests, servers and tools; it also has **Run collection**, **New scenario** and **Open the Academy**.
 
 - Every word you type must appear in the item's name, its folder path or its kind. For example, `users post` finds POST requests in a `Users` folder, and `server` lists all servers.
 - <kbd>↑</kbd> and <kbd>↓</kbd> move, <kbd>Enter</kbd> opens, <kbd>Esc</kbd> closes.
@@ -85,13 +87,13 @@ While another dialog is open, <kbd>Mod</kbd>+<kbd>K</kbd> does nothing, so unsav
 
 | Shortcut | Does |
 |---|---|
-| <kbd>Mod</kbd>+<kbd>Enter</kbd> | Send the request, connect, start the server, start the load test, or start and stop a collection run |
+| <kbd>Mod</kbd>+<kbd>Enter</kbd> | Send the request, connect, start the server, start the load test, or start and stop a collection run or a scenario |
 | <kbd>Mod</kbd>+<kbd>S</kbd> | Save |
 | <kbd>Mod</kbd>+<kbd>N</kbd> | New HTTP request |
 | <kbd>Mod</kbd>+<kbd>W</kbd> | Close the tab |
 | <kbd>Mod</kbd>+<kbd>K</kbd> or <kbd>Mod</kbd>+<kbd>P</kbd> | Command palette |
 | <kbd>Mod</kbd>+<kbd>L</kbd> | Jump to the URL field |
-| <kbd>Mod</kbd>+<kbd>E</kbd> | Environments & variables |
+| <kbd>Mod</kbd>+<kbd>E</kbd> | Environments: shows them in the sidebar and opens the active one |
 | <kbd>Mod</kbd>+<kbd>J</kbd> | Show or hide the console |
 | <kbd>Mod</kbd>+<kbd>,</kbd> | Settings |
 | <kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> | Next / previous tab |

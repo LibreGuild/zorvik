@@ -1,6 +1,6 @@
 // Docs illustrations (assets/docs/*.webp, generated for Zorvik) and topic icons.
 import type { ReactNode } from "react";
-import { Activity, Bot, Boxes, Braces, BrainCircuit, FolderGit2, GraduationCap, Import, KeyRound, ListChecks, Radio, Send, Server, Terminal, TestTubeDiagonal, Variable, Wrench } from "lucide-react";
+import { Activity, Bot, Boxes, Braces, BrainCircuit, FolderGit2, GraduationCap, Import, KeyRound, ListChecks, Radio, Send, Server, Terminal, TestTubeDiagonal, Variable, Workflow, Wrench } from "lucide-react";
 
 const images = import.meta.glob("../../assets/docs/*.webp", { eager: true, query: "?url", import: "default" }) as Record<string, string>;
 
@@ -17,6 +17,7 @@ export const TOPIC_ICONS: Record<string, (size: number) => ReactNode> = {
   auth: (s) => <KeyRound size={s} />,
   scripts: (s) => <TestTubeDiagonal size={s} />,
   runner: (s) => <ListChecks size={s} />,
+  scenarios: (s) => <Workflow size={s} />,
   load: (s) => <Activity size={s} />,
   servers: (s) => <Server size={s} />,
   tools: (s) => <Wrench size={s} />,

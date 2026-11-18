@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { ListChecks, Plus, X } from "lucide-react";
+import { Globe, Globe2, Layers, ListChecks, Plus, Workflow, X } from "lucide-react";
 import { GRAPHQL_BADGE, methodColor, methodLabel } from "../../lib/http";
 import { modKey } from "../../lib/platform";
 import { runFor, useLoadTests } from "../../store/loadtests";
@@ -14,7 +14,10 @@ import {
   isLoadTestTab,
   isRequestTab,
   isRunnerTab,
+  isScenarioTab,
   isServerTab,
+  isToolTab,
+  isVariablesTab,
   newRequest,
   tabTitle,
   useTabs,
@@ -76,7 +79,7 @@ function onTabKey(e: React.KeyboardEvent<HTMLElement>, id: string) {
 const TabItem = memo(function TabItem({ tab: t, active, focusable }: { tab: AnyTab; active: boolean; focusable: boolean }) {
   const running = useServers((s) => (isServerTab(t) ? !!runningFor(t.serverId, s.running) : false));
   const loadRunning = useLoadTests((s) => (isLoadTestTab(t) ? !!runFor(t.testId, s.active) : false));
-  const collectionRunning = useRunner((s) => isRunnerTab(t) && s.active === t.id);
+  const collectionRunning = useRunner((s) => (isRunnerTab(t) || isScenarioTab(t)) && s.active === t.id);
   const dirty = isDirty(t);
   let badge: React.ReactNode;
   let title: string;
@@ -106,12 +109,18 @@ const TabItem = memo(function TabItem({ tab: t, active, focusable }: { tab: AnyT
   } else if (isRunnerTab(t)) {
     badge = <ListChecks size={12} className="shrink-0 text-accent" />;
     title = `Run · ${t.folder ? `requests/${t.folder}` : "the whole collection"}`;
+  } else if (isScenarioTab(t)) {
+    badge = <Workflow size={12} className="shrink-0 text-accent" />;
+    title = `Scenario · scenarios/${t.scenarioId}.yaml`;
+  } else if (isVariablesTab(t)) {
+    badge = <span className="shrink-0 text-accent">{t.scope === "environment" ? <Globe2 size={12} /> : t.scope === "workspace" ? <Layers size={12} /> : <Globe size={12} />}</span>;
+    title = t.scope === "environment" ? `Environment · environments/${t.envId}.yaml` : t.scope === "workspace" ? "Workspace variables · zorvik.yaml" : "Globals · values scripts set, kept on this computer";
   } else {
     const tool = toolInfo(t.tool);
     badge = <span className="shrink-0 text-muted">{tool?.icon(12)}</span>;
     title = tool?.label ?? t.tool;
   }
-  const name = isRequestTab(t) || isServerTab(t) || isLoadTestTab(t) || isRunnerTab(t) ? tabTitle(t) : (toolInfo(t.tool)?.label ?? t.tool);
+  const name = isToolTab(t) ? (toolInfo(t.tool)?.label ?? t.tool) : tabTitle(t);
   return (
     <ContextMenu
       entries={[

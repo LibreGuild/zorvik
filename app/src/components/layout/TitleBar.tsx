@@ -13,8 +13,9 @@ import { stopLoadRun, useLoadTests } from "../../store/loadtests";
 import { saveSettings, useSettings } from "../../store/settings";
 import { newVersion, useUpdates } from "../../store/updates";
 import { stopAllServers, stopServer, useServers } from "../../store/servers";
-import { openLoadTest, openServer, resetTabs, restoreTabs } from "../../store/tabs";
+import { leaveTabs, openLoadTest, openServer, resetTabs, restoreTabs } from "../../store/tabs";
 import { toast } from "../../store/toasts";
+import { showEnvironments } from "../../store/environments";
 import { openModal, useUi } from "../../store/ui";
 import { closeWorkspace, openOrInitWorkspace, setActiveEnvironment, useWorkspace } from "../../store/workspace";
 import { formatDuration } from "../loadtests/model";
@@ -97,6 +98,7 @@ function WorkspaceMenu() {
   const recent = useWorkspace((s) => s.recent);
   const bootcamp = useInBootcamp();
   const switchTo = async (path: string) => {
+    if (!(await leaveTabs())) return;
     resetTabs();
     try {
       await openOrInitWorkspace(path);
@@ -149,6 +151,7 @@ function WorkspaceMenu() {
           label: "Close workspace",
           icon: <LogOut size={14} />,
           onSelect: async () => {
+            if (!(await leaveTabs())) return;
             resetTabs();
             await closeWorkspace();
           },
@@ -382,7 +385,7 @@ function EnvironmentPicker() {
             </DropdownMenu.Item>
           ))}
           <DropdownMenu.Separator className="my-1 h-px bg-line" />
-          <DropdownMenu.Item onSelect={() => openModal({ type: "environments", focus: info.activeEnvironment ?? undefined })} className={item}>
+          <DropdownMenu.Item onSelect={() => showEnvironments()} className={item}>
             <span className="w-4" />
             Manage environments…
           </DropdownMenu.Item>

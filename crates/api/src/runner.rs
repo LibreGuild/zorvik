@@ -37,7 +37,7 @@ pub const MAX_ITERATIONS: u32 = 100_000;
 /// Longest pause between two requests (10 minutes).
 pub const MAX_DELAY_MS: u64 = 600_000;
 /// Requests one iteration may send (a `setNextRequest` loop ends here).
-const MAX_STEPS: usize = 10_000;
+pub(crate) const MAX_STEPS: usize = 10_000;
 /// Console lines kept per result, and characters per line.
 const MAX_CONSOLE: usize = 200;
 const MAX_CONSOLE_LINE: usize = 4096;
@@ -129,10 +129,47 @@ pub struct RunResult {
     /// The result's number in its run (1, 2, …): `runner.details` gives what it sent and got.
     #[serde(default)]
     pub seq: u32,
+    /// Scenario runs: the step this is the result of.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub step: Option<Box<StepInfo>>,
     /// What it sent and got, kept by the app while the run is (not in reports).
     #[serde(skip)]
     #[ts(skip)]
     pub details: Option<Arc<RunDetails>>,
+}
+
+/// The step of a scenario a result belongs to.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct StepInfo {
+    /// Where the step is in the scenario (`steps/2/else/0`); steps of a scenario it runs
+    /// follow a `>`.
+    pub path: String,
+    pub kind: zorvik_workspace::formats::StepKind,
+    /// How deep it is inside other steps (0: the scenario's own list).
+    pub depth: u32,
+    /// What a flow step decided or which round this is: "else", "3 items", "2 of 3".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub note: Option<String>,
+    /// The values the step saved for the steps after it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<SavedValue>>")]
+    pub saved: Vec<SavedValue>,
+}
+
+/// A value a scenario step saved. Long values are cut; secret ones are hidden.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SavedValue {
+    pub key: String,
+    pub value: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(optional, as = "Option<bool>")]
+    pub secret: bool,
 }
 
 /// What a result's request sent and what came back, secret values shown as `{{name}}`.
@@ -300,6 +337,9 @@ pub enum RunEvent {
     Result { result: Box<RunResult> },
     #[serde(rename_all = "camelCase")]
     Finished { summary: RunSummary },
+    /// A scenario step waits for a value from the user (`scenario.answer` gives it).
+    #[serde(rename_all = "camelCase")]
+    Ask { variable: String, message: String, secret: bool },
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -308,7 +348,7 @@ pub enum RunEvent {
 pub struct RunStarted {
     pub run_id: String,
     pub name: String,
-    /// Requests if every iteration goes through the list once.
+    /// Requests if every iteration goes through the list once (0: not known, a scenario).
     pub total: u32,
     pub iterations: u32,
     pub environment: Option<String>,
@@ -420,10 +460,10 @@ pub fn mask_secrets(url: &str, secrets: &[(String, String)]) -> String {
 
 /// Secret values to hide in reported URLs: the values when the run started, and
 /// what scripts have set those variables to since (e.g. a token from a login).
-fn secret_values(plan: &RunPlan, vars: &ScriptVars) -> Vec<(String, String)> {
+pub(crate) fn secret_values(secrets: &[(String, String)], vars: &ScriptVars) -> Vec<(String, String)> {
     let v = &vars.values;
-    let mut out = plan.secrets.clone();
-    for (key, _) in &plan.secrets {
+    let mut out = secrets.to_vec();
+    for (key, _) in secrets {
         for scope in [&v.overrides, &v.local, &v.environment, &v.collection, &v.globals] {
             if let Some(value) = scope.get(key) {
                 out.push((key.clone(), value.clone()));
@@ -477,29 +517,10 @@ pub async fn run(
                 break 'run;
             }
             steps += 1;
-            let request = match &item.request {
-                Ok(r)
-                    if matches!(
-                        r.kind,
-                        RequestKind::Http
-                            | RequestKind::Sse
-                            | RequestKind::Mcp
-                            | RequestKind::Websocket
-                            | RequestKind::SocketIo
-                            | RequestKind::Grpc
-                    ) =>
-                {
-                    r
-                }
-                other => {
-                    let mut result = base_result(item, index);
-                    match other {
-                        Ok(r) => {
-                            result.skipped = true;
-                            result.skip_reason = Some(skip_reason(r.kind));
-                        }
-                        Err(e) => result.error = Some(format!("The request can't be read: {e}")),
-                    }
+            let request = match sendable(item, index) {
+                Ok(request) => request,
+                Err(result) => {
+                    let mut result = *result;
                     result.passed = verdict(&result, plan.allow_http_errors);
                     seq += 1;
                     result.seq = seq;
@@ -527,143 +548,14 @@ pub async fn run(
                 }
             }
             sent_any = true;
-            // "Repeat until": send again after a pause while the condition doesn't hold.
-            let repeat = request.settings.repeat.as_ref();
-            let condition = repeat.and_then(|r| condition_script(&r.condition));
-            let repeat_started = Instant::now();
-            let mut attempts = 0u32;
-            let (mut t0, mut scripted, repeat_failure) = loop {
-                attempts += 1;
-                let t0 = Instant::now();
-                let mut scripted = tokio::select! {
-                    // Boxed: the whole pipeline is a big future (debug builds would overflow the stack).
-                    r = Box::pin(send_scripted_with(cx, request.clone(), Some(&item.path), vars, iteration, condition.clone())) => r,
-                    _ = cancel.cancelled() => {
-                        stopped = true;
-                        iteration_times.push(iteration_started.elapsed());
-                        break 'run;
-                    }
-                };
-                let Some(repeat) = repeat else { break (t0, scripted, None) };
-                let check = take_condition(&mut scripted, &repeat.condition);
-                let waited = repeat_started.elapsed();
-                let interval = Duration::from_millis(repeat.interval_ms);
-                match check {
-                    Check::Met => break (t0, scripted, None),
-                    Check::Broken => break (t0, scripted, Some(String::new())),
-                    Check::NotYet(why) if waited + interval > Duration::from_millis(repeat.timeout_ms) => {
-                        let what = if repeat.condition.trim().is_empty() {
-                            "its tests didn't pass".to_string()
-                        } else {
-                            format!("`{}` didn't hold", repeat.condition.trim())
-                        };
-                        let why = why.map(|w| format!(" (last: {w})")).unwrap_or_default();
-                        let message = format!(
-                            "Repeat until: {what} after {} in {:.1} s{why}",
-                            plural(attempts as usize, "send"),
-                            waited.as_secs_f64()
-                        );
-                        break (t0, scripted, Some(message));
-                    }
-                    Check::NotYet(_) => {}
-                }
-                tokio::select! {
-                    _ = tokio::time::sleep(interval) => {}
-                    _ = cancel.cancelled() => {
-                        stopped = true;
-                        iteration_times.push(iteration_started.elapsed());
-                        break 'run;
-                    }
-                }
+            // Boxed: the whole pipeline is a big future (debug builds would overflow the stack).
+            let sending = Box::pin(send_item(cx, item, request, vars, iteration, &plan.secrets, cancel)).await;
+            let Some(Sending { mut result, next, .. }) = sending else {
+                stopped = true;
+                iteration_times.push(iteration_started.elapsed());
+                break 'run;
             };
-            if repeat.is_some() {
-                t0 = repeat_started.min(t0);
-            }
-            let mut result = base_result(item, index);
-            if repeat.is_some() {
-                result.attempts = Some(attempts);
-            }
-            let stream = scripted.result.as_ref().ok().and_then(|s| s.stream);
-            let report = scripted.report.take().unwrap_or_default();
-            let described: Vec<String> = report.errors.iter().map(|e| e.describe()).collect();
-            let secrets = secret_values(plan, vars);
-            let body_of = |request: &Request| {
-                let text = request.body.text.trim();
-                (request.body.body_type != zorvik_workspace::formats::BodyType::None && !text.is_empty()).then(|| {
-                    let rendered = vars.var_context().render(text, &mut std::collections::BTreeSet::new());
-                    cut_text(rendered.as_bytes()).0
-                })
-            };
-            match scripted.result {
-                Ok(sent) => {
-                    let response = &sent.response;
-                    let (body, body_truncated) = cut_text(&response.body);
-                    let details = RunDetails {
-                        method: response.meta.request.method.clone(),
-                        url: sent.url.clone(),
-                        request_headers: response.meta.request.headers.clone(),
-                        request_body: sent.sent_body.clone(),
-                        response: Some(RunResponse {
-                            status: response.meta.status,
-                            status_text: response.meta.status_text.clone(),
-                            http_version: response.meta.http_version.clone(),
-                            headers: response.meta.headers.clone(),
-                            body,
-                            body_truncated: body_truncated || response.body_truncated,
-                            size: response.body.len() as u64,
-                            timing: response.timing.clone(),
-                        }),
-                    };
-                    result.details = Some(Arc::new(details.masked(&secrets)));
-                    // A script may change the method; other kinds keep their label (MCP, WS, IO).
-                    if matches!(sent.request.kind, RequestKind::Http | RequestKind::Sse) {
-                        result.method = sent.request.method.clone();
-                    }
-                    result.url = mask_secrets(&sent.url, &secrets);
-                    result.status = Some(sent.response.meta.status);
-                    result.duration_ms = Some(sent.response.timing.total_ms);
-                    result.size = Some(sent.response.body.len().min(u32::MAX as usize) as u32);
-                    result.unresolved = sent.unresolved;
-                    result.script_errors = described;
-                }
-                // `pm.execution.skipRequest()`: not sent, and not a failure.
-                Err(e) if e.code == crate::scripting::SKIPPED => {
-                    result.skipped = true;
-                    result.skip_reason = Some(e.message);
-                }
-                Err(e) => {
-                    if let Ok(request) = &item.request {
-                        let render = |t: &str| vars.var_context().render(t, &mut std::collections::BTreeSet::new());
-                        let details = RunDetails {
-                            method: request.method.clone(),
-                            url: render(&request.url),
-                            request_headers: request
-                                .headers
-                                .iter()
-                                .filter(|h| h.enabled && !h.key.trim().is_empty())
-                                .map(|h| zorvik_engine::Header::new(render(&h.key), render(&h.value)))
-                                .collect(),
-                            request_body: body_of(request),
-                            response: None,
-                        };
-                        result.details = Some(Arc::new(details.masked(&secrets)));
-                    }
-                    result.duration_ms = Some(t0.elapsed().as_secs_f64() * 1000.0);
-                    result.script_errors = described.into_iter().filter(|d| *d != e.message).collect();
-                    result.error = Some(e.message);
-                }
-            }
-            result.tests = report.tests;
-            result.console = bounded_console(report.console);
-            if let Some((events, end)) = stream {
-                result.console.push(ConsoleEntry { level: ConsoleLevel::Info, message: stream_note(events, end) });
-            }
-            if let Some(message) = repeat_failure.filter(|m| !m.is_empty())
-                && result.error.is_none()
-            {
-                result.error = Some(message);
-            }
-            at = match next_step(&plan.items, at.unwrap_or_default(), scripted.next_request.as_ref()) {
+            at = match next_step(&plan.items, at.unwrap_or_default(), next.as_ref()) {
                 Ok(next) => next,
                 Err(name) => {
                     result.console.push(ConsoleEntry {
@@ -710,6 +602,189 @@ pub async fn run(
     summary.passed = summary.failed == 0 && error.is_none();
     summary.error = error;
     RunReport { summary, results }
+}
+
+/// The request of `item` when the runner can send it; otherwise its result: skipped (a kind
+/// the runner doesn't send) or failed (a file that can't be read), without the verdict.
+pub(crate) fn sendable(item: &RunItem, iteration: u32) -> Result<&Request, Box<RunResult>> {
+    match &item.request {
+        Ok(r)
+            if matches!(
+                r.kind,
+                RequestKind::Http
+                    | RequestKind::Sse
+                    | RequestKind::Mcp
+                    | RequestKind::Websocket
+                    | RequestKind::SocketIo
+                    | RequestKind::Grpc
+            ) =>
+        {
+            Ok(r)
+        }
+        other => {
+            let mut result = base_result(item, iteration);
+            match other {
+                Ok(r) => {
+                    result.skipped = true;
+                    result.skip_reason = Some(skip_reason(r.kind));
+                }
+                Err(e) => result.error = Some(format!("The request can't be read: {e}")),
+            }
+            Err(Box::new(result))
+        }
+    }
+}
+
+/// One request of a run, sent.
+pub(crate) struct Sending {
+    /// Without the verdict (`passed`) and the number (`seq`): the caller's.
+    pub result: RunResult,
+    /// The last `setNextRequest` of its scripts.
+    pub next: Option<NextRequest>,
+    /// What came back, when something did.
+    pub response: Option<zorvik_engine::HttpResponse>,
+}
+
+/// Send one request of a run with its scripts, again while its "repeat until" doesn't hold.
+/// `None`: the run was stopped meanwhile (nothing is reported).
+pub(crate) async fn send_item(
+    cx: &SendContext<'_>,
+    item: &RunItem,
+    request: &Request,
+    vars: &mut ScriptVars,
+    iteration: Iteration,
+    secrets: &[(String, String)],
+    cancel: &CancellationToken,
+) -> Option<Sending> {
+    // "Repeat until": send again after a pause while the condition doesn't hold.
+    let repeat = request.settings.repeat.as_ref();
+    let condition = repeat.and_then(|r| condition_script(&r.condition));
+    let repeat_started = Instant::now();
+    let mut attempts = 0u32;
+    let (mut t0, mut scripted, repeat_failure) = loop {
+        attempts += 1;
+        let t0 = Instant::now();
+        let mut scripted = tokio::select! {
+            // Boxed: the whole pipeline is a big future (debug builds would overflow the stack).
+            r = Box::pin(send_scripted_with(cx, request.clone(), Some(&item.path), vars, iteration, condition.clone())) => r,
+            _ = cancel.cancelled() => return None,
+        };
+        let Some(repeat) = repeat else { break (t0, scripted, None) };
+        let check = take_condition(&mut scripted, &repeat.condition);
+        let waited = repeat_started.elapsed();
+        let interval = Duration::from_millis(repeat.interval_ms);
+        match check {
+            Check::Met => break (t0, scripted, None),
+            Check::Broken => break (t0, scripted, Some(String::new())),
+            Check::NotYet(why) if waited + interval > Duration::from_millis(repeat.timeout_ms) => {
+                let what = if repeat.condition.trim().is_empty() {
+                    "its tests didn't pass".to_string()
+                } else {
+                    format!("`{}` didn't hold", repeat.condition.trim())
+                };
+                let why = why.map(|w| format!(" (last: {w})")).unwrap_or_default();
+                let message = format!(
+                    "Repeat until: {what} after {} in {:.1} s{why}",
+                    plural(attempts as usize, "send"),
+                    waited.as_secs_f64()
+                );
+                break (t0, scripted, Some(message));
+            }
+            Check::NotYet(_) => {}
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(interval) => {}
+            _ = cancel.cancelled() => return None,
+        }
+    };
+    if repeat.is_some() {
+        t0 = repeat_started.min(t0);
+    }
+    let mut result = base_result(item, iteration.index);
+    if repeat.is_some() {
+        result.attempts = Some(attempts);
+    }
+    let stream = scripted.result.as_ref().ok().and_then(|s| s.stream);
+    let report = scripted.report.take().unwrap_or_default();
+    let described: Vec<String> = report.errors.iter().map(|e| e.describe()).collect();
+    let secrets = secret_values(secrets, vars);
+    let body_of = |request: &Request| {
+        let text = request.body.text.trim();
+        (request.body.body_type != zorvik_workspace::formats::BodyType::None && !text.is_empty()).then(|| {
+            let rendered = vars.var_context().render(text, &mut std::collections::BTreeSet::new());
+            cut_text(rendered.as_bytes()).0
+        })
+    };
+    let mut came_back = None;
+    match scripted.result {
+        Ok(sent) => {
+            let response = &sent.response;
+            let (body, body_truncated) = cut_text(&response.body);
+            let details = RunDetails {
+                method: response.meta.request.method.clone(),
+                url: sent.url.clone(),
+                request_headers: response.meta.request.headers.clone(),
+                request_body: sent.sent_body.clone(),
+                response: Some(RunResponse {
+                    status: response.meta.status,
+                    status_text: response.meta.status_text.clone(),
+                    http_version: response.meta.http_version.clone(),
+                    headers: response.meta.headers.clone(),
+                    body,
+                    body_truncated: body_truncated || response.body_truncated,
+                    size: response.body.len() as u64,
+                    timing: response.timing.clone(),
+                }),
+            };
+            result.details = Some(Arc::new(details.masked(&secrets)));
+            // A script may change the method; other kinds keep their label (MCP, WS, IO).
+            if matches!(sent.request.kind, RequestKind::Http | RequestKind::Sse) {
+                result.method = sent.request.method.clone();
+            }
+            result.url = mask_secrets(&sent.url, &secrets);
+            result.status = Some(sent.response.meta.status);
+            result.duration_ms = Some(sent.response.timing.total_ms);
+            result.size = Some(sent.response.body.len().min(u32::MAX as usize) as u32);
+            result.unresolved = sent.unresolved;
+            result.script_errors = described;
+            came_back = Some(sent.response);
+        }
+        // `pm.execution.skipRequest()`: not sent, and not a failure.
+        Err(e) if e.code == crate::scripting::SKIPPED => {
+            result.skipped = true;
+            result.skip_reason = Some(e.message);
+        }
+        Err(e) => {
+            let render = |t: &str| vars.var_context().render(t, &mut std::collections::BTreeSet::new());
+            let details = RunDetails {
+                method: request.method.clone(),
+                url: render(&request.url),
+                request_headers: request
+                    .headers
+                    .iter()
+                    .filter(|h| h.enabled && !h.key.trim().is_empty())
+                    .map(|h| zorvik_engine::Header::new(render(&h.key), render(&h.value)))
+                    .collect(),
+                request_body: body_of(request),
+                response: None,
+            };
+            result.details = Some(Arc::new(details.masked(&secrets)));
+            result.duration_ms = Some(t0.elapsed().as_secs_f64() * 1000.0);
+            result.script_errors = described.into_iter().filter(|d| *d != e.message).collect();
+            result.error = Some(e.message);
+        }
+    }
+    result.tests = report.tests;
+    result.console = bounded_console(report.console);
+    if let Some((events, end)) = stream {
+        result.console.push(ConsoleEntry { level: ConsoleLevel::Info, message: stream_note(events, end) });
+    }
+    if let Some(message) = repeat_failure.filter(|m| !m.is_empty())
+        && result.error.is_none()
+    {
+        result.error = Some(message);
+    }
+    Some(Sending { result, next: scripted.next_request, response: came_back })
 }
 
 /// The name of the test that carries a "repeat until" condition (never reported).
@@ -792,7 +867,7 @@ fn skip_reason(kind: RequestKind) -> String {
     format!("{what}; the runner sends HTTP, GraphQL, SSE, WebSocket, Socket.IO, gRPC and MCP requests")
 }
 
-fn base_result(item: &RunItem, iteration: u32) -> RunResult {
+pub(crate) fn base_result(item: &RunItem, iteration: u32) -> RunResult {
     let request = item.request.as_ref().ok();
     RunResult {
         iteration,
@@ -815,7 +890,7 @@ fn base_result(item: &RunItem, iteration: u32) -> RunResult {
 }
 
 /// Whether a result counts as passed (see the module docs).
-fn verdict(r: &RunResult, allow_http_errors: bool) -> bool {
+pub(crate) fn verdict(r: &RunResult, allow_http_errors: bool) -> bool {
     if r.skipped {
         return true;
     }
@@ -845,7 +920,7 @@ fn next_step(items: &[RunItem], at: usize, next: Option<&NextRequest>) -> Result
     }
 }
 
-fn bounded_console(mut console: Vec<ConsoleEntry>) -> Vec<ConsoleEntry> {
+pub(crate) fn bounded_console(mut console: Vec<ConsoleEntry>) -> Vec<ConsoleEntry> {
     let dropped = console.len().saturating_sub(MAX_CONSOLE);
     console.truncate(MAX_CONSOLE);
     for entry in &mut console {
@@ -864,23 +939,25 @@ fn bounded_console(mut console: Vec<ConsoleEntry>) -> Vec<ConsoleEntry> {
 }
 
 /// Add a result to the run's counts and to its iteration's (`per_iteration[r.iteration]`).
-fn count(s: &mut RunSummary, r: &RunResult) {
+pub(crate) fn count(s: &mut RunSummary, r: &RunResult) {
     let tests = |passed: bool| r.tests.iter().filter(|t| !t.skipped && t.passed == passed).count() as u32;
     let (passed_tests, failed_tests) = (tests(true), tests(false));
     s.tests_passed += passed_tests;
     s.tests_failed += failed_tests;
     s.tests_skipped += r.tests.iter().filter(|t| t.skipped).count() as u32;
     let failed = u32::from(!r.passed);
+    // A scenario's flow steps (if, loops, their rounds) count only when they fail.
+    let flow = r.passed && r.step.as_ref().is_some_and(|step| step.kind.is_flow());
     if r.skipped {
         s.skipped += 1;
-    } else {
+    } else if !flow {
         s.requests += 1;
         s.failed += failed;
     }
     if let Some(it) = s.per_iteration.get_mut(r.iteration as usize) {
         if r.skipped {
             it.skipped += 1;
-        } else {
+        } else if !flow {
             it.requests += 1;
             it.failed += failed;
         }
@@ -891,7 +968,7 @@ fn count(s: &mut RunSummary, r: &RunResult) {
 
 /// Keep `result` in the report: any while it holds fewer than `limit`, then failed
 /// ones only up to twice that; the others are counted in `omitted`.
-fn keep(results: &mut Vec<RunResult>, omitted: &mut u32, result: RunResult, limit: usize) {
+pub(crate) fn keep(results: &mut Vec<RunResult>, omitted: &mut u32, result: RunResult, limit: usize) {
     if results.len() < limit || (!result.passed && results.len() < 2 * limit) {
         results.push(result);
     } else {
@@ -903,7 +980,7 @@ fn keep(results: &mut Vec<RunResult>, omitted: &mut u32, result: RunResult, limi
 
 #[derive(Default)]
 pub(crate) struct RunnerState {
-    /// The run in progress (one at a time): id and its stop handle.
+    /// The run in progress (one at a time, a collection run or a scenario): id and its stop handle.
     active: Mutex<Option<(String, CancellationToken)>>,
     /// The last finished runs, oldest first.
     finished: Mutex<VecDeque<(String, Arc<RunReport>)>>,
@@ -1070,13 +1147,7 @@ impl Api {
         let vars = self.script_vars(&ws);
         let cancel = CancellationToken::new();
         let run_id = uuid::Uuid::new_v4().to_string();
-        {
-            let mut active = lock(&self.inner.runner.active);
-            if active.is_some() {
-                return Err(ApiError::invalid("A collection run is in progress. Stop it first."));
-            }
-            *active = Some((run_id.clone(), cancel.clone()));
-        }
+        self.claim_run_slot(&run_id, &cancel)?;
         let started = RunStarted {
             run_id: run_id.clone(),
             name: plan.name.clone(),
@@ -1140,7 +1211,7 @@ impl Api {
             vars.changes.clear();
             let mut result = result.clone();
             if let Some(details) = result.details.take() {
-                lock(&self.inner.runner.details).add(&run_id, result.seq, details);
+                self.keep_run_details(&run_id, result.seq, details);
             }
             if let Some(message) = warning {
                 result.console.push(zorvik_script::ConsoleEntry { level: zorvik_script::ConsoleLevel::Warn, message });
@@ -1152,20 +1223,7 @@ impl Api {
         if let Some(jar) = &jar {
             self.save_jar(&ws, jar);
         }
-        let summary = report.summary.clone();
-        {
-            let mut finished = lock(&self.inner.runner.finished);
-            finished.push_back((run_id.clone(), Arc::new(report)));
-            while finished.len() > KEEP_FINISHED {
-                finished.pop_front();
-            }
-        }
-        self.free_run_slot(&run_id);
-        sink.emit(StreamEvent::Runner {
-            run_id: run_id.clone(),
-            event: RunEvent::Finished { summary },
-            agent: by_agent,
-        });
+        self.finish_run(&run_id, report, by_agent);
     }
 
     fn free_run_slot(&self, run_id: &str) {
@@ -1174,19 +1232,52 @@ impl Api {
             *active = None;
         }
     }
+
+    /// Take the run slot for a new run (collection runs and scenarios share it).
+    pub(crate) fn claim_run_slot(&self, run_id: &str, cancel: &CancellationToken) -> ApiResult<()> {
+        let mut active = lock(&self.inner.runner.active);
+        if active.is_some() {
+            return Err(ApiError::invalid("A run is in progress. Stop it first."));
+        }
+        *active = Some((run_id.to_string(), cancel.clone()));
+        Ok(())
+    }
+
+    /// Keep what a result sent and got for `runner.details`.
+    pub(crate) fn keep_run_details(&self, run_id: &str, seq: u32, details: Arc<RunDetails>) {
+        lock(&self.inner.runner.details).add(run_id, seq, details);
+    }
+
+    /// A run ended: keep its report for a while, free the slot and tell the UI.
+    pub(crate) fn finish_run(&self, run_id: &str, report: RunReport, by_agent: bool) {
+        let summary = report.summary.clone();
+        {
+            let mut finished = lock(&self.inner.runner.finished);
+            finished.push_back((run_id.to_string(), Arc::new(report)));
+            while finished.len() > KEEP_FINISHED {
+                finished.pop_front();
+            }
+        }
+        self.free_run_slot(run_id);
+        self.inner.sink.emit(StreamEvent::Runner {
+            run_id: run_id.to_string(),
+            event: RunEvent::Finished { summary },
+            agent: by_agent,
+        });
+    }
 }
 
 /// Frees the run slot if a run panics, so later runs are not refused as "in progress",
 /// and tells the UI it ended.
-struct RunSlot<'a> {
-    api: &'a Api,
-    run_id: &'a str,
-    agent: bool,
+pub(crate) struct RunSlot<'a> {
+    pub api: &'a Api,
+    pub run_id: &'a str,
+    pub agent: bool,
 }
 
 /// A run an AI agent started, and the hosts its requests may reach.
-struct AgentRun {
-    guard: Option<zorvik_engine::HostGuard>,
+pub(crate) struct AgentRun {
+    pub guard: Option<zorvik_engine::HostGuard>,
 }
 
 impl Drop for RunSlot<'_> {
@@ -1290,7 +1381,7 @@ mod tests {
         let mut vars = ScriptVars::default();
         vars.values.environment.insert("token".into(), "from-login".into());
         vars.values.environment.insert("public".into(), "visible".into());
-        let secrets = secret_values(&plan, &vars);
+        let secrets = secret_values(&plan.secrets, &vars);
         assert_eq!(
             mask_secrets("https://x.test/?t=from-login&p=visible", &secrets),
             "https://x.test/?t={{token}}&p=visible"

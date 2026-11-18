@@ -15,8 +15,10 @@ pub const INVALID_PARAMS: i64 = -32602;
 pub const DISCONNECTED: &str = "notifications/zorvik/disconnected";
 
 /// What agents are told about Zorvik when they connect.
-const INSTRUCTIONS: &str = "Zorvik is the user's desktop API client (HTTP, GraphQL, gRPC, WebSocket, load tests, mock \
-servers). Its workspace is a folder of YAML files the user keeps in Git. Start with get_workspace. The user watches your \
+const INSTRUCTIONS: &str = "Zorvik is the user's desktop API client (HTTP, GraphQL, gRPC, WebSocket, scenarios, load \
+tests, mock servers). Its workspace is a folder of YAML files the user keeps in Git. Start with get_workspace. To test a \
+flow of several requests (create, then read, then check), save them and chain them in a scenario (save_scenario, \
+run_scenario). The user watches your \
 actions live in the Zorvik window and approves risky ones there (deletes, load tests, servers, and depending on their \
 settings edits and requests to outside hosts); a declined action should not be retried in another way — ask the user. \
 Put hosts and credentials in {{variables}} (environments, secret variables) rather than in requests. Secret values show \
