@@ -6,7 +6,7 @@
 //! <root>/requests/**            folders (with optional _folder.yaml) and request files (*.yaml)
 //! <root>/servers/*.yaml         servers (mock HTTP, WebSocket, TCP, UDP, DNS, …)
 //! <root>/loadtests/*.yaml       load tests
-//! <root>/scenarios/*.yaml       scenarios
+//! <root>/scenarios/**          folders (with optional _folder.yaml) and scenarios (*.yaml)
 //! ```
 //!
 //! Item paths in the API are relative to `requests/` and use `/` separators.
@@ -17,7 +17,7 @@ use serde::Serialize;
 use ts_rs::TS;
 use zorvik_formats::{
     BodyType, Environment, FORMAT_VERSION, FolderMeta, ImportSummary, ImportedCollection, ImportedItem, LoadTest,
-    LoadTestNode, NodeKind, Request, RequestKind, Scenario, ScenarioNode, Server, ServerNode, TreeNode, WorkspaceMeta,
+    LoadTestNode, NodeKind, Request, RequestKind, Server, ServerNode, TreeNode, WorkspaceMeta,
 };
 
 use crate::error::{Error, ErrorCode, Result};
@@ -33,10 +33,10 @@ pub const SERVERS_DIR: &str = "servers";
 pub const LOAD_TESTS_DIR: &str = "loadtests";
 pub const SCENARIOS_DIR: &str = "scenarios";
 pub const FOLDER_FILE: &str = "_folder.yaml";
-const EXT: &str = ".yaml";
+pub(crate) const EXT: &str = ".yaml";
 /// Folder levels shown in the tree. Deeper content (e.g. from a hostile repo)
 /// is left out: the recursive walk would overflow the stack and crash the app.
-const MAX_TREE_DEPTH: usize = 32;
+pub(crate) const MAX_TREE_DEPTH: usize = 32;
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -595,6 +595,7 @@ impl Workspace {
     }
 
     // ---- servers and load tests (flat folders of named YAML files) -------------
+    // Scenarios, which have folders, are in `scenarios.rs`.
 
     fn flat_dir<T: FlatItem>(&self) -> PathBuf {
         self.root.join(T::DIR)
@@ -843,57 +844,6 @@ impl Workspace {
         self.flat_reorder::<LoadTest>(ids)
     }
 
-    /// Saved scenarios in sidebar order. Files that don't parse are listed with an error.
-    pub fn list_scenarios(&self) -> Result<Vec<ScenarioNode>> {
-        Ok(self
-            .flat_list::<Scenario>()
-            .into_iter()
-            .map(|(id, scenario)| match scenario.and_then(checked_scenario) {
-                Ok(s) => ScenarioNode {
-                    name: display_name(&s.name, &id).to_string(),
-                    id,
-                    steps: s.step_count(),
-                    seq: s.seq,
-                    error: None,
-                },
-                Err(err) => ScenarioNode { name: id.clone(), id, steps: 0, seq: u32::MAX, error: Some(err.message) },
-            })
-            .collect())
-    }
-
-    pub fn read_scenario(&self, id: &str) -> Result<Scenario> {
-        self.flat_read(id).and_then(checked_scenario)
-    }
-
-    /// Save a scenario. Renaming it also renames the file; returns the (possibly new) id.
-    pub fn save_scenario(&self, id: &str, scenario: &Scenario) -> Result<String> {
-        checked_scenario(scenario.clone())?;
-        self.flat_save(id, scenario)
-    }
-
-    /// Overwrite a scenario without renaming its file (e.g. to follow a renamed request).
-    pub fn update_scenario(&self, id: &str, scenario: &Scenario) -> Result<()> {
-        self.flat_overwrite(id, scenario).map(drop)
-    }
-
-    pub fn create_scenario(&self, scenario: &Scenario) -> Result<String> {
-        checked_scenario(scenario.clone())?;
-        self.flat_create(scenario)
-    }
-
-    pub fn duplicate_scenario(&self, id: &str) -> Result<String> {
-        let scenario = self.read_scenario(id)?;
-        self.create_scenario(&Scenario { name: format!("{} copy", scenario.name), ..scenario })
-    }
-
-    pub fn delete_scenario(&self, id: &str) -> Result<()> {
-        self.flat_delete::<Scenario>(id)
-    }
-
-    pub fn reorder_scenarios(&self, ids: &[String]) -> Result<()> {
-        self.flat_reorder::<Scenario>(ids)
-    }
-
     // ---- import -----------------------------------------------------------
 
     /// Write an imported collection into a new folder under `parent`.
@@ -968,7 +918,7 @@ impl Workspace {
     }
 }
 
-fn read_folder_meta(dir: &Path) -> Result<FolderMeta> {
+pub(crate) fn read_folder_meta(dir: &Path) -> Result<FolderMeta> {
     let file = dir.join(FOLDER_FILE);
     if is_symlink(&file) {
         return Err(Error::invalid(format!("{} is a symbolic link, which is not followed", file.display())));
@@ -1010,7 +960,7 @@ fn valid_id(id: &str) -> bool {
 
 /// One `/`-separated part of an item path: a plain name that cannot climb out
 /// of its folder or, on Windows, alias another file or a device.
-fn valid_path_part(part: &str) -> bool {
+pub(crate) fn valid_path_part(part: &str) -> bool {
     let plain = matches!(Path::new(part).components().collect::<Vec<_>>().as_slice(), [Component::Normal(_)]);
     let windows_alias = cfg!(windows) && (part.contains(':') || part.ends_with(['.', ' ']) || is_reserved_name(part));
     plain && !part.contains('\\') && !part.trim_matches(['.', ' ']).is_empty() && !windows_alias
@@ -1022,7 +972,7 @@ fn is_request_file(path: &Path) -> bool {
     name.len() > EXT.len() && name.to_ascii_lowercase().ends_with(EXT) && !name.eq_ignore_ascii_case(FOLDER_FILE)
 }
 
-fn rename_path(from: &Path, to: &Path) -> Result<()> {
+pub(crate) fn rename_path(from: &Path, to: &Path) -> Result<()> {
     if from == to {
         return Ok(());
     }
@@ -1061,7 +1011,7 @@ fn imported_name(name: &str, fallback: &str) -> String {
     format!("{}…", cut.trim_end_matches([' ', ',', '.', ';', ':', '-']))
 }
 
-fn validate_name(name: &str) -> Result<()> {
+pub(crate) fn validate_name(name: &str) -> Result<()> {
     if name.trim().is_empty() {
         return Err(Error::invalid("Name cannot be empty"));
     }
@@ -1085,7 +1035,7 @@ pub fn new_request(name: &str, kind: RequestKind) -> Request {
     r
 }
 
-/// Files of a flat folder: servers (`servers/`), load tests (`loadtests/`) and scenarios (`scenarios/`).
+/// Files of a flat folder: servers (`servers/`) and load tests (`loadtests/`).
 trait FlatItem: Serialize + serde::de::DeserializeOwned + Clone {
     const DIR: &'static str;
     /// Lower-case noun for messages.
@@ -1120,28 +1070,6 @@ impl FlatItem for LoadTest {
     }
     fn set_seq(&mut self, seq: u32) {
         self.seq = seq;
-    }
-}
-
-impl FlatItem for Scenario {
-    const DIR: &'static str = SCENARIOS_DIR;
-    const WHAT: &'static str = "scenario";
-    fn name(&self) -> &str {
-        &self.name
-    }
-    fn seq(&self) -> u32 {
-        self.seq
-    }
-    fn set_seq(&mut self, seq: u32) {
-        self.seq = seq;
-    }
-}
-
-/// A scenario that can be used (see [`Scenario::problem`]).
-fn checked_scenario(scenario: Scenario) -> Result<Scenario> {
-    match scenario.problem() {
-        Some(problem) => Err(Error::invalid(problem)),
-        None => Ok(scenario),
     }
 }
 

@@ -1,12 +1,13 @@
-//! Tools for scenarios: list, read, create or change, and run them (the whole scenario, up
-//! to a step, or one step).
+//! Tools for scenarios: list, read, create or change, move them and their folders, and run
+//! them (the whole scenario, up to a step, or one step).
 
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use zorvik_workspace::Workspace;
-use zorvik_workspace::formats::Scenario;
+use zorvik_workspace::formats::{Scenario, ScenarioNode};
+use zorvik_workspace::store::parent_of;
+use zorvik_workspace::{ScenarioItem, Workspace};
 
 use super::{Call, Def, Done, Fail, Outcome, obj, plural, string, wait_schema};
 use crate::Api;
@@ -228,7 +229,7 @@ pub(super) fn defs() -> Vec<Def> {
         Def {
             name: "list_scenarios",
             title: "List scenarios",
-            description: "Saved scenarios: saved requests run as steps, with values passed from one step to the next, checks, and flow (if, loops, steps at the same time).",
+            description: "Saved scenarios: saved requests run as steps, with values passed from one step to the next, checks, and flow (if, loops, steps at the same time). They can be in folders: a scenario's id is its path (\"Shop/Checkout\"), and `folders` lists the folders' ids.",
             schema: obj(json!({}), &[]),
             read_only: true,
             destructive: false,
@@ -238,7 +239,10 @@ pub(super) fn defs() -> Vec<Def> {
             name: "read_scenario",
             title: "Read a scenario",
             description: "A scenario's variables, steps and docs, in the shape save_scenario takes, and the values its last run left (secret ones hidden).",
-            schema: obj(json!({ "name": { "type": "string" } }), &["name"]),
+            schema: obj(
+                json!({ "name": string("Its name, or its id (list_scenarios) when several have the name.") }),
+                &["name"],
+            ),
             read_only: true,
             destructive: false,
             open_world: false,
@@ -246,8 +250,32 @@ pub(super) fn defs() -> Vec<Def> {
         Def {
             name: "save_scenario",
             title: "Save a scenario",
-            description: "Create or replace a scenario. Its steps send requests that are saved in the collection (save them first with save_requests). Pass a value from one step to the next with an output on the first (e.g. {variable: \"cartId\", path: \"$.id\"}) and {{cartId}} in the later request, or as an input of the later step. Unknown or misspelled fields are refused.",
-            schema: obj(json!({ "name": { "type": "string" }, "scenario": scenario_schema() }), &["name", "scenario"]),
+            description: "Create or replace a scenario. Its steps send requests that are saved in the collection (save them first with save_requests). Pass a value from one step to the next with an output on the first (e.g. {variable: \"cartId\", path: \"$.id\"}) and {{cartId}} in the later request, or as an input of the later step. Unknown or misspelled fields are refused. To move one to another folder, use move_scenario.",
+            schema: obj(
+                json!({
+                    "name": string("Its name; for one that exists, also its id (list_scenarios)."),
+                    "folder": string("The folder it is in, e.g. \"Shop/Checkout flows\" (folders are made when missing; default: the top level). The scenario of this name in that folder is replaced, or a new one made there."),
+                    "scenario": scenario_schema(),
+                }),
+                &["name", "scenario"],
+            ),
+            read_only: false,
+            destructive: false,
+            open_world: false,
+        },
+        Def {
+            name: "move_scenario",
+            title: "Move or rename scenarios",
+            description: "Move a scenario or a folder of scenarios to another folder (made when missing), or rename it. Steps that run a moved scenario follow it.",
+            schema: obj(
+                json!({
+                    "scenario": string("The scenario to move or rename: its name, or its id (list_scenarios)."),
+                    "folder": string("Or the folder to move or rename: its id (list_scenarios `folders`)."),
+                    "toFolder": string("Where it goes (\"\" = the top level)."),
+                    "newName": { "type": "string" },
+                }),
+                &[],
+            ),
             read_only: false,
             destructive: false,
             open_world: false,
@@ -275,19 +303,17 @@ pub(super) fn defs() -> Vec<Def> {
 
 impl Api {
     pub(super) fn find_scenario(&self, ws: &Workspace, name: &str) -> Result<(String, Scenario), Fail> {
-        let node = ws
-            .list_scenarios()?
-            .into_iter()
-            .find(|s| s.name.eq_ignore_ascii_case(name.trim()) || s.id == name)
-            .ok_or_else(|| Fail::Invalid(format!("Scenario '{name}' not found (list_scenarios)")))?;
+        let listed = ws.list_scenarios()?;
+        let node = pick(&listed, name)?.ok_or_else(|| not_found(name))?;
         Ok((node.id.clone(), ws.read_scenario(&node.id)?))
     }
 
     pub(super) fn tool_list_scenarios(&self) -> Outcome {
         let ws = self.agent_ws()?;
         let scenarios = ws.list_scenarios()?;
+        let folders = ws.scenario_folders()?;
         let n = scenarios.len();
-        Ok(Done::new(json!({ "scenarios": scenarios }), plural(n, "scenario")))
+        Ok(Done::new(json!({ "scenarios": scenarios, "folders": folders }), plural(n, "scenario")))
     }
 
     pub(super) fn tool_read_scenario(&self, c: &Call<'_>) -> Outcome {
@@ -307,8 +333,10 @@ impl Api {
         struct A {
             name: String,
             scenario: Value,
+            folder: Option<String>,
         }
-        let A { name, mut scenario } = c.args()?;
+        let A { name, mut scenario, folder } = c.args()?;
+        let folder = folder.map(|f| f.trim().trim_matches('/').to_string()).filter(|f| !f.is_empty());
         if let Some(s) = scenario.as_object_mut() {
             s.insert("name".into(), json!(name.trim()));
         }
@@ -326,14 +354,27 @@ impl Api {
             return Err(Fail::Invalid(problem));
         }
         let ws = self.agent_ws()?;
-        let existing = self.find_scenario(&ws, &name).ok();
-        // The scenarios it runs are given by name; the file keeps their ids.
         let listed = ws.list_scenarios()?;
-        let called = |call: &str| listed.iter().find(|s| s.name.eq_ignore_ascii_case(call.trim()) || s.id == call);
-        if let Some(call) = scenario.calls().into_iter().find(|call| called(call).is_none()) {
-            return Err(Fail::Invalid(format!("Scenario '{call}' not found (list_scenarios): save it first")));
+        // In a folder: the one of this name there. Otherwise the one this names, anywhere.
+        let existing = match &folder {
+            Some(path) => folder_id(&ws, path)?.and_then(|parent| {
+                listed.iter().find(|s| {
+                    parent_of(&s.id) == parent
+                        && (s.name.eq_ignore_ascii_case(name.trim())
+                            || s.id.rsplit('/').next().is_some_and(|last| last.eq_ignore_ascii_case(name.trim())))
+                })
+            }),
+            None => pick(&listed, &name)?,
         }
-        scenario.retarget(&|_| None, &|call| called(call).filter(|s| s.id != call).map(|s| s.id.clone()));
+        .map(|node| node.id.clone());
+        // The scenarios it runs are given by name or id; the file keeps their ids.
+        let mut calls = BTreeMap::new();
+        for call in scenario.calls() {
+            let node = pick(&listed, call)?
+                .ok_or_else(|| Fail::Invalid(format!("Scenario '{call}' not found (list_scenarios): save it first")))?;
+            calls.insert(call.to_string(), node.id.clone());
+        }
+        scenario.retarget(&|_| None, &|call| calls.get(call).filter(|id| *id != call).cloned());
         let missing: Vec<&str> =
             scenario.requests().into_iter().filter(|path| ws.read_request(path).is_err()).collect();
         if !missing.is_empty() {
@@ -342,27 +383,90 @@ impl Api {
                 missing.join(", ")
             )));
         }
-        if let Some(seq) = existing.as_ref().map(|(_, old)| old.seq) {
-            scenario.seq = seq;
-        }
         let summary =
             vec![plural(scenario.step_count() as usize, "step"), plural(scenario.requests().len(), "request")];
-        self.gate_change(
-            c,
-            format!("{} scenario “{name}”?", if existing.is_some() { "Update" } else { "Create" }),
-            summary,
-        )
-        .await?;
+        let title = match (&existing, &folder) {
+            (Some(_), _) => format!("Update scenario “{name}”?"),
+            (None, Some(folder)) => format!("Create scenario “{name}” in {folder}?"),
+            (None, None) => format!("Create scenario “{name}”?"),
+        };
+        self.gate_change(c, title, summary).await?;
         let id: String = match existing {
-            Some((id, _)) => {
+            Some(id) => {
                 serde_json::from_value(self.call("scenario.save", json!({ "id": id, "scenario": scenario })).await?)
             }
-            None => serde_json::from_value(self.call("scenario.create", json!({ "scenario": scenario })).await?),
+            None => {
+                let folder = ws.ensure_scenario_folder(folder.as_deref().unwrap_or_default())?;
+                serde_json::from_value(
+                    self.call("scenario.create", json!({ "scenario": scenario, "folder": folder })).await?,
+                )
+            }
         }
         .map_err(|e| Fail::Error(e.to_string()))?;
         let target = AgentTarget::Scenario { id: id.clone() };
         self.show(target.clone());
         Ok(Done::new(json!({ "id": id, "name": name }), format!("Saved {name}")).at(target))
+    }
+
+    pub(super) async fn tool_move_scenario(&self, c: &Call<'_>) -> Outcome {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct A {
+            scenario: Option<String>,
+            folder: Option<String>,
+            to_folder: Option<String>,
+            new_name: Option<String>,
+        }
+        let A { scenario, folder, to_folder, new_name } = c.args()?;
+        if to_folder.is_none() && new_name.is_none() {
+            return Err(Fail::Invalid("Give toFolder and/or newName".into()));
+        }
+        let ws = self.agent_ws()?;
+        let (id, item) = match (scenario, folder) {
+            (Some(name), None) => {
+                let listed = ws.list_scenarios()?;
+                (pick(&listed, &name)?.ok_or_else(|| not_found(&name))?.id.clone(), ScenarioItem::Scenario)
+            }
+            (None, Some(path)) => {
+                let id = folder_id(&ws, &path)?
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| Fail::Invalid(format!("Folder '{path}' not found (list_scenarios `folders`)")))?;
+                (id, ScenarioItem::Folder)
+            }
+            _ => return Err(Fail::Invalid("Give either scenario or folder".into())),
+        };
+        let mut line = id.clone();
+        if let Some(f) = &to_folder {
+            line.push_str(&format!(" → {}", if f.trim().is_empty() { "top level" } else { f.trim() }));
+        }
+        if let Some(n) = &new_name {
+            line.push_str(&format!(" (as “{}”)", n.trim()));
+        }
+        self.gate_change(c, "Move or rename?".into(), vec![line]).await?;
+        let text = |v: Value| serde_json::from_value::<String>(v).map_err(|e| Fail::Error(e.to_string()));
+        let mut current = id;
+        if let Some(name) = new_name {
+            current = match item {
+                ScenarioItem::Scenario => {
+                    let saved = Scenario { name: name.trim().to_string(), ..ws.read_scenario(&current)? };
+                    text(self.call("scenario.save", json!({ "id": current, "scenario": saved })).await?)?
+                }
+                ScenarioItem::Folder => {
+                    text(self.call("scenario.renameFolder", json!({ "id": current, "name": name })).await?)?
+                }
+            };
+        }
+        if let Some(to) = to_folder {
+            let parent = ws.ensure_scenario_folder(&to)?;
+            let folder = item == ScenarioItem::Folder;
+            let moved = json!({ "id": current, "folder": folder, "parent": parent, "index": null });
+            current = text(self.call("scenario.move", moved).await?)?;
+        }
+        let done = Done::new(json!({ "id": current }), current.clone());
+        Ok(match item {
+            ScenarioItem::Scenario => done.at(AgentTarget::Scenario { id: current }),
+            ScenarioItem::Folder => done,
+        })
     }
 
     pub(super) async fn tool_run_scenario(&self, c: &Call<'_>) -> Outcome {
@@ -417,6 +521,48 @@ impl Api {
         }
         Ok(done.at(target))
     }
+}
+
+/// The scenario `name` names: the one with that id (`Shop/Checkout`), else the one with that
+/// name. Several with the name: the agent says which by id.
+fn pick<'a>(listed: &'a [ScenarioNode], name: &str) -> Result<Option<&'a ScenarioNode>, Fail> {
+    let name = name.trim().trim_matches('/');
+    if let Some(node) =
+        listed.iter().find(|s| s.id == name).or_else(|| listed.iter().find(|s| s.id.eq_ignore_ascii_case(name)))
+    {
+        return Ok(Some(node));
+    }
+    let named: Vec<&ScenarioNode> = listed.iter().filter(|s| s.name.eq_ignore_ascii_case(name)).collect();
+    match named.as_slice() {
+        [] => Ok(None),
+        [one] => Ok(Some(one)),
+        many => Err(Fail::Invalid(format!(
+            "Several scenarios are called '{name}': {}. Give the id of the one you mean.",
+            many.iter().map(|s| s.id.as_str()).collect::<Vec<_>>().join(", ")
+        ))),
+    }
+}
+
+fn not_found(name: &str) -> Fail {
+    Fail::Invalid(format!("Scenario '{name}' not found (list_scenarios)"))
+}
+
+/// The id of the folder `path` names (each part a folder's id part or name; "" the top level),
+/// when it is there.
+fn folder_id(ws: &Workspace, path: &str) -> Result<Option<String>, Fail> {
+    let mut nodes = ws.scenario_tree()?;
+    let mut at = String::new();
+    for part in path.split('/').map(str::trim).filter(|p| !p.is_empty()) {
+        let found = nodes.into_iter().find(|n| {
+            n.folder
+                && (n.id.rsplit('/').next().is_some_and(|last| last.eq_ignore_ascii_case(part))
+                    || n.name.eq_ignore_ascii_case(part))
+        });
+        let Some(folder) = found else { return Ok(None) };
+        at = folder.id;
+        nodes = folder.children;
+    }
+    Ok(Some(at))
 }
 
 /// What each step of a finished scenario run did, in order.

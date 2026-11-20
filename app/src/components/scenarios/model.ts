@@ -1,6 +1,6 @@
 // What the scenario editor works out without the app: steps by their path, the lists of
 // steps a step holds, moving and changing steps, the values a step can use, what a step
-// is called, and what keeps a scenario from running.
+// is called, what keeps a scenario from running, and the folders scenarios are in.
 import type { CompareOp } from "../../bindings/CompareOp";
 import type { Condition } from "../../bindings/Condition";
 import type { Request } from "../../bindings/Request";
@@ -320,6 +320,67 @@ export function retarget(scenario: Scenario, oldPath: string, newPath: string): 
     }),
   );
   return changed ? next : scenario;
+}
+
+// ---- folders -------------------------------------------------------------------------------
+
+/** The folder a scenario or folder is in, by id (`Shop/Auth/Log in` → `Shop/Auth`; "" the top level). */
+export const scenarioParent = (id: string) => (id.includes("/") ? id.slice(0, id.lastIndexOf("/")) : "");
+
+/**
+ * `id` once the scenario `oldId` got the id `newId`, or (`folder`) once the folder `oldId` did and
+ * everything in it moved along; null when `id` is not one of them.
+ */
+export function movedId(id: string, oldId: string, newId: string, folder: boolean): string | null {
+  if (folder) return id.startsWith(`${oldId}/`) ? newId + id.slice(oldId.length) : null;
+  return id === oldId ? newId : null;
+}
+
+/** The steps that run a scenario follow it to its new id (`moved`: the new id, or null when it didn't move). */
+export function retargetCalls(scenario: Scenario, moved: (id: string) => string | null): Scenario {
+  let changed = false;
+  const next = mapLists(scenario, (list) =>
+    list.map((s) => {
+      const to = s.type === "scenario" ? moved(s.scenario) : null;
+      if (s.type !== "scenario" || to === null || to === s.scenario) return s;
+      changed = true;
+      return { ...s, scenario: to };
+    }),
+  );
+  return changed ? next : scenario;
+}
+
+/** Every scenario of the tree (not the folders), in sidebar order. */
+export function flattenScenarios(nodes: ScenarioNode[]): ScenarioNode[] {
+  return nodes.flatMap((n) => (n.folder ? flattenScenarios(n.children ?? []) : [n]));
+}
+
+/** The folders of the tree, outer ones first, each with how deep it is. */
+export function scenarioFolders(nodes: ScenarioNode[], depth = 0): { id: string; name: string; depth: number }[] {
+  return nodes.filter((n) => n.folder).flatMap((n) => [{ id: n.id, name: n.name, depth }, ...scenarioFolders(n.children ?? [], depth + 1)]);
+}
+
+/** The tree with the scenarios whose name has `q` (lower case), and the folders they are in; a folder whose name has it, whole. */
+export function filterScenarios(nodes: ScenarioNode[], q: string): ScenarioNode[] {
+  if (!q) return nodes;
+  return nodes.flatMap((n) => {
+    if (!n.folder) return n.name.toLowerCase().includes(q) ? [n] : [];
+    if (n.name.toLowerCase().includes(q)) return [n];
+    const children = filterScenarios(n.children ?? [], q);
+    return children.length ? [{ ...n, children }] : [];
+  });
+}
+
+/** The names of the folders the scenario `id` is in, outer ones first (`Shop/Auth/Log in` → Shop, Auth). */
+export function folderNames(id: string, tree: ScenarioNode[]): string[] {
+  const names: string[] = [];
+  let level = tree;
+  for (const part of scenarioParent(id).split("/").filter(Boolean)) {
+    const folder = level.find((n) => n.folder && n.id.split("/").pop() === part);
+    names.push(folder?.name ?? part);
+    level = folder?.children ?? [];
+  }
+  return names;
 }
 
 // ---- what steps are called -----------------------------------------------------------------

@@ -9,7 +9,7 @@ A scenario runs saved requests one after the other as **steps**, the way you tes
 
 The same request can be a step as often as you like, each time with its own values. Steps can also branch, loop, run at the same time, wait, ask you for a value and run another scenario.
 
-A scenario is one file in the workspace (`scenarios/<name>.yaml`) and runs the same in three places:
+A scenario is one file in the workspace (`scenarios/<name>.yaml`, or in a [folder](#folders)) and runs the same in three places:
 
 | Where | How |
 |---|---|
@@ -24,7 +24,18 @@ A scenario is one file in the workspace (`scenarios/<name>.yaml`) and runs the s
 - In a [Runner tab](../collection-runner/), **Save as a scenario** (the button next to **Run**): the ticked requests, in their order.
 - The command palette (<kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>K</kbd>) → **New scenario**.
 
-Each asks for a name and opens the scenario in a tab. To rename, duplicate or delete a scenario, right-click it in the **Scenarios** section; drag scenarios there to reorder them.
+Each asks for a name and opens the scenario in a tab. To rename, duplicate, move or delete a scenario, right-click it in the **Scenarios** section; drag scenarios there to reorder them.
+
+## Folders
+
+Keep scenarios organized in folders, and folders in folders, as in the collection.
+
+- **New folder**: the **+** at the top of the **Scenarios** section, or right-click a folder → **New folder** for one inside it. Right-click a folder → **New scenario** makes a scenario in it.
+- **Move** a scenario or a folder by dragging it: onto a folder to put it inside, onto the top edge of a row to put it before that row, or onto the empty space below the list for the top level. Right-click → **Move to…** picks the folder from a list.
+- **Rename** or **delete** a folder by right-clicking it. Deleting a folder moves it, and every scenario in it, to the trash.
+- The **Filter** at the top shows the scenarios whose name matches, in their folders.
+
+A scenario's tab shows the folders it is in before its name. A folder is a folder on disk (`scenarios/Shop/Checkout.yaml`), and the scenario's **id** is its path without `.yaml`: `Shop/Checkout`. [Run scenario](#run-scenario) steps, [`zorvik run --scenario`](../../cli/run/#-s-scenario) and AI agents use that id. When you rename or move a scenario or a folder in Zorvik, the steps that run the scenarios in it follow, and so do the values their last runs left.
 
 ## The scenario tab
 

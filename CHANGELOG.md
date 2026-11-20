@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-20
+
+### Added
+- **Folders for scenarios:** keep scenarios organized in folders, and folders in folders, as in the collection (the **+** of the **Scenarios** section, or right-click a folder → **New folder** or **New scenario**). Drag scenarios and folders into a folder or to another place, or use **Move to…**; rename and delete folders by right-clicking them. A scenario in a folder is a file in that folder (`scenarios/Shop/Checkout.yaml`), its id is its path (`Shop/Checkout`), and its tab shows the folders it is in. Steps that run a scenario follow it when it or its folder is renamed or moved, and so do the values its last run left. The **Filter** shows matching scenarios in their folders.
+- **AI agents:** `save_scenario` takes a `folder`, the new `move_scenario` moves or renames a scenario or a folder, `list_scenarios` lists the folders, and `delete_items` deletes folders of scenarios (`scenarioFolders`). A scenario is found by its id when scenarios in different folders have the name.
+- **`zorvik run --scenario`** takes a scenario's path (`--scenario Shop/Checkout`); when scenarios in different folders have the name, it lists their paths.
+
 ## [0.5.0] - 2026-11-18
 
 ### Added
@@ -220,7 +227,8 @@ The first public release.
 - In-app docs, light and dark themes, zoom and font settings.
 - Installers for Windows, macOS (universal) and Linux (deb, rpm, AppImage).
 
-[Unreleased]: https://github.com/LibreGuild/zorvik/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/LibreGuild/zorvik/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/LibreGuild/zorvik/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/LibreGuild/zorvik/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/LibreGuild/zorvik/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/LibreGuild/zorvik/compare/v0.3.0...v0.3.1

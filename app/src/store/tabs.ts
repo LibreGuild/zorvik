@@ -131,7 +131,7 @@ export interface RunnerTab {
 export interface ScenarioTab {
   type: "scenario";
   id: string;
-  /** File stem under `scenarios/`. */
+  /** Its path under `scenarios/` without `.yaml` (`Shop/Checkout`). */
   scenarioId: string;
   draft: Scenario;
   saved: Scenario;
@@ -794,9 +794,14 @@ async function saveScenarioTab(tab: ScenarioTab): Promise<boolean> {
     try {
       newId = await api.saveScenario(tab.scenarioId, draft);
     } catch (e) {
-      // Its file was deleted: "Save to write it again" creates it anew.
+      // Its file was deleted: "Save to write it again" creates it anew, in its folder while
+      // that is there.
       if (!(tab.orphaned && e instanceof RpcError && e.code === "notFound")) throw e;
-      newId = await api.createScenario(draft);
+      const folder = tab.scenarioId.includes("/") ? tab.scenarioId.slice(0, tab.scenarioId.lastIndexOf("/")) : "";
+      newId = await api.createScenario(draft, folder).catch((e: unknown) => {
+        if (folder && e instanceof RpcError && e.code === "notFound") return api.createScenario(draft);
+        throw e;
+      });
     }
     updateScenarioTab(tab.id, () => ({ scenarioId: newId, saved: structuredClone(draft), orphaned: false }));
     for (const h of scenarioSavedHandlers) h(tab.scenarioId, newId);

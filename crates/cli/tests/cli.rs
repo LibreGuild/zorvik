@@ -216,7 +216,24 @@ always:
     let p = path.clone();
     let (code, out) = tokio::task::spawn_blocking(move || run(&["run", &p, "--scenario", "Nope"])).await.unwrap();
     assert_eq!(code, 2, "{out}");
-    assert!(out.contains("scenario 'Nope' not found (there are: Cart flow, Fails)"), "{out}");
+    assert!(out.contains("scenario 'Nope' not found (there are: Cart, Fails)"), "{out}");
+
+    // In folders: by path; a name that several have is not enough.
+    let text =
+        "name: Smoke\nsteps:\n  - { type: request, request: Create.yaml, checks: [{ path: $.args.id, value: 7 }] }\n";
+    for folder in ["EU", "US"] {
+        std::fs::create_dir_all(dir.path().join(format!("scenarios/Shops/{folder}"))).unwrap();
+        std::fs::write(dir.path().join(format!("scenarios/Shops/{folder}/Smoke.yaml")), text).unwrap();
+    }
+    let p = path.clone();
+    let (code, out) =
+        tokio::task::spawn_blocking(move || run(&["run", &p, "-e", "Local", "-s", "Shops/EU/Smoke"])).await.unwrap();
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("Steps     1 passed"), "{out}");
+    let p = path.clone();
+    let (code, out) = tokio::task::spawn_blocking(move || run(&["run", &p, "-s", "smoke"])).await.unwrap();
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("give the path of one (Shops/EU/Smoke, Shops/US/Smoke)"), "{out}");
     let (code, out) =
         tokio::task::spawn_blocking(move || run(&["run", &path, "--scenario", "Cart", "--folder", "x"])).await.unwrap();
     assert_eq!(code, 2, "{out}");

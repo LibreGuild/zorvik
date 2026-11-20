@@ -281,13 +281,19 @@ export const api = {
   /** What a result sent and got (null once the app no longer keeps it). */
   runDetails: (runId: string, seq: number) => call<RunDetails | null>("runner.details", { runId, seq }),
 
+  /** The scenarios and their folders, as a tree. */
   scenarios: () => call<ScenarioNode[]>("scenario.list"),
   readScenario: (id: string) => call<Scenario>("scenario.read", { id }),
-  createScenario: (scenario: Scenario) => call<string>("scenario.create", { scenario }),
+  createScenario: (scenario: Scenario, folder = "") => call<string>("scenario.create", { scenario, folder }),
   saveScenario: (id: string, scenario: Scenario) => call<string>("scenario.save", { id, scenario }),
   duplicateScenario: (id: string) => call<string>("scenario.duplicate", { id }),
   deleteScenario: (id: string) => call<null>("scenario.delete", { id }),
-  reorderScenarios: (ids: string[]) => call<null>("scenario.reorder", { ids }),
+  createScenarioFolder: (parent: string, name: string) => call<string>("scenario.createFolder", { parent, name }),
+  renameScenarioFolder: (id: string, name: string) => call<string>("scenario.renameFolder", { id, name }),
+  deleteScenarioFolder: (id: string) => call<null>("scenario.deleteFolder", { id }),
+  /** Move a scenario or a folder (`folder`) into `parent` at `index` (last: null); returns its new id. */
+  moveScenario: (id: string, folder: boolean, parent: string, index: number | null) =>
+    call<string>("scenario.move", { id, folder, parent, index }),
   /**
    * Run a scenario as edited (`scenario`): all of it, up to and including the step at `to`, or
    * `only` that step with the values the last run left. Events `runner {runId}`; stop with `stopRun`.

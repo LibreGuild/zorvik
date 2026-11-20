@@ -11,6 +11,8 @@ export type ModalState =
   | { type: "export"; tabId: string }
   | { type: "saveAs"; tabId: string }
   | { type: "move"; path: string; name: string }
+  /** A scenario, or a folder of them (`folder`), to another folder of scenarios. */
+  | { type: "moveScenario"; id: string; name: string; folder: boolean }
   | { type: "palette" }
   | { type: "shortcuts" };
 

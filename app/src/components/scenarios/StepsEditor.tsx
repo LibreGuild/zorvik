@@ -34,6 +34,7 @@ import type { Step } from "../../bindings/Step";
 import type { TreeNode } from "../../bindings/TreeNode";
 import { methodColor, methodLabel } from "../../lib/http";
 import { api } from "../../lib/rpc";
+import { useScenarios } from "../../store/scenarios";
 import { openRequest } from "../../store/tabs";
 import { useWorkspace } from "../../store/workspace";
 import { CodeEditor } from "../CodeEditor";
@@ -44,6 +45,7 @@ import { Button, Checkbox, cx, IconButton, Input, Menu, type MenuEntry, NumberIn
 import {
   duplicateStep,
   editStep,
+  folderNames,
   insertSteps,
   listAt,
   moveStep,
@@ -416,6 +418,7 @@ function Nested({ label, listPath, steps }: { label?: React.ReactNode; listPath:
 
 function StepBody({ step, path, update, title }: { step: Step; path: string; update: (fn: (s: Step) => Step) => void; title: string }) {
   const ed = useEditor();
+  const tree = useScenarios((s) => s.tree);
   // Typed updates: the step keeps its kind.
   const set = (patch: Record<string, unknown>) => update((s) => ({ ...s, ...patch }) as Step);
   switch (step.type) {
@@ -535,7 +538,7 @@ function StepBody({ step, path, update, title }: { step: Step; path: string; upd
                 .filter((s) => s.id !== ed.scenarioId)
                 .map((s) => (
                   <option key={s.id} value={s.id}>
-                    {s.name}
+                    {[...folderNames(s.id, tree), s.name].join(" / ")}
                   </option>
                 ))}
               {step.scenario && !ed.scenarios.some((s) => s.id === step.scenario) && <option value={step.scenario}>{step.scenario} (not found)</option>}

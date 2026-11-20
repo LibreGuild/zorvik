@@ -1,13 +1,13 @@
-// Scenarios: the saved list of the open workspace, the values each one's last run left,
-// and starting a run (the run itself and its results live in store/runner.ts, like a
-// collection run's).
+// Scenarios: the saved ones of the open workspace and their folders, the values each one's
+// last run left, and starting a run (the run itself and its results live in
+// store/runner.ts, like a collection run's).
 import { create } from "zustand";
 import type { Scenario } from "../bindings/Scenario";
 import type { ScenarioNode } from "../bindings/ScenarioNode";
 import type { ScenarioValue } from "../bindings/ScenarioValue";
 import type { TreeNode } from "../bindings/TreeNode";
 import { flattenRequests } from "../components/loadtests/model";
-import { newScenario, retarget, startProblem } from "../components/scenarios/model";
+import { flattenScenarios, movedId, newScenario, retarget, retargetCalls, scenarioParent, startProblem } from "../components/scenarios/model";
 import { api, errorMessage } from "../lib/rpc";
 import { confirm, prompt } from "./dialogs";
 import { attachRun, onRunFinished, runnableRequests, stopRun, useRunner } from "./runner";
@@ -24,16 +24,19 @@ import {
   useTabs,
 } from "./tabs";
 import { toast } from "./toasts";
-import { useUi } from "./ui";
+import { toggleExpanded, useUi } from "./ui";
 import { useWorkspace } from "./workspace";
 
 interface ScenariosState {
+  /** The scenarios and their folders, as the sidebar shows them. */
+  tree: ScenarioNode[];
+  /** Every scenario (not the folders), in sidebar order. */
   saved: ScenarioNode[];
   /** The values the last run of each scenario left, by scenario id. */
   values: Record<string, ScenarioValue[]>;
 }
 
-export const useScenarios = create<ScenariosState>(() => ({ saved: [], values: {} }));
+export const useScenarios = create<ScenariosState>(() => ({ tree: [], saved: [], values: {} }));
 const set = useScenarios.setState;
 
 const currentWorkspace = () => useWorkspace.getState().info?.path ?? "";
@@ -42,15 +45,15 @@ const currentWorkspace = () => useWorkspace.getState().info?.path ?? "";
 
 export async function refreshScenarios() {
   if (!useWorkspace.getState().info) {
-    set({ saved: [] });
+    set({ tree: [], saved: [] });
     return;
   }
   const ws = currentWorkspace();
   try {
-    const saved = await api.scenarios();
-    if (currentWorkspace() === ws) set({ saved });
+    const tree = await api.scenarios();
+    if (currentWorkspace() === ws) set({ tree, saved: flattenScenarios(tree) });
   } catch {
-    if (currentWorkspace() === ws) set({ saved: [] });
+    if (currentWorkspace() === ws) set({ tree: [], saved: [] });
   }
 }
 
@@ -61,14 +64,15 @@ export function resetScenarioValues() {
 
 onScenarioFilesChanged(() => void refreshScenarios());
 onScenarioSaved((oldId, newId) => {
-  if (oldId !== newId) moveValues(oldId, newId);
+  scenariosMoved(oldId, newId, false);
   void refreshScenarios();
 });
 
-/** Create a scenario and open it; returns its id. */
-export async function createScenario(scenario: Scenario): Promise<string | null> {
+/** Create a scenario in `folder` ("" the top level) and open it; returns its id. */
+export async function createScenario(scenario: Scenario, folder = ""): Promise<string | null> {
   try {
-    const id = await api.createScenario(scenario);
+    const id = await api.createScenario(scenario, folder);
+    showScenarioFolder(folder);
     await refreshScenarios();
     await openScenario(id);
     useUi.setState({ sidebarTab: "scenarios" });
@@ -79,10 +83,10 @@ export async function createScenario(scenario: Scenario): Promise<string | null>
   }
 }
 
-/** "New scenario" (asks for a name; no steps yet). */
-export async function newScenarioPrompt() {
+/** "New scenario" (asks for a name; no steps yet), at the top level or in `folder`. */
+export async function newScenarioPrompt(folder = "") {
   const name = await prompt({ title: "New scenario", value: "Scenario", confirmLabel: "Create" });
-  if (name) await createScenario(newScenario(name));
+  if (name) await createScenario(newScenario(name), folder);
 }
 
 /** "New scenario from this folder…": a step for every request under it the runner can send, in sidebar order. */
@@ -109,7 +113,7 @@ export async function renameScenario(node: ScenarioNode) {
     const saved = { ...scenario, name };
     const newId = await api.saveScenario(node.id, saved);
     onScenarioRenamed(node.id, newId, saved);
-    moveValues(node.id, newId);
+    scenariosMoved(node.id, newId, false);
     await refreshScenarios();
   } catch (e) {
     toast("error", "Could not rename scenario", errorMessage(e));
@@ -145,25 +149,122 @@ export async function deleteScenario(node: ScenarioNode) {
   }
 }
 
-export async function reorderScenarios(ids: string[]) {
-  set((s) => ({ saved: ids.map((id) => s.saved.find((n) => n.id === id)!).filter(Boolean) }));
-  await api.reorderScenarios(ids).catch((e) => toast("error", "Could not reorder", errorMessage(e)));
-  await refreshScenarios();
-}
-
 const tabOf = (scenarioId: string): ScenarioTab | undefined => useTabs.getState().tabs.find((t): t is ScenarioTab => isScenarioTab(t) && t.scenarioId === scenarioId);
 
-/** A rename: the values the last run left follow the new id. */
-function moveValues(oldId: string, newId: string) {
+// ---- folders ---------------------------------------------------------------------------
+
+/** What `useUi.expanded` keeps a folder of scenarios open under (request folders use their path). */
+export const scenarioFolderKey = (id: string) => `scenarios:${id}`;
+
+/** Open a folder of scenarios in the sidebar, and the folders it is in. */
+export function showScenarioFolder(id: string) {
+  const parts = id.split("/").filter(Boolean);
+  for (let i = 1; i <= parts.length; i++) toggleExpanded(scenarioFolderKey(parts.slice(0, i).join("/")), true);
+}
+
+/** "New folder", at the top level or in `parent`. */
+export async function newScenarioFolder(parent = "") {
+  const name = await prompt({ title: "New folder", placeholder: "Folder name", confirmLabel: "Create" });
+  if (!name) return;
+  try {
+    const id = await api.createScenarioFolder(parent, name);
+    showScenarioFolder(id);
+    await refreshScenarios();
+  } catch (e) {
+    toast("error", "Could not create folder", errorMessage(e));
+  }
+}
+
+export async function renameScenarioFolder(node: ScenarioNode) {
+  const name = await prompt({ title: "Rename folder", value: node.name, confirmLabel: "Rename" });
+  if (!name || name === node.name) return;
+  try {
+    const newId = await api.renameScenarioFolder(node.id, name);
+    scenariosMoved(node.id, newId, true);
+    await refreshScenarios();
+  } catch (e) {
+    toast("error", "Could not rename folder", errorMessage(e));
+  }
+}
+
+export async function deleteScenarioFolder(node: ScenarioNode) {
+  const inside = flattenScenarios(node.children ?? []);
+  const what = inside.length ? ` and ${inside.length === 1 ? "the scenario" : `the ${inside.length} scenarios`} in it` : "";
+  const ok = await confirm({ title: "Delete folder?", message: `“${node.name}”${what} will be moved to the trash.`, confirmLabel: "Delete", danger: true });
+  if (!ok) return;
+  try {
+    const active = useRunner.getState().active;
+    const running = useTabs.getState().tabs.find((t) => t.id === active);
+    if (isScenarioTab(running) && movedId(running.scenarioId, node.id, node.id, true)) await stopRun(running.id);
+    await api.deleteScenarioFolder(node.id);
+    for (const s of inside) onScenarioDeleted(s.id);
+    set((s) => ({ values: Object.fromEntries(Object.entries(s.values).filter(([id]) => !movedId(id, node.id, node.id, true))) }));
+    await refreshScenarios();
+  } catch (e) {
+    toast("error", "Could not delete folder", errorMessage(e));
+  }
+}
+
+/**
+ * Move a scenario or a folder into the folder `parent` ("" the top level), at place `index`
+ * among what is there now (last: null).
+ */
+export async function moveScenarioNode(node: ScenarioNode, parent: string, index: number | null) {
+  const folder = !!node.folder;
+  if (folder && (parent === node.id || parent.startsWith(`${node.id}/`))) return;
+  const from = scenarioParent(node.id);
+  if (from === parent && index === null) return;
+  // Within its own folder, the places after it move up once it leaves its own.
+  if (from === parent && index !== null) {
+    const level = parent ? findScenarioNode(useScenarios.getState().tree, parent)?.children ?? [] : useScenarios.getState().tree;
+    const at = level.findIndex((n) => n.id === node.id && !!n.folder === folder);
+    if (at === index || at + 1 === index) return;
+    if (at >= 0 && at < index) index -= 1;
+  }
+  try {
+    const newId = await api.moveScenario(node.id, folder, parent, index);
+    scenariosMoved(node.id, newId, folder);
+    showScenarioFolder(parent);
+    await refreshScenarios();
+  } catch (e) {
+    toast("error", "Could not move", errorMessage(e));
+  }
+}
+
+/** The node with this id in the tree (a folder when `folder`). */
+export function findScenarioNode(nodes: ScenarioNode[], id: string, folder = true): ScenarioNode | undefined {
+  for (const n of nodes) {
+    if (n.id === id && !!n.folder === folder) return n;
+    const inside = n.folder ? findScenarioNode(n.children ?? [], id, folder) : undefined;
+    if (inside) return inside;
+  }
+  return undefined;
+}
+
+/**
+ * The scenario `oldId`, or (`folder`) everything in the folder `oldId`, has a new id: what is
+ * kept by id follows. Their tabs, the values their last runs left, the steps of open
+ * scenarios that run them (the files were changed already) and open folders.
+ */
+export function scenariosMoved(oldId: string, newId: string, folder: boolean) {
   if (oldId === newId) return;
-  set((s) => {
-    const values = { ...s.values };
-    if (oldId in values) {
-      values[newId] = values[oldId];
-      delete values[oldId];
-    }
-    return { values };
-  });
+  const moved = (id: string) => movedId(id, oldId, newId, folder);
+  for (const tab of useTabs.getState().tabs) {
+    if (!isScenarioTab(tab)) continue;
+    const id = moved(tab.scenarioId);
+    const draft = retargetCalls(tab.draft, moved);
+    const saved = retargetCalls(tab.saved, moved);
+    if (id || draft !== tab.draft || saved !== tab.saved) updateScenarioTab(tab.id, () => ({ ...(id ? { scenarioId: id, orphaned: false } : {}), draft, saved }));
+  }
+  set((s) => ({ values: Object.fromEntries(Object.entries(s.values).map(([id, v]) => [moved(id) ?? id, v])) }));
+  if (folder) {
+    const key = scenarioFolderKey(oldId);
+    useUi.setState((s) => ({
+      expanded: Object.fromEntries(
+        Object.entries(s.expanded).map(([k, v]) => [k === key ? scenarioFolderKey(newId) : k.startsWith(`${key}/`) ? scenarioFolderKey(newId) + k.slice(key.length) : k, v]),
+      ),
+    }));
+  }
 }
 
 // ---- values ----------------------------------------------------------------------------

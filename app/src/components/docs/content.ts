@@ -272,6 +272,7 @@ export const TOPICS: DocTopic[] = [
       "Run to here and Run only this step, to build a scenario one step at a time",
       "A scenario's values are its own: the environment and collection variables are read, never changed. See and clear what the last run left under Variables",
       "A data file runs it once per row; steps under Always at the end clean up whatever happened",
+      "Folders, and folders in folders, to keep scenarios organized: drag scenarios in and out, or use Move to…",
       "Docs for each scenario; the same file runs with `zorvik run --scenario` and from AI agents",
     ],
     tryIt: [

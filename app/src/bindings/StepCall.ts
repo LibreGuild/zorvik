@@ -6,7 +6,7 @@ import type { StepValue } from "./StepValue";
  */
 export type StepCall = { 
 /**
- * The scenario's id (its file name under `scenarios/`).
+ * The scenario's id: its path under `scenarios/` without `.yaml` (`Shop/Log in`).
  */
 scenario: string, 
 /**

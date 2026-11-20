@@ -13,6 +13,7 @@ import {
   SpecUpdateModal,
   ImportModal,
   MoveModal,
+  MoveScenarioModal,
   SaveAsModal,
   ShortcutsModal,
   WorkspaceSettingsModal,
@@ -197,6 +198,8 @@ function Modals() {
       return <SaveAsModal tabId={modal.tabId} />;
     case "move":
       return <MoveModal path={modal.path} name={modal.name} />;
+    case "moveScenario":
+      return <MoveScenarioModal id={modal.id} name={modal.name} folder={modal.folder} />;
     case "palette":
       return <CommandPalette />;
     case "shortcuts":

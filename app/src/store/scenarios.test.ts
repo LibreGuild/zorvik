@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunResult } from "../bindings/RunResult";
 import type { RunSummary } from "../bindings/RunSummary";
 import type { Scenario } from "../bindings/Scenario";
+import type { ScenarioNode } from "../bindings/ScenarioNode";
 import type { StreamEvent } from "../bindings/StreamEvent";
 import type { TreeNode } from "../bindings/TreeNode";
 import type { WorkspaceInfo } from "../bindings/WorkspaceInfo";
@@ -25,6 +26,10 @@ vi.mock("../lib/rpc", async (importOriginal) => {
       createScenario: fn(),
       saveScenario: fn(),
       deleteScenario: fn(),
+      createScenarioFolder: fn(),
+      renameScenarioFolder: fn(),
+      deleteScenarioFolder: fn(),
+      moveScenario: fn(),
       runScenario: fn(),
       answerScenario: fn(),
       scenarioValues: fn(),
@@ -41,7 +46,20 @@ const { useDialogs } = await import("./dialogs");
 const { useTabs, resetTabs, openScenario, isDirty, onItemMoved, sameScenario, saveTab, updateScenarioDraft, closeTab } = await import("./tabs");
 type ScenarioTab = import("./tabs").ScenarioTab;
 const { flushRunnerEvents, useRunner } = await import("./runner");
-const { clearScenarioValues, refreshScenarios, runScenario, scenarioFromFolder, toggleScenarioRun, useScenarios } = await import("./scenarios");
+const {
+  clearScenarioValues,
+  deleteScenarioFolder,
+  moveScenarioNode,
+  newScenarioFolder,
+  refreshScenarios,
+  renameScenarioFolder,
+  runScenario,
+  scenarioFolderKey,
+  scenarioFromFolder,
+  toggleScenarioRun,
+  useScenarios,
+} = await import("./scenarios");
+const { useUi } = await import("./ui");
 const mocked = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
 
 const WS = "/ws";
@@ -112,7 +130,7 @@ beforeEach(() => {
   localStorage.clear();
   useWorkspace.setState({ info: { path: WS, tree, environments: [], activeEnvironment: null, meta: { name: "Shop" } } as unknown as WorkspaceInfo });
   useRunner.setState({ settings: {}, data: {}, runs: {}, filter: {}, active: null, starting: null });
-  useScenarios.setState({ saved: [], values: {} });
+  useScenarios.setState({ tree: [], saved: [], values: {} });
   useToasts.setState({ toasts: [] });
   useDialogs.setState({ current: null });
   vi.clearAllMocks();
@@ -169,16 +187,119 @@ describe("scenario tabs", () => {
     useDialogs.setState({ current: null });
     if (dialog.kind === "prompt") dialog.resolve("Cart");
     await making;
-    expect(mocked.createScenario).toHaveBeenCalledWith({
-      name: "Cart",
-      seq: 0,
-      steps: [
-        { type: "request", request: "cart/create.yaml" },
-        { type: "request", request: "cart/get.yaml" },
-      ],
-    });
+    expect(mocked.createScenario).toHaveBeenCalledWith(
+      {
+        name: "Cart",
+        seq: 0,
+        steps: [
+          { type: "request", request: "cart/create.yaml" },
+          { type: "request", request: "cart/get.yaml" },
+        ],
+      },
+      "",
+    );
     await refreshScenarios();
     expect(useScenarios.getState().saved).toHaveLength(1);
+  });
+});
+
+describe("scenario folders", () => {
+  const node = (id: string, extra: Partial<ScenarioNode> = {}): ScenarioNode => ({ id, name: id.split("/").pop()!, steps: 1, seq: 0, ...extra });
+  const shop = (): ScenarioNode[] => [
+    node("Smoke"),
+    node("Shop", { folder: true, children: [node("Shop/Auth", { folder: true, children: [node("Shop/Auth/Log in")] }), node("Shop/Checkout")] }),
+    node("Last"),
+  ];
+  const answer = async (value: string | boolean) => {
+    await vi.waitFor(() => expect(useDialogs.getState().current).not.toBeNull());
+    const dialog = useDialogs.getState().current!;
+    useDialogs.setState({ current: null });
+    if (dialog.kind === "prompt" && typeof value === "string") dialog.resolve(value);
+    if (dialog.kind === "confirm" && typeof value === "boolean") dialog.resolve(value);
+    return dialog;
+  };
+
+  it("list the scenarios in their folders, and every scenario for the pickers", async () => {
+    mocked.scenarios.mockResolvedValue(shop());
+    await refreshScenarios();
+    expect(useScenarios.getState().tree[1].children).toHaveLength(2);
+    expect(useScenarios.getState().saved.map((n) => n.id)).toEqual(["Smoke", "Shop/Auth/Log in", "Shop/Checkout", "Last"]);
+  });
+
+  it("are made, opened in the sidebar, renamed, and what is in them follows", async () => {
+    mocked.scenarios.mockResolvedValue(shop());
+    mocked.createScenarioFolder.mockResolvedValueOnce("Shop/Auth/Tokens");
+    const making = newScenarioFolder("Shop/Auth");
+    await answer("Tokens");
+    await making;
+    expect(mocked.createScenarioFolder).toHaveBeenCalledWith("Shop/Auth", "Tokens");
+    const open = useUi.getState().expanded;
+    expect([open[scenarioFolderKey("Shop")], open[scenarioFolderKey("Shop/Auth")], open[scenarioFolderKey("Shop/Auth/Tokens")]]).toEqual([true, true, true]);
+
+    // A tab of a scenario in the folder, another whose step runs it, and the values its last run left.
+    mocked.readScenario.mockResolvedValueOnce(scenario({ name: "Log in" }));
+    const login = (await openScenario("Shop/Auth/Log in"))!;
+    mocked.readScenario.mockResolvedValueOnce(scenario({ name: "Main", steps: [{ type: "scenario", scenario: "Shop/Auth/Log in" }] }));
+    const main = (await openScenario("Main"))!;
+    useScenarios.setState({ values: { "Shop/Auth/Log in": [{ key: "token", value: "t", kind: "text", secret: false }] } });
+    mocked.renameScenarioFolder.mockResolvedValueOnce("Shop/Sign in");
+    const auth = useScenarios.getState().tree[1].children![0];
+    const renaming = renameScenarioFolder(auth);
+    await answer("Sign in");
+    await renaming;
+    expect(mocked.renameScenarioFolder).toHaveBeenCalledWith("Shop/Auth", "Sign in");
+    expect(tab(login).scenarioId).toBe("Shop/Sign in/Log in");
+    const calls = (s: Scenario) => s.steps.map((step) => (step.type === "scenario" ? step.scenario : ""));
+    expect([calls(tab(main).draft), calls(tab(main).saved)]).toEqual([["Shop/Sign in/Log in"], ["Shop/Sign in/Log in"]]);
+    expect(isDirty(tab(main))).toBe(false);
+    expect(Object.keys(useScenarios.getState().values)).toEqual(["Shop/Sign in/Log in"]);
+    expect(useUi.getState().expanded[scenarioFolderKey("Shop/Sign in/Tokens")]).toBe(true);
+  });
+
+  it("move scenarios and folders: into a folder, and to a place in their own", async () => {
+    mocked.scenarios.mockResolvedValue(shop());
+    await refreshScenarios();
+    const [smoke, shopFolder, last] = useScenarios.getState().tree;
+    mocked.moveScenario.mockResolvedValueOnce("Shop/Smoke");
+    await moveScenarioNode(smoke, "Shop", null);
+    expect(mocked.moveScenario).toHaveBeenLastCalledWith("Smoke", false, "Shop", null);
+    // Dropped before the row after it, or on itself: nowhere new.
+    await moveScenarioNode(smoke, "", 1);
+    await moveScenarioNode(smoke, "", 0);
+    expect(mocked.moveScenario).toHaveBeenCalledTimes(1);
+    // Down its own folder: the places after it move up once it leaves its own.
+    mocked.moveScenario.mockResolvedValueOnce("Smoke");
+    await moveScenarioNode(smoke, "", 3);
+    expect(mocked.moveScenario).toHaveBeenLastCalledWith("Smoke", false, "", 2);
+    mocked.moveScenario.mockResolvedValueOnce("Last");
+    await moveScenarioNode(last, "", 0);
+    expect(mocked.moveScenario).toHaveBeenLastCalledWith("Last", false, "", 0);
+    // Never into itself.
+    await moveScenarioNode(shopFolder, "Shop/Auth", null);
+    expect(mocked.moveScenario).toHaveBeenCalledTimes(3);
+    mocked.moveScenario.mockRejectedValueOnce(new Error("disk full"));
+    await moveScenarioNode(shopFolder, "Archive", null);
+    expect(useToasts.getState().toasts.at(-1)).toMatchObject({ title: "Could not move" });
+  });
+
+  it("are deleted with what is in them, after asking", async () => {
+    mocked.scenarios.mockResolvedValue(shop());
+    await refreshScenarios();
+    mocked.readScenario.mockResolvedValueOnce(scenario({ name: "Checkout" }));
+    const checkout = (await openScenario("Shop/Checkout"))!;
+    useScenarios.setState({ values: { "Shop/Checkout": [], Smoke: [] } });
+    const shopFolder = useScenarios.getState().tree[1];
+    let deleting = deleteScenarioFolder(shopFolder);
+    await answer(false);
+    await deleting;
+    expect(mocked.deleteScenarioFolder).not.toHaveBeenCalled();
+    deleting = deleteScenarioFolder(shopFolder);
+    const dialog = await answer(true);
+    await deleting;
+    expect(dialog.kind === "confirm" && dialog.message).toBe("“Shop” and the 2 scenarios in it will be moved to the trash.");
+    expect(mocked.deleteScenarioFolder).toHaveBeenCalledWith("Shop");
+    expect(tab(checkout).orphaned).toBe(true);
+    expect(Object.keys(useScenarios.getState().values)).toEqual(["Smoke"]);
   });
 });
 

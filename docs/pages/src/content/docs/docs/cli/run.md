@@ -60,10 +60,10 @@ There's no option to pick single requests or change the order: every request und
 
 ```bash
 zorvik run . --scenario Checkout --env Staging
-zorvik run . -s "Sign up" --var otp=123456 --junit report.xml
+zorvik run . -s "Shop/Sign up" --var otp=123456 --junit report.xml
 ```
 
-Runs the steps of a saved [scenario](../../testing/scenarios/) instead of the requests of a folder: the same steps, checks, outputs and flow as the scenario's tab in the app. Give its name, or its file name under `scenarios/` without `.yaml`, in any case.
+Runs the steps of a saved [scenario](../../testing/scenarios/) instead of the requests of a folder: the same steps, checks, outputs and flow as the scenario's tab in the app. Give its name, or its path under `scenarios/` without `.yaml` (`Shop/Sign up` for one in the folder `Shop`), in any case. When scenarios in different folders have the name, give the path: the command lists them.
 
 - **Not with `--folder`, `--delay` or `--bail`.** The scenario says what runs, in which order, where it waits and whether it goes on after a failed step. The command refuses the combination (exit code 2).
 - **`--var`** values win over the scenario's own values and every other variable. They also answer the scenario's [**Ask for a value**](../../testing/scenarios/#ask-for-a-value) steps (`--var otp=123456`): nobody can be asked in a terminal, so an ask step without a value fails.
