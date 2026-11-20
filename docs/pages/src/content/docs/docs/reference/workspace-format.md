@@ -24,6 +24,9 @@ my-api/
     Payments mock.yaml        # a mock API or another server
   scenarios/
     Checkout.yaml             # a scenario: requests run as steps
+    Shop/                     # a folder of scenarios
+      _folder.yaml            # optional: the folder's name and order
+      Log in.yaml
   loadtests/
     Checkout smoke.yaml       # a load test
   specs/
@@ -575,7 +578,7 @@ Results, resource texts and prompt messages can use `{{args.name}}`, `{{args}}`,
 
 ## Scenarios (`scenarios/*.yaml`)
 
-One file per scenario. The file name (without `.yaml`) is its id, used by `zorvik run --scenario` and by the steps of other scenarios that run it. See [Scenarios](../../testing/scenarios/).
+One file per scenario, in `scenarios/` or in folders under it. Its path under `scenarios/` without `.yaml` is its id (`Checkout`, `Shop/Log in`), used by `zorvik run --scenario` and by the steps of other scenarios that run it. A folder is a folder; its optional `_folder.yaml` holds its `name` and `seq` (its place among what is beside it), like a [request folder](#folders-_folderyaml)'s. See [Scenarios](../../testing/scenarios/).
 
 ```yaml title="scenarios/Checkout.yaml"
 name: Checkout
@@ -697,7 +700,7 @@ The other types:
 | `wait` | `ms` | | Milliseconds to pause (at most 600,000). |
 | `stop` | `what` | `scenario` | `loop` (leave the loop it is in), `scenario` (end the scenario as passed) or `fail` (end it as failed). |
 | | `message` | | Why, shown in the results. |
-| `scenario` | `scenario` | | The id of the scenario to run (its file name without `.yaml`). |
+| `scenario` | `scenario` | | The id of the scenario to run: its path under `scenarios/` without `.yaml` (`Shop/Log in`). |
 | | `inputs` | `[]` | `key`, `value`: values it starts with, read with this scenario's values. |
 | | `outputs` | `[]` | `key`, `value`: values to bring back, each `value` read with the other scenario's values (`{ key: token, value: "{{token}}" }`). |
 | `script` | `code` | `""` | JavaScript with the `pm` API. |
@@ -707,7 +710,7 @@ The other types:
 
 Steps can be nested 16 levels deep. A scenario with a deeper list, or with a name that can't be a variable (an output, an input, a value to set, a loop's `as`, an ask's `variable`), shows in the sidebar with a warning and doesn't run.
 
-When a request is renamed or moved in Zorvik, scenarios that send it are updated in place (their file name doesn't change). So are the scenarios that run a scenario you rename.
+When a request is renamed or moved in Zorvik, scenarios that send it are updated in place (their file name doesn't change). So are the scenarios that run a scenario you rename or move, or one in a folder you rename or move.
 
 ## Load tests (`loadtests/*.yaml`)
 

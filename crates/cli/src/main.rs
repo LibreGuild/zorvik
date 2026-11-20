@@ -130,8 +130,8 @@ struct RunArgs {
     /// Only run requests under this folder (path relative to requests/).
     #[arg(short, long)]
     folder: Option<String>,
-    /// Run a saved scenario (its name, or its file name under scenarios/) instead of a
-    /// folder's requests. --var values win over the scenario's own and answer its ask steps;
+    /// Run a saved scenario (its name, or its path under scenarios/ such as Shop/Checkout)
+    /// instead of a folder's requests. --var values win over the scenario's own and answer its ask steps;
     /// --data and --iterations replace the scenario's.
     #[arg(short, long, value_name = "NAME", conflicts_with_all = ["folder", "delay", "bail"])]
     scenario: Option<String>,
@@ -405,19 +405,31 @@ enum What {
     Scenario(Box<ScenarioPlan>),
 }
 
-/// A saved scenario by id (file name) or name, ignoring case.
+/// A saved scenario by id (its path under scenarios/, `Shop/Checkout`) or name, ignoring case.
 fn find_scenario(ws: &Workspace, wanted: &str) -> Result<Scenario, String> {
     let nodes = ws.list_scenarios().map_err(|e| e.message)?;
-    let node = nodes
-        .iter()
-        .find(|n| n.id.eq_ignore_ascii_case(wanted) || n.name.eq_ignore_ascii_case(wanted))
-        .ok_or_else(|| {
-            let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
-            match names.is_empty() {
-                true => format!("scenario '{wanted}' not found: this workspace has no scenarios"),
-                false => format!("scenario '{wanted}' not found (there are: {})", names.join(", ")),
+    let wanted = wanted.trim().trim_matches('/');
+    let named: Vec<_> = nodes.iter().filter(|n| n.name.eq_ignore_ascii_case(wanted)).collect();
+    let node = match nodes.iter().find(|n| n.id.eq_ignore_ascii_case(wanted)) {
+        Some(node) => node,
+        None => match named.as_slice() {
+            [node] => node,
+            [] => {
+                let ids: Vec<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
+                return Err(match ids.is_empty() {
+                    true => format!("scenario '{wanted}' not found: this workspace has no scenarios"),
+                    false => format!("scenario '{wanted}' not found (there are: {})", ids.join(", ")),
+                });
             }
-        })?;
+            many => {
+                let ids: Vec<&str> = many.iter().map(|n| n.id.as_str()).collect();
+                return Err(format!(
+                    "several scenarios are called '{wanted}': give the path of one ({})",
+                    ids.join(", ")
+                ));
+            }
+        },
+    };
     if let Some(error) = &node.error {
         return Err(format!("scenario '{}' can't be read: {error}", node.id));
     }

@@ -849,6 +849,66 @@ async fn agent_builds_and_runs_a_scenario() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn agent_keeps_scenarios_in_folders() {
+    let server = TestServer::start().await;
+    let (api, mut agent, asked, _data, ws, _listener) = connected("Folders").await;
+    let requests = json!([{ "name": "Ping", "url": format!("{}/echo?ok=1", server.url("")) }]);
+    let (err, _, text) = agent.call("save_requests", json!({ "requests": requests })).await;
+    assert!(!err, "{text}");
+    let smoke = json!({ "steps": [{ "type": "request", "request": "Ping.yaml", "checks": [{ "from": "status", "value": "200" }] }] });
+
+    // In folders made as needed; the same name in two folders is two scenarios.
+    for folder in ["Shops/EU", "Shops/US"] {
+        let (err, saved, text) =
+            agent.call("save_scenario", json!({ "name": "Smoke", "folder": folder, "scenario": smoke })).await;
+        assert!(!err, "{text}");
+        assert_eq!(saved["id"], format!("{folder}/Smoke"));
+    }
+    assert!(ws.path().join("scenarios/Shops/EU/Smoke.yaml").is_file());
+    let (_, list, text) = agent.call("list_scenarios", json!({})).await;
+    assert_eq!(list["folders"], json!(["Shops", "Shops/EU", "Shops/US"]), "{text}");
+    let ids: Vec<&str> = list["scenarios"].as_array().unwrap().iter().filter_map(|s| s["id"].as_str()).collect();
+    assert_eq!(ids, ["Shops/EU/Smoke", "Shops/US/Smoke"]);
+    // Saved again in its folder: replaced, not a third one.
+    let (err, saved, text) =
+        agent.call("save_scenario", json!({ "name": "smoke", "folder": "shops/us", "scenario": smoke })).await;
+    assert!(!err && saved["id"] == "Shops/US/Smoke", "{text}");
+    assert_eq!(api.call("scenario.list", json!({})).await.unwrap()[0]["children"].as_array().unwrap().len(), 2);
+
+    // A name two scenarios have is not enough: the id says which.
+    let (err, _, text) = agent.call("run_scenario", json!({ "name": "Smoke", "waitSeconds": 30 })).await;
+    assert!(err && text.contains("Shops/EU/Smoke, Shops/US/Smoke"), "{text}");
+    let (err, run, text) = agent.call("run_scenario", json!({ "name": "Shops/EU/Smoke", "waitSeconds": 30 })).await;
+    assert!(!err && run["summary"]["passed"] == true, "{text}");
+    // A scenario that runs one in a folder, by its id.
+    let all = json!({ "steps": [{ "type": "scenario", "scenario": "Shops/US/Smoke" }] });
+    let (err, _, text) = agent.call("save_scenario", json!({ "name": "All", "scenario": all })).await;
+    assert!(!err, "{text}");
+
+    // Moved and renamed: the scenario that runs it follows.
+    let (err, moved, text) =
+        agent.call("move_scenario", json!({ "folder": "Shops/US", "toFolder": "Archive", "newName": "America" })).await;
+    assert!(!err && moved["id"] == "Archive/America", "{text}");
+    let (_, read, text) = agent.call("read_scenario", json!({ "name": "All" })).await;
+    assert_eq!(read["scenario"]["steps"][0]["scenario"], "Archive/America/Smoke", "{text}");
+    let (err, moved, text) = agent
+        .call("move_scenario", json!({ "scenario": "Archive/America/Smoke", "toFolder": "", "newName": "US smoke" }))
+        .await;
+    assert!(!err && moved["id"] == "US smoke", "{text}");
+    let (_, read, _) = agent.call("read_scenario", json!({ "name": "All" })).await;
+    assert_eq!(read["scenario"]["steps"][0]["scenario"], "US smoke");
+    let (err, _, text) = agent.call("move_scenario", json!({ "folder": "Nope", "toFolder": "" })).await;
+    assert!(err && text.contains("Folder 'Nope' not found"), "{text}");
+
+    // A folder is deleted with what is in it, once the user says so.
+    let (err, deleted, text) = agent.call("delete_items", json!({ "scenarioFolders": ["Shops"] })).await;
+    assert!(!err, "{text}");
+    let label = "Scenario folder Shops (1 scenario inside)";
+    assert!(deleted["deleted"] == json!([label]) || deleted["failed"][0]["item"] == label, "{text}");
+    assert!(asked.lock().unwrap().iter().any(|(kind, items)| *kind == ConfirmKind::Delete && items == &[label]));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn agent_finds_and_imports_a_catalog_api() {
     let (api, mut agent, asked, _data, _ws, _listener) = connected("Catalog").await;
 

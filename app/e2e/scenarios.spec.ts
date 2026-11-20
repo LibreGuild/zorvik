@@ -188,3 +188,81 @@ test("the command palette makes a scenario; steps are added from the collection 
   await expect(page.getByTestId("runner-result")).toHaveCount(1);
   await expect(page.getByTestId("runner-result")).toContainText("Create cart");
 });
+
+test("scenarios are kept in folders, inside each other, and still run each other", async ({ page }) => {
+  test.setTimeout(90_000);
+  const file = (rel: string) => path.join(WORKSPACE, "scenarios", rel);
+  const read = (rel: string) => (fs.existsSync(file(rel)) ? fs.readFileSync(file(rel), "utf8") : "");
+  const name = async (value: string, confirm: string) => {
+    await page.getByRole("textbox").last().fill(value);
+    await page.getByRole("button", { name: confirm, exact: true }).click();
+  };
+  await page.getByTestId("rail-scenarios").click();
+  const list = page.getByTestId("scenarios-list");
+
+  // A folder, a folder in it, and a scenario in that one.
+  await list.getByRole("button", { name: "New scenario" }).click();
+  await page.getByRole("menuitem", { name: "New folder" }).click();
+  await name("E2E Shop", "Create");
+  await list.getByTestId("scenario-folder-E2E Shop").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "New folder" }).click();
+  await name("Auth", "Create");
+  const auth = list.getByTestId("scenario-folder-E2E Shop/Auth");
+  await expect(auth).toBeVisible();
+  await auth.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "New scenario" }).click();
+  await name("Log in", "Create");
+  await expect(page.getByTestId("scenario-folders")).toHaveText("E2E Shop / Auth /");
+  await expect(list.getByTestId("scenario-row-E2E Shop/Auth/Log in")).toBeVisible();
+  await page.getByTestId("scenario-add-step-steps").click();
+  await page.getByRole("menuitem", { name: "Set values" }).click();
+  await page.getByTestId("scenario-step").first().getByLabel("Value 1 name").fill("token");
+  await page.getByTestId("scenario-step").first().getByLabel("Value 1 value").fill("abc");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => read("E2E Shop/Auth/Log in.yaml")).toContain("key: token");
+
+  // A scenario at the top level runs it, chosen by its folders and name.
+  await list.getByRole("button", { name: "New scenario" }).click();
+  await page.getByRole("menuitem", { name: "New scenario" }).click();
+  await name("E2E Main", "Create");
+  await page.getByTestId("scenario-add-step-steps").click();
+  await page.getByRole("menuitem", { name: "Run scenario" }).click();
+  await page.getByLabel("Scenario to run").selectOption({ label: "E2E Shop / Auth / Log in" });
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => read("E2E Main.yaml")).toContain("scenario: E2E Shop/Auth/Log in");
+  await page.keyboard.press("ControlOrMeta+Enter");
+  await expect(page.getByText("“E2E Main” passed").last()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("runner-result").first()).toContainText("Run scenario Log in");
+
+  // A folder renamed: the step that runs the scenario in it follows, and so does its tab.
+  await auth.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rename…" }).click();
+  await name("Sign in", "Rename");
+  await expect(list.getByTestId("scenario-row-E2E Shop/Sign in/Log in")).toBeVisible();
+  await expect.poll(() => read("E2E Main.yaml")).toContain("scenario: E2E Shop/Sign in/Log in");
+  await page.getByRole("tab", { name: /Log in/ }).click();
+  await expect(page.getByTestId("scenario-folders")).toHaveText("E2E Shop / Sign in /");
+
+  // Dragged onto a folder: into it.
+  const shop = list.getByTestId("scenario-folder-E2E Shop");
+  const box = (await shop.boundingBox())!;
+  await list.getByTestId("scenario-row-E2E Main").dragTo(shop, { targetPosition: { x: box.width / 2, y: box.height - 4 } });
+  await expect(list.getByTestId("scenario-row-E2E Shop/E2E Main")).toBeVisible();
+  expect(fs.existsSync(file("E2E Shop/E2E Main.yaml"))).toBe(true);
+
+  // Moved with "Move to…" to the top level; it still runs.
+  await list.getByTestId("scenario-row-E2E Shop/Sign in/Log in").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Move to…" }).click();
+  await page.getByLabel("Destination folder").selectOption("");
+  await page.getByRole("button", { name: "Move", exact: true }).click();
+  await expect(list.getByTestId("scenario-row-Log in")).toBeVisible();
+  await expect.poll(() => read("E2E Shop/E2E Main.yaml")).toContain("scenario: Log in");
+  await list.getByTestId("scenario-row-E2E Shop/E2E Main").click();
+  await page.getByTestId("scenario-start").click();
+  await expect(page.getByText("“E2E Main” passed").last()).toBeVisible({ timeout: 20_000 });
+
+  // The filter shows a scenario with the folders it is in.
+  await list.getByLabel("Filter scenarios").fill("e2e main");
+  await expect(list.getByRole("treeitem")).toHaveCount(2);
+  await expect(list.getByTestId("scenario-folder-E2E Shop")).toBeVisible();
+});

@@ -9,6 +9,7 @@ pub mod history;
 pub mod localvalues;
 pub mod oauth2;
 pub mod resolve;
+mod scenarios;
 pub mod secrets;
 pub mod settings;
 pub mod signing;
@@ -16,5 +17,6 @@ pub mod store;
 pub mod vars;
 
 pub use error::{Error, ErrorCode, Result};
+pub use scenarios::ScenarioItem;
 pub use store::{EnvironmentEntry, Workspace};
 pub use zorvik_formats as formats;

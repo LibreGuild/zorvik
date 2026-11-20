@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Request } from "../../bindings/Request";
 import type { RunResult } from "../../bindings/RunResult";
 import type { Scenario } from "../../bindings/Scenario";
+import type { ScenarioNode } from "../../bindings/ScenarioNode";
 import type { Step } from "../../bindings/Step";
 import type { RequestEntry } from "../loadtests/model";
 import {
@@ -9,10 +10,14 @@ import {
   countSteps,
   duplicateStep,
   editStep,
+  filterScenarios,
+  flattenScenarios,
+  folderNames,
   followSteps,
   insertSteps,
   jsonLeaves,
   listAt,
+  movedId,
   moveStep,
   nameForPath,
   newScenario,
@@ -21,6 +26,9 @@ import {
   removeStep,
   requestVariables,
   retarget,
+  retargetCalls,
+  scenarioFolders,
+  scenarioParent,
   startProblem,
   stepAt,
   stepProblem,
@@ -313,5 +321,53 @@ describe("results by step", () => {
       ["steps/0", 2],
       ["steps/2", 1],
     ]);
+  });
+});
+
+describe("folders of scenarios", () => {
+  const node = (id: string, extra: Partial<ScenarioNode> = {}): ScenarioNode => ({ id, name: id.split("/").pop()!, steps: 1, seq: 0, ...extra });
+  const tree: ScenarioNode[] = [
+    node("Smoke"),
+    node("Shop-", { name: "Shop: EU", folder: true, children: [node("Shop-/Auth", { folder: true, children: [node("Shop-/Auth/Log in")] }), node("Shop-/Checkout")] }),
+    node("Empty", { folder: true }),
+  ];
+
+  it("list every scenario, every folder, and the folders a scenario is in", () => {
+    expect(flattenScenarios(tree).map((n) => n.id)).toEqual(["Smoke", "Shop-/Auth/Log in", "Shop-/Checkout"]);
+    expect(scenarioFolders(tree)).toEqual([
+      { id: "Shop-", name: "Shop: EU", depth: 0 },
+      { id: "Shop-/Auth", name: "Auth", depth: 1 },
+      { id: "Empty", name: "Empty", depth: 0 },
+    ]);
+    expect(folderNames("Shop-/Auth/Log in", tree)).toEqual(["Shop: EU", "Auth"]);
+    expect(folderNames("Smoke", tree)).toEqual([]);
+    expect(folderNames("Gone/Away", tree)).toEqual(["Gone"]);
+    expect([scenarioParent("Shop-/Auth/Log in"), scenarioParent("Smoke")]).toEqual(["Shop-/Auth", ""]);
+  });
+
+  it("filter by name, keeping the folders on the way", () => {
+    const shape = (nodes: ScenarioNode[]): string[] => nodes.flatMap((n) => [n.id, ...shape(n.children ?? [])]);
+    expect(shape(filterScenarios(tree, "log"))).toEqual(["Shop-", "Shop-/Auth", "Shop-/Auth/Log in"]);
+    // A folder whose name matches comes whole.
+    expect(shape(filterScenarios(tree, "eu"))).toEqual(["Shop-", "Shop-/Auth", "Shop-/Auth/Log in", "Shop-/Checkout"]);
+    expect(filterScenarios(tree, "")).toBe(tree);
+    expect(filterScenarios(tree, "nothing")).toEqual([]);
+  });
+
+  it("follow a scenario or a folder to its new id, in the steps that run them too", () => {
+    expect(movedId("Shop/Log in", "Shop/Log in", "Auth/Log in", false)).toBe("Auth/Log in");
+    expect(movedId("Shop/Log in", "Shop", "Store", true)).toBe("Store/Log in");
+    expect(movedId("Shopping/Log in", "Shop", "Store", true)).toBeNull();
+    expect(movedId("Shop", "Shop", "Store", true)).toBeNull();
+    const s: Scenario = {
+      name: "Main",
+      seq: 0,
+      steps: [{ type: "scenario", scenario: "Shop/Log in" }, { type: "if", when: { rules: [] }, steps: [{ type: "scenario", scenario: "Shop/Pay" }] }, request("a.yaml")],
+    };
+    const moved = retargetCalls(s, (id) => movedId(id, "Shop", "Store", true));
+    expect(moved.steps[0]).toEqual({ type: "scenario", scenario: "Store/Log in" });
+    expect(moved.steps[1].type === "if" && moved.steps[1].steps).toEqual([{ type: "scenario", scenario: "Store/Pay" }]);
+    expect(moved.steps[2]).toBe(s.steps[2]);
+    expect(retargetCalls(s, (id) => movedId(id, "Other", "Else", true))).toBe(s);
   });
 });

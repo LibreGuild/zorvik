@@ -23,12 +23,12 @@ use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
 use zorvik_engine::HttpResponse;
 use zorvik_script::{ConsoleEntry, ConsoleLevel, Event, Info, Limits, ScriptOutput, ScriptRequest, TestResult};
-use zorvik_workspace::Workspace;
 use zorvik_workspace::formats::scenario::{JsonPick, compare, list_items, short, value_text, variable_name};
 use zorvik_workspace::formats::{
     Condition, Rule, Scenario, Step, StepAction, StepAsk, StepCall, StepCheck, StepForEach, StepIf, StepKind,
     StepParallel, StepRepeat, StepRequest, StepScript, StepSet, StepStop, StepWait, StopWhat, ValueFrom,
 };
+use zorvik_workspace::{ScenarioItem, Workspace};
 
 use crate::runner::{
     AgentRun, DataRow, IterationSummary, MAX_DELAY_MS, MAX_ITERATIONS, MAX_KEPT_RESULTS, MAX_STEPS, RunEvent, RunItem,
@@ -54,6 +54,11 @@ const SHOWN_VALUE: usize = 300;
 const HIDDEN: &str = "••••••";
 /// The variable an expression's result comes back in.
 const RESULT: &str = "\u{0}scenario value";
+
+/// Whether the scenario `id` is in the folder `folder` (at any depth).
+fn in_folder(id: &str, folder: &str) -> bool {
+    id.strip_prefix(folder).is_some_and(|rest| rest.starts_with('/'))
+}
 
 /// How much of the scenario a run goes through.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1667,7 +1672,8 @@ impl Api {
     /// `scenario.*` methods.
     pub(crate) async fn call_scenario(&self, method: &str, p: Value) -> ApiResult<Value> {
         match method {
-            "scenario.list" => ok(self.ws()?.list_scenarios()?),
+            // The scenarios and their folders, as a tree.
+            "scenario.list" => ok(self.ws()?.scenario_tree()?),
             "scenario.read" => {
                 let IdParam { id } = params(p)?;
                 ok(self.ws()?.read_scenario(&id)?)
@@ -1676,9 +1682,12 @@ impl Api {
                 #[derive(Deserialize)]
                 struct P {
                     scenario: Scenario,
+                    /// The folder it goes in ("" or missing: the top level).
+                    #[serde(default)]
+                    folder: String,
                 }
-                let P { scenario } = params(p)?;
-                ok(self.ws()?.create_scenario(&scenario)?)
+                let P { scenario, folder } = params(p)?;
+                ok(self.ws()?.create_scenario(&folder, &scenario)?)
             }
             "scenario.save" => {
                 #[derive(Deserialize)]
@@ -1689,15 +1698,7 @@ impl Api {
                 let P { id, scenario } = params(p)?;
                 let ws = self.ws()?;
                 let new_id = ws.save_scenario(&id, &scenario)?;
-                if new_id != id {
-                    // Its values and the scenarios that run it follow the new name.
-                    let mut kept = lock(&self.inner.scenarios.kept);
-                    if let Some(values) = kept.remove(&id) {
-                        kept.insert(new_id.clone(), values);
-                    }
-                    drop(kept);
-                    self.rewrite_scenarios(&ws, &|_| None, &|call| (call == id).then(|| new_id.clone()));
-                }
+                self.scenarios_moved(&ws, &id, &new_id, ScenarioItem::Scenario);
                 ok(new_id)
             }
             "scenario.duplicate" => {
@@ -1712,13 +1713,55 @@ impl Api {
                 lock(&self.inner.scenarios.kept).remove(&id);
                 ok(())
             }
-            "scenario.reorder" => {
+            "scenario.createFolder" => {
                 #[derive(Deserialize)]
                 struct P {
-                    ids: Vec<String>,
+                    #[serde(default)]
+                    parent: String,
+                    name: String,
                 }
-                let P { ids } = params(p)?;
-                ok(self.ws()?.reorder_scenarios(&ids)?)
+                let P { parent, name } = params(p)?;
+                ok(self.ws()?.create_scenario_folder(&parent, &name)?)
+            }
+            "scenario.renameFolder" => {
+                #[derive(Deserialize)]
+                struct P {
+                    id: String,
+                    name: String,
+                }
+                let P { id, name } = params(p)?;
+                let ws = self.ws()?;
+                let new_id = ws.rename_scenario_folder(&id, &name)?;
+                self.scenarios_moved(&ws, &id, &new_id, ScenarioItem::Folder);
+                ok(new_id)
+            }
+            "scenario.deleteFolder" => {
+                let IdParam { id } = params(p)?;
+                let ws = self.ws()?;
+                let deleted = id.clone();
+                tokio::task::spawn_blocking(move || ws.delete_scenario_folder(&deleted))
+                    .await
+                    .map_err(crate::join_err)??;
+                lock(&self.inner.scenarios.kept).retain(|kept, _| !in_folder(kept, &id));
+                ok(())
+            }
+            // A scenario or a folder to another folder, or to another place in its own.
+            "scenario.move" => {
+                #[derive(Deserialize)]
+                struct P {
+                    id: String,
+                    #[serde(default)]
+                    folder: bool,
+                    #[serde(default)]
+                    parent: String,
+                    index: Option<usize>,
+                }
+                let P { id, folder, parent, index } = params(p)?;
+                let item = if folder { ScenarioItem::Folder } else { ScenarioItem::Scenario };
+                let ws = self.ws()?;
+                let new_id = ws.move_scenario(&id, item, &parent, index)?;
+                self.scenarios_moved(&ws, &id, &new_id, item);
+                ok(new_id)
             }
             "scenario.run" => ok(self.scenario_start(params(p)?).await?),
             // The value an "ask" step waits for (`null`: none, the step fails).
@@ -1801,6 +1844,31 @@ impl Api {
                 }
             })
             .collect()
+    }
+
+    /// A scenario or a folder of them has a new id: the values their last runs left and the
+    /// steps that run them follow.
+    fn scenarios_moved(&self, ws: &Workspace, old: &str, new: &str, item: ScenarioItem) {
+        if old == new {
+            return;
+        }
+        let moved = |id: &str| -> Option<String> {
+            match item {
+                ScenarioItem::Scenario => (id == old).then(|| new.to_string()),
+                ScenarioItem::Folder => {
+                    id.strip_prefix(old).filter(|rest| rest.starts_with('/')).map(|rest| format!("{new}{rest}"))
+                }
+            }
+        };
+        let mut kept = lock(&self.inner.scenarios.kept);
+        let ids: Vec<(String, String)> = kept.keys().filter_map(|id| Some((id.clone(), moved(id)?))).collect();
+        for (id, to) in ids {
+            if let Some(values) = kept.remove(&id) {
+                kept.insert(to, values);
+            }
+        }
+        drop(kept);
+        self.rewrite_scenarios(ws, &|_| None, &moved);
     }
 
     /// Keep scenarios pointing at a request or folder that was renamed or moved.

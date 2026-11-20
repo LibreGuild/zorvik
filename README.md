@@ -35,7 +35,7 @@
 </picture>
 
 ## Why Zorvik
-- **Your coding agent can drive it.** Claude Code, Codex, Gemini CLI, Cursor and any MCP client use Zorvik's 50 built-in tools to turn the APIs in your code into requests, test them, mock them and load test them, while you watch every step and approve anything risky. [More below](#ai-agents).
+- **Your coding agent can drive it.** Claude Code, Codex, Gemini CLI, Cursor and any MCP client use Zorvik's 51 built-in tools to turn the APIs in your code into requests, test them, mock them and load test them, while you watch every step and approve anything risky. [More below](#ai-agents).
 - **Test the tools your AI agents use.** Connect to any MCP server (over HTTP or as a local program), see its tools, resources and prompts, call them, and test the answers in CI. Build MCP servers in minutes to try tools with a real AI app or to test your own agent. [More below](#mcp-test-the-tools-ai-agents-use).
 - **Every feature is free, for good.** No paid plans, no "team" tier, no feature behind a login, and none planned. Open source under MIT or Apache-2.0.
 - **Everything in one place.** HTTP, GraphQL (with subscriptions), gRPC, MCP, WebSocket, Socket.IO, SSE, TCP, UDP, MQTT and DNS clients; mock servers, MCP servers included; load tests; network tools. One app instead of five.

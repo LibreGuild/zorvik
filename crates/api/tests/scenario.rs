@@ -557,7 +557,8 @@ async fn scenarios_run_each_other_follow_renames_and_ask_for_values() {
     assert_eq!(summary["passed"], false);
 
     h.ok("scenario.duplicate", json!({ "id": main })).await;
-    h.ok("scenario.reorder", json!({ "ids": ["Main copy", "Main", "Sign in", "Loop"] })).await;
+    h.ok("scenario.move", json!({ "id": "Main copy", "index": 0 })).await;
+    h.ok("scenario.move", json!({ "id": "Main", "index": 1 })).await;
     let names: Vec<Value> =
         h.ok("scenario.list", json!({})).await.as_array().unwrap().iter().map(|n| n["name"].clone()).collect();
     assert_eq!(names, ["Main copy", "Main", "Sign in", "Loop"]);
@@ -705,4 +706,79 @@ async fn without_an_environment_what_scripts_set_on_it_is_the_scenarios_too() {
     assert_eq!(results[0]["console"], json!([]), "nothing is lost, so nothing to warn about");
     assert_eq!(h.values(&id).await, ["token=tok-9"]);
     assert_eq!(h.ok("vars.local", json!({})).await, json!([]));
+}
+
+#[tokio::test]
+async fn folders_keep_scenarios_in_order_and_steps_follow_them() {
+    let h = Harness::new().await;
+    let shop = h.ok("scenario.createFolder", json!({ "parent": "", "name": "Shop" })).await;
+    let auth = h.ok("scenario.createFolder", json!({ "parent": shop, "name": "Auth" })).await;
+    assert_eq!((shop.clone(), auth.clone()), (json!("Shop"), json!("Shop/Auth")));
+    let login = h
+        .ok(
+            "scenario.create",
+            json!({ "folder": auth, "scenario": { "name": "Log in", "steps": [
+                { "type": "request", "request": "Create.yaml", "outputs": [{ "variable": "token", "path": "$.args.name" }] },
+            ] } }),
+        )
+        .await;
+    assert_eq!(login, "Shop/Auth/Log in");
+    let main = h
+        .scenario(json!({ "name": "Main", "steps": [
+            { "type": "scenario", "scenario": login, "outputs": [{ "key": "t", "value": "{{token}}" }] },
+        ] }))
+        .await;
+    let (_, summary) = h.run(json!({ "id": main })).await;
+    assert_eq!(summary["passed"], true);
+    let (_, summary) = h.run(json!({ "id": login })).await;
+    assert_eq!(summary["passed"], true);
+    assert_eq!(h.values("Shop/Auth/Log in").await, ["token=Ada"]);
+
+    // The tree: folders with what is in them.
+    let tree = h.ok("scenario.list", json!({})).await;
+    assert_eq!((tree[0]["id"].clone(), tree[0]["folder"].clone()), (json!("Shop"), json!(true)));
+    assert_eq!(tree[0]["children"][0]["children"][0]["id"], "Shop/Auth/Log in");
+    assert_eq!(tree[1]["id"], "Main");
+    assert_eq!(tree[1].get("folder"), None, "a scenario says nothing about folders");
+
+    // A folder renamed, then moved: the step that runs a scenario in it follows, and so do the
+    // values its last run left.
+    let auth = h.ok("scenario.renameFolder", json!({ "id": auth, "name": "Sign in" })).await;
+    assert_eq!(auth, "Shop/Sign in");
+    let auth = h.ok("scenario.move", json!({ "id": auth, "folder": true, "parent": "", "index": 0 })).await;
+    assert_eq!(auth, "Sign in");
+    assert_eq!(h.ok("scenario.read", json!({ "id": main })).await["steps"][0]["scenario"], "Sign in/Log in");
+    assert_eq!(h.values("Sign in/Log in").await, ["token=Ada"]);
+    // A scenario moved into a folder, and renamed there.
+    let moved = h.ok("scenario.move", json!({ "id": "Sign in/Log in", "parent": "Shop" })).await;
+    assert_eq!(moved, "Shop/Log in");
+    let mut renamed = h.ok("scenario.read", json!({ "id": moved })).await;
+    renamed["name"] = json!("Log on");
+    let renamed = h.ok("scenario.save", json!({ "id": moved, "scenario": renamed })).await;
+    assert_eq!(renamed, "Shop/Log on");
+    assert_eq!(h.ok("scenario.read", json!({ "id": main })).await["steps"][0]["scenario"], "Shop/Log on");
+    let (results, summary) = h.run(json!({ "id": main })).await;
+    assert_eq!(
+        (summary["passed"].clone(), lines(&results)[0].clone()),
+        (json!(true), "Run scenario Log on".to_string())
+    );
+    let copy = h.ok("scenario.duplicate", json!({ "id": renamed })).await;
+    assert_eq!(copy, "Shop/Log on copy");
+
+    let order: Vec<Value> =
+        h.ok("scenario.list", json!({})).await.as_array().unwrap().iter().map(|n| n["id"].clone()).collect();
+    assert_eq!(order, ["Sign in", "Shop", "Main"]);
+    let err = h.api.call("scenario.move", json!({ "id": "Shop", "folder": true, "parent": "Shop" })).await.unwrap_err();
+    assert!(err.message.contains("into itself"), "{}", err.message);
+    let err = h
+        .api
+        .call("scenario.create", json!({ "folder": "../requests", "scenario": { "name": "X" } }))
+        .await
+        .unwrap_err();
+    assert!(err.message.contains("Invalid scenario id"), "{}", err.message);
+    if std::env::var_os("ZORVIK_TEST_TRASH").is_some() {
+        h.ok("scenario.deleteFolder", json!({ "id": "Shop" })).await;
+        assert!(h.values("Shop/Log on").await.is_empty());
+        assert!(h.api.call("scenario.read", json!({ "id": "Shop/Log on" })).await.is_err());
+    }
 }

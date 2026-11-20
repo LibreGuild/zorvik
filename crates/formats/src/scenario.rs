@@ -1,4 +1,4 @@
-//! Scenarios (`scenarios/<name>.yaml`): saved requests run as steps, one after the
+//! Scenarios (`scenarios/<name>.yaml`, also in folders): saved requests run as steps, one after the
 //! other, with values passed from one step to the next, checks on what came back,
 //! and flow (if, for each, repeat, at the same time). This is the file format and
 //! the parts that need no network: comparing values, reading a value out of JSON,
@@ -408,7 +408,7 @@ pub struct StepStop {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct StepCall {
-    /// The scenario's id (its file name under `scenarios/`).
+    /// The scenario's id: its path under `scenarios/` without `.yaml` (`Shop/Log in`).
     pub scenario: String,
     /// Values it starts with (over its own variables).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -791,21 +791,30 @@ pub fn variable_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// A saved scenario in the sidebar.
+/// A saved scenario, or a folder of them, in the sidebar.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct ScenarioNode {
-    /// File stem (`scenarios/<id>.yaml`).
+    /// Its path under `scenarios/`, without `.yaml` for a scenario: `Checkout`,
+    /// `Shop/Checkout` (`scenarios/Shop/Checkout.yaml`), or the folder `Shop`.
     pub id: String,
     pub name: String,
-    /// Steps at every level.
+    /// A folder: what is in it is in `children`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional, as = "Option<bool>")]
+    pub folder: bool,
+    /// Steps at every level (a scenario's).
     pub steps: u32,
     pub seq: u32,
-    /// Set when the file could not be parsed.
+    /// Set when the file (a folder's `_folder.yaml`) could not be parsed.
     #[ts(optional)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// A folder's scenarios and folders, in sidebar order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<ScenarioNode>>")]
+    pub children: Vec<ScenarioNode>,
 }
 
 // ---- values ---------------------------------------------------------------------------------

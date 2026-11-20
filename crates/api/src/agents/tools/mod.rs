@@ -454,13 +454,14 @@ fn defs() -> Vec<Def> {
         Def {
             name: "delete_items",
             title: "Delete",
-            description: "Delete requests, folders, environments, load tests, scenarios or servers (to the trash). The user always confirms in Zorvik.",
+            description: "Delete requests, folders, environments, load tests, scenarios, folders of scenarios or servers (to the trash). The user always confirms in Zorvik.",
             schema: obj(
                 json!({
                     "paths": { "type": "array", "items": { "type": "string" }, "description": "Requests and folders (paths from list_requests)." },
                     "environments": { "type": "array", "items": { "type": "string" } },
                     "loadTests": { "type": "array", "items": { "type": "string" } },
-                    "scenarios": { "type": "array", "items": { "type": "string" } },
+                    "scenarios": { "type": "array", "items": { "type": "string" }, "description": "Names or ids (list_scenarios)." },
+                    "scenarioFolders": { "type": "array", "items": { "type": "string" }, "description": "Folders of scenarios and everything in them (ids from list_scenarios `folders`)." },
                     "servers": { "type": "array", "items": { "type": "string" } },
                 }),
                 &[],
@@ -863,6 +864,10 @@ fn describe(name: &str, args: &Value) -> String {
             }
         }
         "move_item" => s("path"),
+        "move_scenario" => match s("scenario") {
+            name if name.is_empty() => s("folder"),
+            name => name,
+        },
         "save_environment" | "read_load_test" | "save_load_test" | "run_load_test" | "start_server" | "stop_server"
         | "read_server" | "save_server" | "create_mock" | "get_server_traffic" | "read_scenario" | "save_scenario"
         | "run_scenario" => s("name"),
@@ -885,7 +890,12 @@ fn describe(name: &str, args: &Value) -> String {
             }
         }
         "delete_items" => {
-            let n = count("paths") + count("environments") + count("loadTests") + count("scenarios") + count("servers");
+            let n = count("paths")
+                + count("environments")
+                + count("loadTests")
+                + count("scenarios")
+                + count("scenarioFolders")
+                + count("servers");
             plural(n, "item")
         }
         "update_from_openapi" => s("folder"),
@@ -993,6 +1003,7 @@ impl Api {
             "list_scenarios" => run!(async move { self.tool_list_scenarios() }),
             "read_scenario" => run!(async move { self.tool_read_scenario(c) }),
             "save_scenario" => run!(self.tool_save_scenario(c)),
+            "move_scenario" => run!(self.tool_move_scenario(c)),
             "run_scenario" => run!(self.tool_run_scenario(c)),
             "list_servers" => run!(async move { self.tool_list_servers() }),
             "read_server" => run!(async move { self.tool_read_server(c) }),
@@ -1547,6 +1558,7 @@ impl Api {
             environments: Vec<String>,
             load_tests: Vec<String>,
             scenarios: Vec<String>,
+            scenario_folders: Vec<String>,
             servers: Vec<String>,
         }
         let a: A = c.args()?;
@@ -1582,13 +1594,23 @@ impl Api {
                 .ok_or_else(|| Fail::Invalid(format!("Load test '{name}' not found")))?;
             plan.push((format!("Load test {} (and its run history)", t.name), "load.delete", t.id.clone()));
         }
-        let scenarios = ws.list_scenarios()?;
         for name in &a.scenarios {
-            let s = scenarios
-                .iter()
-                .find(|s| s.name.eq_ignore_ascii_case(name) || s.id == *name)
-                .ok_or_else(|| Fail::Invalid(format!("Scenario '{name}' not found")))?;
-            plan.push((format!("Scenario {}", s.name), "scenario.delete", s.id.clone()));
+            let (id, scenario) = self.find_scenario(&ws, name)?;
+            plan.push((format!("Scenario {}", scenario.name), "scenario.delete", id));
+        }
+        let listed = ws.list_scenarios()?;
+        let folders = ws.scenario_folders()?;
+        for name in &a.scenario_folders {
+            let id =
+                folders.iter().find(|f| f.eq_ignore_ascii_case(name.trim().trim_matches('/'))).ok_or_else(|| {
+                    Fail::Invalid(format!("Scenario folder '{name}' not found (list_scenarios `folders`)"))
+                })?;
+            let inside = listed.iter().filter(|s| s.id.starts_with(&format!("{id}/"))).count();
+            plan.push((
+                format!("Scenario folder {id} ({} inside)", plural(inside, "scenario")),
+                "scenario.deleteFolder",
+                id.clone(),
+            ));
         }
         let servers = ws.list_servers()?;
         for name in &a.servers {

@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-`zorvik mcp` offers 50 tools. Agents read their full JSON schemas (every field, unit and placeholder) from `tools/list`; this page is the human overview. The **Asks** column says when you are asked, with the default settings (see [Permissions and safety](../permissions-and-safety/)):
+`zorvik mcp` offers 51 tools. Agents read their full JSON schemas (every field, unit and placeholder) from `tools/list`; this page is the human overview. The **Asks** column says when you are asked, with the default settings (see [Permissions and safety](../permissions-and-safety/)):
 
 - **no**: never asks.
 - **edit**: an edit. Allowed by default; asks when **Edits by agents** is *Ask me*.
@@ -17,7 +17,7 @@ Every tool is annotated for the client: `readOnlyHint` (reads only), `destructiv
 ## Conventions
 
 - **Paths** of requests and folders are relative to the workspace's `requests/` folder, with `/` between folders, exactly as `list_requests` shows them: `Users/Get user.yaml`, `Users/Admin`. `""` means the whole collection.
-- **Names** of environments, load tests, scenarios and servers match without regard to case; their file id works too.
+- **Names** of environments, load tests, scenarios and servers match without regard to case; their file id works too. A scenario's id is its path, folders and all (`Shop/Checkout`): give it when scenarios in different folders have the name.
 - **Long calls** (`run_collection`, `run_scenario`, `run_load_test`, the status tools) wait up to `waitSeconds` (default 45, at most 600) and then return a `runId` to poll. Some agents give up on a call after 60 seconds, hence the default.
 - **Strict input**: `save_requests`, `send_request` (with `request`), `save_server` and `save_load_test` refuse fields they don't know, name the nearest known one ("did you mean `status`?") and save nothing, so a typo is never saved silently. `save_scenario` does the same and says where each unknown field is (`scenario.steps[0].outputs[0].pathh`).
 - **Redaction**: secret variable values come back as `{{name}}` and credential headers as `••••••`, in results and errors alike. See [Redaction](../permissions-and-safety/#redaction).
@@ -40,7 +40,7 @@ Every tool is annotated for the client: `readOnlyHint` (reads only), `destructiv
 | `save_requests` | Create or update up to 200 requests. Each goes into `folder` (created when missing) under its `name`; a request with that name there is updated. Only the fields given change, unless `replace: true`. Give `path` to update that exact request. | `requests[]`: `name`, `folder` or `path`, `kind`, `method`, `url`, `query`, `pathParams`, `headers`, `body`, `auth`, `scripts`, `settings`, `grpc`, `mcp`, `websocket`, `socketio`, `docs`, `examples`; `replace` | edit |
 | `save_folder_settings` | Auth, headers, scripts and docs that requests in a folder inherit, merged into what is there. `folder: ""` is the collection, which also has variables (merged by key). | `folder`, `auth`, `headers`, `scripts`, `docs`, `variables` | edit |
 | `move_item` | Move a request or folder to another folder and/or rename it. Load tests and scenarios that send it follow. | `path`, `toFolder`, `newName` | edit |
-| `delete_items` | Move requests, folders, environments, load tests, scenarios or servers to the trash. Deleting a load test also deletes its run history. | `paths`, `environments`, `loadTests`, `scenarios`, `servers` | always |
+| `delete_items` | Move requests, folders, environments, load tests, scenarios, folders of scenarios (with what is in them) or servers to the trash. Deleting a load test also deletes its run history. | `paths`, `environments`, `loadTests`, `scenarios`, `scenarioFolders`, `servers` | always |
 | `export_request` | A request as a ready-to-run command or code: cURL for bash (`curl`), Windows cmd (`curlCmd`) or PowerShell (`curlPowerShell`), or code: `javascript` (fetch), `javascriptAxios`, `python` (requests), `pythonHttpx`, `go`, `java`, `kotlin` (OkHttp), `swift`, `csharp`, `php`, `ruby`, `rust`, `dart`, `c` (libcurl), `powerShell`, `httpie` or `wget`. Comments at the top say what the code can't do that Zorvik does (answer a Digest challenge, sign each request). Variables are filled in unless `resolveVariables: false`; secret values come back as `••••••` (you can copy the full version in Zorvik). | `path` or `request` (+ `folder`), `format`, `resolveVariables` | no |
 
 Request fields for `save_requests` and `send_request`:
@@ -122,12 +122,13 @@ To keep a large JSON response short, give `send_request` a `filter`: `{language:
 
 | Tool | What it does | Main inputs | Asks |
 |---|---|---|---|
-| `list_scenarios` | Saved [scenarios](../../testing/scenarios/): id, name and number of steps. | none | no |
+| `list_scenarios` | Saved [scenarios](../../testing/scenarios/): id (its path, `Shop/Checkout` in a folder), name and number of steps, and the ids of the [folders](../../testing/scenarios/#folders) (`folders`). | none | no |
 | `read_scenario` | A scenario's variables, steps, settings and docs, in the shape `save_scenario` takes, and the values its last run left (secret ones hidden). | `name` | no |
-| `save_scenario` | Create or replace a scenario. Its request steps send requests that are saved in the collection (save them first with `save_requests`); a request path that isn't there, or a scenario step naming a scenario that isn't saved, is refused. | `name`, `scenario {variables, steps, always, dataFile, iterations, continueOnFailure, docs}` | edit |
+| `save_scenario` | Create or replace a scenario. Its request steps send requests that are saved in the collection (save them first with `save_requests`); a request path that isn't there, or a scenario step naming a scenario that isn't saved, is refused. With `folder`, the scenario of that name in the folder is replaced or a new one made there (folders are made when missing). | `name`, `folder`, `scenario {variables, steps, always, dataFile, iterations, continueOnFailure, docs}` | edit |
+| `move_scenario` | Move a scenario or a folder of scenarios to another folder (made when missing), or rename it. Steps that run a moved scenario follow it. | `scenario` or `folder`, `toFolder`, `newName` | edit |
 | `run_scenario` | Run a saved scenario, like its tab, which shows the run live. Returns the summary, the failures (up to 50), what each step did with the values it saved (`steps`, up to 200) and the values the run left (`values`), or a `runId` if it runs longer than `waitSeconds` (poll with `get_run_status`, stop with `stop_collection_run`). `toStep` runs from the start up to and including one step; `onlyStep` runs one step with the values the last run left. | `name`, `variables` (`{name: value}` for this run), `toStep`, `onlyStep`, `waitSeconds` | traffic |
 
-The `scenario` object uses the [scenario file format](../../reference/workspace-format/#scenarios-scenariosyaml): `steps[]` (and `always[]`), each with a `type` (`request`, `if`, `forEach`, `repeat`, `parallel`, `set`, `wait`, `stop`, `scenario`, `script`, `ask`) and that type's fields. A step that runs another scenario may name it by its name; the file keeps its id.
+The `scenario` object uses the [scenario file format](../../reference/workspace-format/#scenarios-scenariosyaml): `steps[]` (and `always[]`), each with a `type` (`request`, `if`, `forEach`, `repeat`, `parallel`, `set`, `wait`, `stop`, `scenario`, `script`, `ask`) and that type's fields. A step that runs another scenario may name it by its name, or by its id when scenarios in different folders have the name; the file keeps its id.
 
 - **Passing values**: an output on one step (`{variable: "cartId", path: "$.id"}`) and `{{cartId}}` in a later request, or as an input of a later step.
 - **Steps are addressed by their place**: `steps/2` is the third step, `steps/2/steps/0` the first step inside it, `steps/2/elseIf/0/1`, `steps/2/else/0` and `always/0` the same way. `toStep`, `onlyStep` and each result's `step` use these paths.

@@ -20,7 +20,7 @@ import { RunnerResults } from "../runner/RunnerResults";
 import { EditorSection } from "../servers/ServerView";
 import { Splitter } from "../Splitter";
 import { Banner, Button, cx, IconButton, NumberInput, Segmented, Switch, Tooltip } from "../ui";
-import { countSteps, followSteps, outcomes, startProblem, stepsMoved } from "./model";
+import { countSteps, folderNames, followSteps, outcomes, startProblem, stepsMoved } from "./model";
 import { ValuesEditor } from "./StepFields";
 import { StepsEditor } from "./StepsEditor";
 
@@ -37,6 +37,7 @@ export function ScenarioView({ tab }: { tab: ScenarioTab }) {
   const scenario = tab.draft;
   const tree = useWorkspace((s) => s.info?.tree ?? NO_NODES);
   const scenarios = useScenarios((s) => s.saved);
+  const folders = useScenarios((s) => folderNames(tab.scenarioId, s.tree).join(" / "));
   const running = useRunner((s) => s.active === tab.id);
   const other = useRunner((s) => (s.active && s.active !== tab.id ? (s.runs[s.active]?.name ?? "Another run") : null));
   const starting = useRunner((s) => s.starting === tab.id);
@@ -94,7 +95,14 @@ export function ScenarioView({ tab }: { tab: ScenarioTab }) {
           Scenario
         </span>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[14px] font-semibold text-fg">{scenario.name}</div>
+          <div className="truncate text-[14px] font-semibold text-fg" title={folders ? `${folders} / ${scenario.name}` : scenario.name}>
+            {folders && (
+              <span className="font-normal text-faint" data-testid="scenario-folders">
+                {folders} /{" "}
+              </span>
+            )}
+            {scenario.name}
+          </div>
           <StatusLine tab={tab} problem={problem} other={other} />
         </div>
         {/* One button for Run and Stop with a tooltip that always has content, so keyboard focus

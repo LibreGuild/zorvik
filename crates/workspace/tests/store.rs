@@ -553,8 +553,8 @@ fn scenarios_crud_and_order() {
     let dir = tempfile::tempdir().unwrap();
     let ws = Workspace::create(dir.path(), "Demo").unwrap();
     assert!(ws.list_scenarios().unwrap().is_empty());
-    let a = ws.create_scenario(&Scenario::new("Checkout", vec!["a.yaml".into(), "b.yaml".into()])).unwrap();
-    let b = ws.create_scenario(&Scenario::new("Sign up: new user", vec![])).unwrap();
+    let a = ws.create_scenario("", &Scenario::new("Checkout", vec!["a.yaml".into(), "b.yaml".into()])).unwrap();
+    let b = ws.create_scenario("", &Scenario::new("Sign up: new user", vec![])).unwrap();
     assert_eq!((a.as_str(), b.as_str()), ("Checkout", "Sign up- new user"));
     let list = ws.list_scenarios().unwrap();
     assert_eq!(
@@ -568,7 +568,7 @@ fn scenarios_crud_and_order() {
     let a = ws.save_scenario(&a, &scenario).unwrap();
     assert_eq!(a, "Checkout flow");
     assert_eq!(ws.read_scenario(&a).unwrap().docs, "Buys one thing.");
-    ws.reorder_scenarios(&[b.clone(), a.clone()]).unwrap();
+    ws.move_scenario(&b, zorvik_workspace::ScenarioItem::Scenario, "", Some(0)).unwrap();
     ws.duplicate_scenario(&a).unwrap();
     let names: Vec<_> = ws.list_scenarios().unwrap().into_iter().map(|n| n.name).collect();
     assert_eq!(names, ["Sign up: new user", "Checkout flow", "Checkout flow copy"]);
@@ -591,6 +591,106 @@ fn scenarios_crud_and_order() {
 }
 
 #[test]
+fn scenarios_in_folders() {
+    use zorvik_formats::{Scenario, Step, StepAction, StepCall};
+    use zorvik_workspace::ScenarioItem;
+    let dir = tempfile::tempdir().unwrap();
+    let ws = Workspace::create(dir.path(), "Demo").unwrap();
+    ws.create_scenario("", &Scenario::new("Smoke", vec![])).unwrap();
+    let shop = ws.create_scenario_folder("", "Shop: EU").unwrap();
+    let cart = ws.create_scenario_folder(&shop, "Cart").unwrap();
+    assert_eq!((shop.as_str(), cart.as_str()), ("Shop- EU", "Shop- EU/Cart"));
+    let login = ws.create_scenario(&shop, &Scenario::new("Log in", vec!["a.yaml".into()])).unwrap();
+    let mut checkout = Scenario::new("Checkout", vec![]);
+    checkout.steps = vec![Step::new(StepAction::Scenario(StepCall { scenario: login.clone(), ..Default::default() }))];
+    let checkout = ws.create_scenario(&cart, &checkout).unwrap();
+    assert_eq!((login.as_str(), checkout.as_str()), ("Shop- EU/Log in", "Shop- EU/Cart/Checkout"));
+    assert!(dir.path().join("scenarios/Shop- EU/Cart/Checkout.yaml").is_file());
+    assert_eq!(ws.read_scenario(&checkout).unwrap().calls(), [login.as_str()]);
+
+    // The tree: folders with their names and what is in them, in order; the flat list, the
+    // scenarios only.
+    let shape = |nodes: &[zorvik_formats::ScenarioNode]| -> Vec<String> {
+        fn go(nodes: &[zorvik_formats::ScenarioNode], depth: usize, out: &mut Vec<String>) {
+            for n in nodes {
+                out.push(format!("{}{}{} ({})", "  ".repeat(depth), n.name, if n.folder { "/" } else { "" }, n.id));
+                go(&n.children, depth + 1, out);
+            }
+        }
+        let mut out = Vec::new();
+        go(nodes, 0, &mut out);
+        out
+    };
+    assert_eq!(
+        shape(&ws.scenario_tree().unwrap()),
+        [
+            "Smoke (Smoke)",
+            "Shop: EU/ (Shop- EU)",
+            "  Cart/ (Shop- EU/Cart)",
+            "    Checkout (Shop- EU/Cart/Checkout)",
+            "  Log in (Shop- EU/Log in)"
+        ]
+    );
+    let ids: Vec<String> = ws.list_scenarios().unwrap().into_iter().map(|n| n.id).collect();
+    assert_eq!(ids, ["Smoke", "Shop- EU/Cart/Checkout", "Shop- EU/Log in"]);
+    assert_eq!(ws.scenario_folders().unwrap(), ["Shop- EU", "Shop- EU/Cart"]);
+
+    // Saved under a new name it stays in its folder; a copy goes next to it.
+    let mut renamed = ws.read_scenario(&login).unwrap();
+    renamed.name = "Sign in".into();
+    let login = ws.save_scenario(&login, &renamed).unwrap();
+    assert_eq!(login, "Shop- EU/Sign in");
+    assert_eq!(ws.duplicate_scenario(&login).unwrap(), "Shop- EU/Sign in copy");
+
+    // Moving: a scenario out to the top, first; a folder into another; never into itself.
+    let moved = ws.move_scenario(&login, ScenarioItem::Scenario, "", Some(0)).unwrap();
+    assert_eq!(moved, "Sign in");
+    let archive = ws.create_scenario_folder("", "Archive").unwrap();
+    let cart = ws.move_scenario(&cart, ScenarioItem::Folder, &archive, None).unwrap();
+    assert_eq!(cart, "Archive/Cart");
+    assert!(ws.read_scenario("Archive/Cart/Checkout").is_ok());
+    assert!(ws.move_scenario(&archive, ScenarioItem::Folder, &cart, None).unwrap_err().message.contains("into itself"));
+    // Within a folder: its place changes.
+    ws.move_scenario(&archive, ScenarioItem::Folder, "", Some(0)).unwrap();
+    assert_eq!(
+        shape(&ws.scenario_tree().unwrap()),
+        [
+            "Archive/ (Archive)",
+            "  Cart/ (Archive/Cart)",
+            "    Checkout (Archive/Cart/Checkout)",
+            "Sign in (Sign in)",
+            "Smoke (Smoke)",
+            "Shop: EU/ (Shop- EU)",
+            "  Sign in copy (Shop- EU/Sign in copy)",
+        ]
+    );
+
+    // Renamed: the folder's name and its file name; made as needed by path.
+    let shop = ws.rename_scenario_folder(&shop, "Shop").unwrap();
+    assert_eq!(shop, "Shop");
+    assert_eq!(ws.ensure_scenario_folder("shop/Payments/Cards").unwrap(), "Shop/Payments/Cards");
+    assert_eq!(ws.ensure_scenario_folder("Shop/Payments").unwrap(), "Shop/Payments");
+    assert_eq!(ws.ensure_scenario_folder("").unwrap(), "");
+
+    // Ids that climb out, hide or name nothing are refused.
+    for bad in ["../zorvik", "Shop/../../zorvik", ".git/config", "Shop/.hidden"] {
+        assert!(ws.read_scenario(bad).is_err(), "{bad}");
+    }
+    assert!(ws.create_scenario("Nope", &Scenario::new("X", vec![])).is_err());
+    assert!(ws.rename_scenario_folder("", "X").is_err());
+    // A folder written by hand (no `_folder.yaml`) is named after itself.
+    std::fs::create_dir_all(dir.path().join("scenarios/By hand")).unwrap();
+    std::fs::write(dir.path().join("scenarios/By hand/Probe.yaml"), "name: Probe\nsteps: []\n").unwrap();
+    assert!(ws.list_scenarios().unwrap().iter().any(|n| n.id == "By hand/Probe" && n.name == "Probe"));
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(dir.path().join("requests"), dir.path().join("scenarios/Linked")).unwrap();
+        assert!(!ws.scenario_tree().unwrap().iter().any(|n| n.id == "Linked"));
+        assert!(ws.create_scenario("Linked", &Scenario::new("X", vec![])).is_err());
+    }
+}
+
+#[test]
 fn graphql_requests_are_flagged_in_the_tree() {
     use zorvik_formats::{Body, BodyType, GraphqlBody};
     let dir = tempfile::tempdir().unwrap();
@@ -609,4 +709,21 @@ fn graphql_requests_are_flagged_in_the_tree() {
     assert!(tree[0].graphql && !tree[1].graphql);
     let json = serde_json::to_value(&tree[1]).unwrap();
     assert!(json.get("graphql").is_none(), "false is omitted: {json}");
+}
+
+#[test]
+fn saving_a_scenario_keeps_its_place() {
+    use zorvik_formats::Scenario;
+    use zorvik_workspace::ScenarioItem;
+    let dir = tempfile::tempdir().unwrap();
+    let ws = Workspace::create(dir.path(), "Demo").unwrap();
+    let a = ws.create_scenario("", &Scenario::new("A", vec![])).unwrap();
+    let b = ws.create_scenario("", &Scenario::new("B", vec![])).unwrap();
+    // A copy read before the move is saved after it (an open tab, an agent): B stays first.
+    let stale = ws.read_scenario(&b).unwrap();
+    ws.move_scenario(&b, ScenarioItem::Scenario, "", Some(0)).unwrap();
+    ws.save_scenario(&b, &Scenario { docs: "edited".into(), ..stale.clone() }).unwrap();
+    ws.update_scenario(&a, &Scenario { seq: 0, ..ws.read_scenario(&a).unwrap() }).unwrap();
+    let names: Vec<_> = ws.list_scenarios().unwrap().into_iter().map(|n| n.name).collect();
+    assert_eq!(names, ["B", "A"]);
 }

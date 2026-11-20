@@ -26,6 +26,8 @@ my-api/
     Payments mock.yaml     # mock APIs and other servers
   scenarios/
     Checkout.yaml          # scenarios: requests run as steps
+    Shop/                  # in folders too
+      Log in.yaml
   loadtests/
     Checkout smoke.yaml    # load test plans
   specs/
