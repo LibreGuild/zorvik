@@ -99,7 +99,7 @@ ring = "0.17"
 pem = "4"
 # RSA-SHA1 (OAuth 1.0a), which ring only verifies.
 num-bigint = "0.5"
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 ts-rs = { version = "12", features = ["serde-json-impl", "no-serde-warnings"] }
 trash = "5"
 notify = "8"
@@ -132,7 +132,7 @@ socket2 = "0.6"
 windows-sys = "0.61"
 # Load testing.
 hdrhistogram = { version = "7.5", default-features = false }
-sysinfo = { version = "0.39", default-features = false }
+sysinfo = { version = "0.40", default-features = false }
 rlimit = "0.11"
 
 # QuickJS (C) optimized in debug builds too: unoptimized, its frames are so
